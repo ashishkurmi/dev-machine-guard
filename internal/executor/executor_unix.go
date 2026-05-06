@@ -8,10 +8,19 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 func (r *Real) IsRoot() bool {
 	return os.Getuid() == 0
+}
+
+func (r *Real) DiskCapacityBytes(path string) uint64 {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0
+	}
+	return uint64(stat.Blocks) * uint64(stat.Bsize)
 }
 
 // resolveUserShell returns the given user's configured login shell on macOS by
