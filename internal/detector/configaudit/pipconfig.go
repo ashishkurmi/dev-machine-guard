@@ -469,15 +469,20 @@ func (d *PipConfigDetector) captureEffective(ctx context.Context) (*model.PipEff
 		if !pipConfigListPrefix.MatchString(line) {
 			continue
 		}
-		// Split on the literal ` from ` boundary that separates the
-		// quoted value from the source.
-		// e.g. global.index-url='https://...' from /path/file
-		idx := strings.Index(line, "' from ")
-		if idx < 0 {
+		// Two shapes seen across pip versions:
+		//   global.index-url='https://...' from /path/file   (older)
+		//   global.index-url='https://...'                   (pip 24.x)
+		// Split off the optional ` from <path>` trailer; fall back to
+		// the closing quote when it isn't there.
+		var header, source string
+		if idx := strings.Index(line, "' from "); idx >= 0 {
+			header = line[:idx]
+			source = strings.TrimSpace(line[idx+len("' from "):])
+		} else if idx := strings.LastIndex(line, "'"); idx > 0 {
+			header = line[:idx]
+		} else {
 			continue
 		}
-		header := line[:idx]
-		source := strings.TrimSpace(line[idx+len("' from "):])
 
 		// header is `<section>.<key>='<value>` — strip the `<section>.<key>=` prefix.
 		eq := strings.IndexByte(header, '=')

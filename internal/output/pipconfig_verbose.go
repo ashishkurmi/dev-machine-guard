@@ -208,7 +208,7 @@ func printPipEffective(w io.Writer, c *colors, eff *model.PipEffective) {
 	for _, k := range keys {
 		src := eff.SourceByKey[k]
 		if src == "" {
-			src = "default"
+			src = "(source not reported by pip)"
 		}
 		fmt.Fprintf(w, "│   %-40s = %s%s%s   %sfrom %s%s\n",
 			k, c.dim, eff.Config[k], c.reset, c.dim, src, c.reset)

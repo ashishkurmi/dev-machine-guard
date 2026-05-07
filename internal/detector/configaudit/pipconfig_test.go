@@ -245,6 +245,45 @@ install.no-build-isolation='true' from PIP_NO_BUILD_ISOLATION
 	}
 }
 
+// TestParseEffective_NoSourceSuffix locks in pip 24.x output where
+// `pip config list -v` no longer emits the trailing ` from <path>` on
+// each line. The parser must still capture the section.key=value, just
+// with an empty SourceByKey entry.
+//
+// Reason: pip 24.3.1 on Fedora 42 emits lines like
+//   global.index-url='https://pypi.org/simple/'
+// (no source). Earlier pip versions added ` from /etc/pip.conf`.
+func TestParseEffective_NoSourceSuffix(t *testing.T) {
+	mock := executor.NewMock()
+	mock.SetPath("pip", "/usr/bin/pip")
+	mock.SetCommand("pip 24.3.1\n", "", 0, "pip", "--version")
+	mock.SetCommand("", "", 0, "pip", "config", "debug")
+	out := "For variant 'global', will try loading '/etc/pip.conf'\n" +
+		"global.index-url='https://pypi.org/simple/'\n" +
+		"global.timeout='60'\n"
+	mock.SetCommand(out, "", 0, "pip", "config", "list", "-v")
+
+	d := NewPipConfigDetector(mock)
+	d.ownerLookup = fixedPipOwner()
+	d.gitTracked = func(_ context.Context, _ string) bool { return false }
+	d.inGitRepo = func(_ string) bool { return false }
+
+	audit := d.Detect(context.Background(), nil)
+	if audit.Effective == nil {
+		t.Fatal("effective view nil")
+	}
+	if got := audit.Effective.Config["global.index-url"]; got != "https://pypi.org/simple/" {
+		t.Errorf("global.index-url = %q, want pypi.org", got)
+	}
+	if got := audit.Effective.Config["global.timeout"]; got != "60" {
+		t.Errorf("global.timeout = %q, want 60", got)
+	}
+	// Source unknown — must be empty string, not the line tail.
+	if got := audit.Effective.SourceByKey["global.index-url"]; got != "" {
+		t.Errorf("source for global.index-url = %q, want empty", got)
+	}
+}
+
 // TestParseEffective_RedactsEmbeddedCreds locks in the bug fix where
 // `pip config list -v` emits URL values verbatim — including any
 // embedded `user:pass@host` userinfo — and we used to copy them into
