@@ -13,7 +13,6 @@ import (
 // Non-Windows tests exercise the Windows code path via SetGOOS("windows").
 // This file provides command-stubbed implementations matching that pattern.
 
-
 // Non-Windows builds of the agent never gather Windows resources at runtime
 // (the dispatcher in gatherResources uses GOOS), but tests on a Linux/macOS
 // host exercise the Windows code path by calling SetGOOS("windows") on the
@@ -54,4 +53,3 @@ func windowsSystemDrive(exec executor.Executor) string {
 	}
 	return drive + `\`
 }
-

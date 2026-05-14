@@ -326,7 +326,9 @@ func truncate(s string, max int) string {
 }
 
 // formatCPU renders the CPU summary as
-//   "Apple M3 Pro (12c / 16t, arm64)"
+//
+//	"Apple M3 Pro (12c / 16t, arm64)"
+//
 // Each piece is omitted gracefully when the underlying field is missing
 // (e.g. ARM Linux where /proc/cpuinfo has no "model name"). Returns "" when
 // nothing is known.
@@ -371,8 +373,9 @@ func joinCPUDetail(detail []string) string {
 
 // formatBytes renders a byte count as a human-readable size using binary
 // units (GiB), but labels them in the more familiar "GB" form. Examples:
-//   17179869184 -> "16 GB"
-//   494384795648 -> "460 GB"
+//
+//	17179869184 -> "16 GB"
+//	494384795648 -> "460 GB"
 func formatBytes(b uint64) string {
 	if b == 0 {
 		return "0 B"
