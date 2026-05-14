@@ -3,16 +3,16 @@
 // This is a thin wrapper over DMG's `internal/device.Gather`. The only
 // adapter logic that lives here is:
 //
-//   1. Bound the device probe with a 1-second context timeout. Hook
-//      invocations have a 15s total budget; identity must not be the
-//      thing that exhausts it.
+//  1. Bound the device probe with a 1-second context timeout. Hook
+//     invocations have a 15s total budget; identity must not be the
+//     thing that exhausts it.
 //
-//   2. Pass `"unknown"` through verbatim. device.Gather already returns
-//      that sentinel for failed probes; we do NOT rewrite it to "" — the
-//      backend distinguishes "not collected" from "actively unknown".
+//  2. Pass `"unknown"` through verbatim. device.Gather already returns
+//     that sentinel for failed probes; we do NOT rewrite it to "" — the
+//     backend distinguishes "not collected" from "actively unknown".
 //
-//   3. Single Gather call per Resolve — no probing twice for the two
-//      fields we need.
+//  3. Single Gather call per Resolve — no probing twice for the two
+//     fields we need.
 //
 // CustomerID is plumbed through as-is from the caller (typically read
 // from `internal/aiagents/ingest.Snapshot`); device.Gather has no

@@ -105,4 +105,3 @@ func errorLogPath() string {
 	}
 	return filepath.Join(home, ".stepsecurity", ErrorLogFilename)
 }
-

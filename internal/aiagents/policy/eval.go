@@ -8,15 +8,15 @@ import (
 // All fields are optional except Ecosystem + CommandKind; missing data
 // tends toward Allow (fail-open).
 type Request struct {
-	Ecosystem         Ecosystem         // resolved by EcosystemFor(parsed.Binary)
-	PackageManager    string            // raw binary observed: "npm" | "pnpm" | "yarn" | "bun" | "npx" | ...
-	CommandKind       string            // "install" | "config_set" | "config_delete" | "config_edit" | "exec" | ...
-	Registry          string            // resolved per cwd, e.g. "https://registry.npmjs.org/"
-	RegistryFlag      string            // value of --registry= if present on argv
-	UserconfigFlag    string            // value of --userconfig= if present on argv
-	InlineEnv         map[string]string // KEY=VAL prefix env vars on argv
-	ConfigKeyMutated  string            // for config_set/config_delete: which key
-	ConfigValue       string            // for config_set: the new value
+	Ecosystem        Ecosystem         // resolved by EcosystemFor(parsed.Binary)
+	PackageManager   string            // raw binary observed: "npm" | "pnpm" | "yarn" | "bun" | "npx" | ...
+	CommandKind      string            // "install" | "config_set" | "config_delete" | "config_edit" | "exec" | ...
+	Registry         string            // resolved per cwd, e.g. "https://registry.npmjs.org/"
+	RegistryFlag     string            // value of --registry= if present on argv
+	UserconfigFlag   string            // value of --userconfig= if present on argv
+	InlineEnv        map[string]string // KEY=VAL prefix env vars on argv
+	ConfigKeyMutated string            // for config_set/config_delete: which key
+	ConfigValue      string            // for config_set: the new value
 }
 
 // Eval is a pure function over Policy + Request. The runtime persists the
