@@ -181,3 +181,10 @@ func TestParse_FlagCombinations(t *testing.T) {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
 }
+
+func TestParse_NPMRCAndPipConfigMutuallyExclusive(t *testing.T) {
+	_, err := Parse([]string{"--npmrc", "--pipconfig"})
+	if err == nil {
+		t.Fatal("expected error when --npmrc and --pipconfig are both set")
+	}
+}
