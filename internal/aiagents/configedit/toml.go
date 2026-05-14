@@ -21,7 +21,7 @@ import (
 //   - If [features] does not exist, a new `[features]` table is appended
 //     at the end of the file with `codex_hooks = true`.
 //
-// Multi-line strings (`"""..."""`, `'''...'''`) and comments are masked
+// Multi-line strings (`"""..."""`, `”'...”'`) and comments are masked
 // before pattern matching so that user content cannot trick the
 // scanner into treating the literal text `[features]` or `codex_hooks =
 // true` inside a string as a real table header or key.

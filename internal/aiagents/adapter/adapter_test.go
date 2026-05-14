@@ -16,7 +16,7 @@ import (
 // to every implementer at once.
 type stubAdapter struct{}
 
-func (stubAdapter) Name() string                     { return "stub" }
+func (stubAdapter) Name() string                      { return "stub" }
 func (stubAdapter) SupportedHooks() []event.HookEvent { return nil }
 func (stubAdapter) ManagedFiles() []adapter.ManagedFile {
 	return nil

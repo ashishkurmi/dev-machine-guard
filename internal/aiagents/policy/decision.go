@@ -6,16 +6,16 @@ package policy
 type DecisionCode string
 
 const (
-	CodeAllowed             DecisionCode = "allowed"
-	CodeRegistryNotAllowed  DecisionCode = "registry_not_allowed"
-	CodeRegistryFlag        DecisionCode = "registry_flag_override"
-	CodeRegistryEnv         DecisionCode = "registry_env_override"
-	CodeUserconfigFlag      DecisionCode = "userconfig_override"
-	CodeManagedKeyMutation  DecisionCode = "managed_key_mutation"
-	CodeManagedKeyEdit      DecisionCode = "managed_key_edit"
-	CodeInsufficientData    DecisionCode = "insufficient_data"
-	CodePolicyDisabled      DecisionCode = "policy_disabled"
-	CodeNotInstallCommand   DecisionCode = "not_install_command"
+	CodeAllowed            DecisionCode = "allowed"
+	CodeRegistryNotAllowed DecisionCode = "registry_not_allowed"
+	CodeRegistryFlag       DecisionCode = "registry_flag_override"
+	CodeRegistryEnv        DecisionCode = "registry_env_override"
+	CodeUserconfigFlag     DecisionCode = "userconfig_override"
+	CodeManagedKeyMutation DecisionCode = "managed_key_mutation"
+	CodeManagedKeyEdit     DecisionCode = "managed_key_edit"
+	CodeInsufficientData   DecisionCode = "insufficient_data"
+	CodePolicyDisabled     DecisionCode = "policy_disabled"
+	CodeNotInstallCommand  DecisionCode = "not_install_command"
 )
 
 // GenericBlockMessage is the literal phrase shown to the agent on any

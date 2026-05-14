@@ -21,10 +21,10 @@ import (
 )
 
 const (
-	hookTimeoutSeconds = 30
-	matcherAll         = "*"
-	matcherSession     = "startup|resume|clear"
-	settingsMode       = os.FileMode(0o600)
+	hookTimeoutSeconds  = 30
+	matcherAll          = "*"
+	matcherSession      = "startup|resume|clear"
+	settingsMode        = os.FileMode(0o600)
 	statusMessagePrefix = "dev-machine-guard"
 )
 
@@ -453,4 +453,3 @@ func writeConfigAtomic(path string, encoded []byte) (*atomicfile.WriteResult, er
 	}
 	return &wr, nil
 }
-
