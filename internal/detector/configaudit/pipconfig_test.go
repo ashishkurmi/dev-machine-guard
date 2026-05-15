@@ -251,7 +251,9 @@ install.no-build-isolation='true' from PIP_NO_BUILD_ISOLATION
 // with an empty SourceByKey entry.
 //
 // Reason: pip 24.3.1 on Fedora 42 emits lines like
-//   global.index-url='https://pypi.org/simple/'
+//
+//	global.index-url='https://pypi.org/simple/'
+//
 // (no source). Earlier pip versions added ` from /etc/pip.conf`.
 func TestParseEffective_NoSourceSuffix(t *testing.T) {
 	mock := executor.NewMock()

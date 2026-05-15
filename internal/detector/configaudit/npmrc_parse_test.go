@@ -19,9 +19,9 @@ strict-ssl=false
 	}
 
 	want := map[string]string{
-		"registry":             "https://registry.npmjs.org/",
-		"@mycompany:registry":  "https://npm.mycompany.com/",
-		"strict-ssl":           "false",
+		"registry":            "https://registry.npmjs.org/",
+		"@mycompany:registry": "https://npm.mycompany.com/",
+		"strict-ssl":          "false",
 	}
 	for _, e := range entries {
 		if got := want[e.Key]; got != e.DisplayValue {
@@ -183,21 +183,21 @@ key2=value2
 
 func TestIsAuthKey(t *testing.T) {
 	cases := map[string]bool{
-		"//registry.npmjs.org/:_authToken":     true,
-		"//npm.com/path/:_password":            true,
-		"//registry.npmjs.org/:_AUTHTOKEN":     true, // case-insensitive
-		"_auth":                                true, // legacy unscoped
-		"username":                             true,
-		"email":                                true,
-		"cafile":                               false, // TLS material — file path, not a secret
-		"certfile":                             false, // TLS material — file path, not a secret
-		"keyfile":                              false, // TLS material — file path, not a secret
-		"cert":                                 false, // TLS material — file path, not a secret
-		"key":                                  false, // TLS material — file path, not a secret
-		"registry":                             false,
-		"@scope:registry":                      false,
-		"strict-ssl":                           false,
-		"ignore-scripts":                       false,
+		"//registry.npmjs.org/:_authToken": true,
+		"//npm.com/path/:_password":        true,
+		"//registry.npmjs.org/:_AUTHTOKEN": true, // case-insensitive
+		"_auth":                            true, // legacy unscoped
+		"username":                         true,
+		"email":                            true,
+		"cafile":                           false, // TLS material — file path, not a secret
+		"certfile":                         false, // TLS material — file path, not a secret
+		"keyfile":                          false, // TLS material — file path, not a secret
+		"cert":                             false, // TLS material — file path, not a secret
+		"key":                              false, // TLS material — file path, not a secret
+		"registry":                         false,
+		"@scope:registry":                  false,
+		"strict-ssl":                       false,
+		"ignore-scripts":                   false,
 	}
 	for k, want := range cases {
 		if got := isAuthKey(k); got != want {
@@ -218,7 +218,7 @@ func TestExtractEnvRefs(t *testing.T) {
 		{"${VAR:-default}", true, []string{"VAR"}},
 		{"${VAR?missing}", true, []string{"VAR"}},
 		{"${SAME}/${SAME}", true, []string{"SAME"}}, // dedup
-		{"$VAR", false, nil},                         // we only match ${...}
+		{"$VAR", false, nil},                        // we only match ${...}
 	}
 	for _, c := range cases {
 		gotVars, gotIs := extractEnvRefs(c.in)
@@ -239,10 +239,10 @@ func TestExtractEnvRefs(t *testing.T) {
 
 func TestRedactSecret(t *testing.T) {
 	cases := map[string]string{
-		"":              "***",   // empty stays *** (defensive; redactSecret isn't called for empty in practice)
-		"abc":           "***",
-		"abcdefgh":      "***",   // exactly 8 chars: still ***
-		"abcdefghi":     "***fghi", // 9+ chars: ***last4
+		"":                  "***", // empty stays *** (defensive; redactSecret isn't called for empty in practice)
+		"abc":               "***",
+		"abcdefgh":          "***",     // exactly 8 chars: still ***
+		"abcdefghi":         "***fghi", // 9+ chars: ***last4
 		"npm_xxxxxxXYZ1234": "***1234",
 	}
 	for in, want := range cases {

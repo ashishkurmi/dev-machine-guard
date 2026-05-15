@@ -257,7 +257,7 @@ func TestFindings_StableOrdering_severityFirst(t *testing.T) {
 		sec("global",
 			kv("pre", "true"), // LOW
 			kv("extra-index-url", "https://alice:secret"+at+"internal.example.com/simple"), // CRITICAL
-			kv("trusted-host", "x.example.com"), // HIGH
+			kv("trusted-host", "x.example.com"),                                            // HIGH
 		),
 	})
 	findings := evaluatePipFindings(audit)

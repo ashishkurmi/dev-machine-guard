@@ -268,6 +268,9 @@ func (d *NPMRCDetector) collectFile(ctx context.Context, path, scope string) mod
 		}
 	}
 
+	// #nosec G304 -- path comes from the detector's own candidate
+	// enumeration of well-known npmrc locations (built-in/global/user/
+	// project); not from external input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		f.Readable = false

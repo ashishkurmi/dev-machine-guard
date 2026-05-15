@@ -612,14 +612,14 @@ func fileContainsEmbeddedCreds(f model.PipConfigFile) bool {
 // pip-008. The caller picks the ID and severity.
 func httpSchemeFinding(id, sev, source, section, key, value string) model.PipFinding {
 	return model.PipFinding{
-		ID:         id,
-		Severity:   sev,
-		Category:   "tls-disabled",
-		Source:     source,
-		Section:    section,
-		Key:        key,
-		ValueShown: redactCredsInValue(value),
-		Detail:     fmt.Sprintf("%s uses http:// — registry traffic is unencrypted and trivially MITM-able.", key),
+		ID:          id,
+		Severity:    sev,
+		Category:    "tls-disabled",
+		Source:      source,
+		Section:     section,
+		Key:         key,
+		ValueShown:  redactCredsInValue(value),
+		Detail:      fmt.Sprintf("%s uses http:// — registry traffic is unencrypted and trivially MITM-able.", key),
 		Remediation: "Switch to https:// (with a valid cert if it's an internal index).",
 	}
 }

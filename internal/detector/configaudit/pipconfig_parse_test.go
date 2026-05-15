@@ -139,11 +139,11 @@ func TestRedactCredsInValue(t *testing.T) {
 
 func TestUrlIsHTTP(t *testing.T) {
 	cases := map[string]bool{
-		"http://example.com":        true,
-		"https://example.com":       false,
-		"file:///etc/x":             false,
-		"not-a-url":                 false,
-		"HTTP://EXAMPLE.COM":        true, // case-insensitive scheme
+		"http://example.com":  true,
+		"https://example.com": false,
+		"file:///etc/x":       false,
+		"not-a-url":           false,
+		"HTTP://EXAMPLE.COM":  true, // case-insensitive scheme
 	}
 	for in, want := range cases {
 		if got := urlIsHTTP(in); got != want {

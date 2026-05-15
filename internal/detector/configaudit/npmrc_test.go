@@ -257,12 +257,12 @@ strict-ssl = false
 	got := parseSourceAttribution(in)
 
 	cases := map[string]string{
-		"access":                            "default",
-		"audit":                             "default",
-		"registry":                          "/Users/me/.npmrc",
-		"//registry.npmjs.org/:_authToken":  "/Users/me/.npmrc",
-		"@mycompany:registry":               "/Users/me/code/myapp/.npmrc",
-		"strict-ssl":                        "/Users/me/code/myapp/.npmrc",
+		"access":                           "default",
+		"audit":                            "default",
+		"registry":                         "/Users/me/.npmrc",
+		"//registry.npmjs.org/:_authToken": "/Users/me/.npmrc",
+		"@mycompany:registry":              "/Users/me/code/myapp/.npmrc",
+		"strict-ssl":                       "/Users/me/code/myapp/.npmrc",
 	}
 	for k, want := range cases {
 		if got[k] != want {
