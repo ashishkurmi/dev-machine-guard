@@ -26,6 +26,11 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/progress"
 )
 
+// s3UploadBackoffUnit is multiplied by attempt-number to compute the
+// inter-attempt sleep on S3 PUT retries. Lifted to a package var so tests
+// can shrink it; production code never mutates it.
+var s3UploadBackoffUnit = 2 * time.Second
+
 // Payload is the enterprise telemetry JSON structure.
 type Payload struct {
 	CustomerID     string                 `json:"customer_id"`
@@ -689,7 +694,9 @@ func uploadToS3(ctx context.Context, log *progress.Logger, payload *Payload, exe
 	log.Progress("Uploading telemetry to S3 (%d bytes)...", len(compressedPayload))
 	s3Client := &http.Client{Timeout: 10 * time.Minute}
 	const maxRetries = 3
-	var putResp *http.Response
+	backoffUnit := s3UploadBackoffUnit
+	uploaded := false
+	var lastFailure string
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		uploadStart := time.Now()
 		putReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, urlResp.UploadURL, bytes.NewReader(compressedPayload))
@@ -698,49 +705,79 @@ func uploadToS3(ctx context.Context, log *progress.Logger, payload *Payload, exe
 		}
 		putReq.Header.Set("Content-Type", "application/json")
 
-		putResp, err = s3Client.Do(putReq)
+		putResp, putErr := s3Client.Do(putReq)
 		elapsed := time.Since(uploadStart)
-		if err != nil {
-			log.Debug("s3 PUT attempt %d/%d: error=%v elapsed=%s", attempt, maxRetries, err, elapsed)
+		if putErr != nil {
+			log.Debug("s3 PUT attempt %d/%d: error=%v elapsed=%s", attempt, maxRetries, putErr, elapsed)
+			lastFailure = fmt.Sprintf("S3 PUT error: %v", putErr)
 		} else {
 			log.Debug("s3 PUT attempt %d/%d: status=%d elapsed=%s payload_bytes=%d", attempt, maxRetries, putResp.StatusCode, elapsed, len(payloadJSON))
 		}
 
-		if err == nil && putResp.StatusCode == http.StatusOK {
-			log.Progress("Uploaded to S3 in %s", elapsed)
-			break
-		}
-
-		// Clean up response body before retry
-		if putResp != nil {
+		if putErr == nil && putResp.StatusCode == http.StatusOK {
+			// A real S3 PUT response always carries x-amz-request-id and
+			// x-amz-id-2. If both are missing, the response did not
+			// originate from AWS — typically a TLS-inspecting proxy or
+			// outbound-filtering firewall has terminated the connection
+			// and synthesized a success without forwarding the body. Ask
+			// the backend whether the object actually landed in S3 before
+			// trusting this 200.
+			reqID := putResp.Header.Get("x-amz-request-id")
+			id2 := putResp.Header.Get("x-amz-id-2")
+			proxyHint := putResp.Header.Get("Server")
 			_, _ = io.Copy(io.Discard, putResp.Body)
 			_ = putResp.Body.Close()
+
+			if reqID != "" || id2 != "" {
+				log.Progress("Uploaded to S3 in %s", elapsed)
+				uploaded = true
+				break
+			}
+
+			log.Warn("S3 PUT returned 200 without AWS request id headers (Server=%q) — verifying with backend", proxyHint)
+			result, reason := checkUploadInS3(ctx, log, client, urlResp.S3Key, payload.DeviceID)
+			switch result {
+			case uploadCheckConfirmed:
+				log.Progress("Uploaded to S3 in %s (verified by backend)", elapsed)
+				uploaded = true
+			case uploadCheckUnsupported:
+				// Backend predates confirm-upload — we can't verify, so
+				// trust the 200 for compatibility. The notify endpoint's
+				// own precheck is the remaining safety net.
+				log.Debug("backend does not support confirm-upload; proceeding on the 200 alone")
+				log.Progress("Uploaded to S3 in %s", elapsed)
+				uploaded = true
+			case uploadCheckMissing:
+				lastFailure = fmt.Sprintf("backend confirmed the object is not in S3 (reason=%s)", reason)
+			case uploadCheckIndeterminate:
+				lastFailure = "backend could not verify the upload"
+			}
+			if uploaded {
+				break
+			}
+		} else if putResp != nil {
+			_, _ = io.Copy(io.Discard, putResp.Body)
+			_ = putResp.Body.Close()
+			lastFailure = fmt.Sprintf("S3 PUT returned status %d", putResp.StatusCode)
 		}
 
 		if attempt == maxRetries {
-			if err != nil {
-				return fmt.Errorf("uploading to S3 (payload: %d bytes, elapsed: %s, attempts: %d): %w",
-					len(compressedPayload), elapsed, maxRetries, err)
-			}
-			return fmt.Errorf("S3 upload failed with status %d (payload: %d bytes, attempts: %d)",
-				putResp.StatusCode, len(compressedPayload), maxRetries)
+			break
 		}
 
-		// Log retry and backoff
-		backoff := time.Duration(attempt) * 2 * time.Second
-		if err != nil {
-			log.Warn("S3 upload attempt %d/%d failed after %s: %v; retrying in %s...", attempt, maxRetries, elapsed, err, backoff)
-		} else {
-			log.Warn("S3 upload attempt %d/%d got status %d, retrying in %s...", attempt, maxRetries, putResp.StatusCode, backoff)
-		}
+		backoff := time.Duration(attempt) * backoffUnit
+		log.Warn("S3 upload attempt %d/%d failed (%s); retrying in %s...", attempt, maxRetries, lastFailure, backoff)
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	defer func() { _ = putResp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, putResp.Body)
+
+	if !uploaded {
+		return fmt.Errorf("telemetry upload failed after %d attempts: %s (payload: %d bytes) — the network may be intercepting outbound traffic to S3 (TLS-inspecting proxy, DLP appliance, or outbound firewall)",
+			maxRetries, lastFailure, len(compressedPayload))
+	}
 
 	// Notify backend
 	log.Progress("Notifying backend of upload...")
@@ -775,6 +812,86 @@ func uploadToS3(ctx context.Context, log *progress.Logger, payload *Payload, exe
 	log.Progress("Backend processing initiated (HTTP %d)", notifyResp.StatusCode)
 
 	return nil
+}
+
+// uploadCheckResult is the four-valued answer the agent gets back when it
+// asks the backend whether a PUT'd s3_key actually landed in S3.
+type uploadCheckResult int
+
+const (
+	// uploadCheckConfirmed = backend HEAD'd the object and it exists.
+	uploadCheckConfirmed uploadCheckResult = iota
+	// uploadCheckMissing = backend HEAD'd the object and it does not exist.
+	uploadCheckMissing
+	// uploadCheckUnsupported = backend predates the confirm-upload route
+	// (HTTP 404). We can't verify; for compatibility callers should trust
+	// the original PUT response.
+	uploadCheckUnsupported
+	// uploadCheckIndeterminate = transient failure (5xx, transport error,
+	// parse error). The answer is unknown; callers should retry.
+	uploadCheckIndeterminate
+)
+
+// checkUploadInS3 calls the backend's /telemetry/confirm-upload endpoint
+// and translates the response into a uploadCheckResult. On
+// uploadCheckMissing the second return value carries the backend's
+// reason string (e.g. "object_not_found").
+func checkUploadInS3(ctx context.Context, log *progress.Logger, client *http.Client, s3Key, deviceID string) (uploadCheckResult, string) {
+	log.Progress("Confirming upload reached S3...")
+
+	body, _ := json.Marshal(map[string]string{
+		"s3_key":    s3Key,
+		"device_id": deviceID,
+	})
+	endpoint := fmt.Sprintf("%s/v1/%s/developer-mdm-agent/telemetry/confirm-upload",
+		config.APIEndpoint, config.CustomerID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		log.Warn("confirm-upload: request build failed: %v", err)
+		return uploadCheckIndeterminate, ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("X-Agent-Version", buildinfo.Version)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Warn("confirm-upload: request failed: %v", err)
+		return uploadCheckIndeterminate, ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return uploadCheckUnsupported, ""
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Warn("confirm-upload: HTTP %d", resp.StatusCode)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return uploadCheckIndeterminate, ""
+	}
+
+	var result struct {
+		Uploaded  bool   `json:"uploaded"`
+		SizeBytes int64  `json:"size_bytes"`
+		Reason    string `json:"reason"`
+		S3Key     string `json:"s3_key"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Warn("confirm-upload: malformed response: %v", err)
+		return uploadCheckIndeterminate, ""
+	}
+
+	if result.Uploaded {
+		log.Debug("confirm-upload: backend reports object present (%d bytes)", result.SizeBytes)
+		return uploadCheckConfirmed, ""
+	}
+	reason := result.Reason
+	if reason == "" {
+		reason = "unknown"
+	}
+	return uploadCheckMissing, reason
 }
 
 // gzipBytes returns a gzip-compressed copy of the input bytes.
