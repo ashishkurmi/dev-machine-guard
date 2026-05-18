@@ -199,19 +199,52 @@ func (s *NodeScanner) scanYarnGlobal(ctx context.Context) (model.NodeScanResult,
 
 func (s *NodeScanner) scanPnpmGlobal(ctx context.Context) (model.NodeScanResult, bool) {
 	if err := s.checkPath(ctx, "pnpm"); err != nil {
+		s.log.Warn("pnpm not found on PATH — skipping pnpm global scan: %v", err)
 		return model.NodeScanResult{}, false
 	}
 
-	version := s.getVersion(ctx, "pnpm", "--version")
-	globalDir := s.getOutput(ctx, "pnpm", "root", "-g")
+	// pnpm v11 hard-fails any `-g` invocation when its user-local bin dir is
+	// not on PATH. Two execution paths to handle:
+	// - In-process (exec.Command): prepend the bin dir to this Go process's
+	//   PATH so the child inherits it.
+	// - Root → user delegation (sudo -u): inline `PATH='…':$PATH` into the
+	//   shell command itself. This works regardless of sudo's env policy
+	//   (macOS keeps PATH via env_keep; Linux strips it via secure_path),
+	//   because the env-prefix is honored by the user's shell AFTER sudo
+	//   has already done whatever it does.
+	extra := defaultPnpmBinDir(s.exec)
+	if extra != "" {
+		oldPath := os.Getenv("PATH")
+		_ = os.Setenv("PATH", extra+string(os.PathListSeparator)+oldPath)
+		defer os.Setenv("PATH", oldPath)
+	}
+
+	// For the delegation path, embed `PATH='extra':$PATH` in the command name.
+	// runCmd's delegation branch space-joins name+args into the shell command
+	// string, so the env-prefix flows through to the user's shell intact.
+	// Applied to every pnpm `-g` call, since v11 enforces the bin-dir check
+	// on each one.
+	pnpmCmd := "pnpm"
+	if s.shouldRunAsUser() && extra != "" {
+		pnpmCmd = "PATH=" + platformShellQuote(s.exec, extra) + ":$PATH pnpm"
+	}
+
+	versionOut, _, _, verErr := s.runCmd(ctx, 10*time.Second, pnpmCmd, "--version")
+	version := strings.TrimSpace(versionOut)
+	if verErr != nil || version == "" {
+		version = "unknown"
+	}
+
+	rootOut, _, _, _ := s.runCmd(ctx, 10*time.Second, pnpmCmd, "root", "-g")
+	globalDir := strings.TrimSpace(rootOut)
 	if globalDir == "" {
+		s.log.Warn("pnpm found but `pnpm root -g` returned empty — skipping pnpm global scan")
 		return model.NodeScanResult{}, false
 	}
 	globalDir = filepath.Dir(globalDir)
 
 	start := time.Now()
-	// pnpm v11 exits non-zero on `--depth=3` for global scans; use `--depth=Infinity` there.
-	stdout, stderr, exitCode, _ := s.runCmd(ctx, 60*time.Second, "pnpm", "list", "-g", "--json", pnpmDepthArg(version))
+	stdout, stderr, exitCode, err := s.runCmd(ctx, 60*time.Second, pnpmCmd, "list", "-g", "--json")
 	duration := time.Since(start).Milliseconds()
 
 	errMsg := ""
@@ -219,7 +252,7 @@ func (s *NodeScanner) scanPnpmGlobal(ctx context.Context) (model.NodeScanResult,
 		errMsg = "pnpm list -g command failed"
 		s.log.Warn("pnpm list -g failed (exit_code=%d, %dms) — results may be incomplete", exitCode, duration)
 	}
-	s.log.Debug("pnpm global scan: version=%s global_dir=%s exit_code=%d stdout_bytes=%d duration=%dms", version, globalDir, exitCode, len(stdout), duration)
+	s.log.Debug("pnpm global scan: version=%s global_dir=%s exit_code=%d stdout_bytes=%d duration=%dms err=%v", version, globalDir, exitCode, len(stdout), duration, err)
 
 	return model.NodeScanResult{
 		ProjectPath:      globalDir,
@@ -232,6 +265,26 @@ func (s *NodeScanner) scanPnpmGlobal(ctx context.Context) (model.NodeScanResult,
 		ExitCode:         exitCode,
 		ScanDurationMs:   duration,
 	}, true
+}
+
+// defaultPnpmBinDir returns the default pnpm global bin directory for the current OS
+// based on environment variables.
+func defaultPnpmBinDir(exec executor.Executor) string {
+	switch exec.GOOS() {
+	case model.PlatformDarwin:
+		if home := exec.Getenv("HOME"); home != "" {
+			return filepath.Join(home, "Library", "pnpm", "bin")
+		}
+	case model.PlatformLinux:
+		if home := exec.Getenv("HOME"); home != "" {
+			return filepath.Join(home, ".local", "share", "pnpm")
+		}
+	case model.PlatformWindows:
+		if localAppData := exec.Getenv("LOCALAPPDATA"); localAppData != "" {
+			return filepath.Join(localAppData, "pnpm")
+		}
+	}
+	return ""
 }
 
 // projectEntry holds a discovered package.json with its modification time for sorting.
@@ -404,20 +457,4 @@ func (s *NodeScanner) getOutput(ctx context.Context, binary string, args ...stri
 func isInsideNodeModules(projectDir string) bool {
 	normalized := strings.ReplaceAll(projectDir, "\\", "/")
 	return strings.Contains(normalized, "/node_modules/")
-}
-
-// pnpmDepthArg picks the `--depth` arg for `pnpm list -g` based on the pnpm
-// version. pnpm v11 exits non-zero when `--depth=3` is passed to a global
-// scan; `--depth=Infinity` works on v11 and preserves transitive depth.
-// Falls back to `--depth=3` for older / unparseable versions to preserve
-// existing behavior.
-func pnpmDepthArg(version string) string {
-	v := strings.TrimSpace(version)
-	v = strings.TrimPrefix(v, "v")
-	major, _, _ := strings.Cut(v, ".")
-	n, err := strconv.Atoi(major)
-	if err == nil && n >= 11 {
-		return "--depth=Infinity"
-	}
-	return "--depth=3"
 }
