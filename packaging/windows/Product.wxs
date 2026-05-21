@@ -139,7 +139,7 @@
                   DllEntry="WixQuietExec64"
                   Execute="deferred"
                   Impersonate="no"
-                  Return="ignore"/>
+                  Return="check"/>
 
     <!-- SetProperty values now carry the FULL command line (exe path + args).
          [INSTALLFOLDER] and the per-tenant properties are substituted at

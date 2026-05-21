@@ -9,9 +9,9 @@ import (
 )
 
 // withHome redirects HOME (and USERPROFILE on Windows) so save/load operate
-// on a clean per-test directory. configDir resolution falls back to
-// userConfigDir when no machine-wide config exists, which is exactly the
-// path this exercises on non-root test runs.
+// on a clean per-test directory. readConfigDir / writeConfigDir fall back
+// to userConfigDir when no machine-wide config exists, which is exactly
+// the path this exercises on non-root test runs.
 func withHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

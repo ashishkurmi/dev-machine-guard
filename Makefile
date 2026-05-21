@@ -29,7 +29,8 @@ build-linux:
 # with whatever the binary reports as `--version`.
 build-msi-amd64: build-windows
 	mkdir -p dist
-	wix extension add --global WixToolset.Util.wixext/4.0.5 || true
+	@wix extension list --global 2>/dev/null | grep -q "WixToolset.Util.wixext" || \
+		wix extension add --global WixToolset.Util.wixext/4.0.5
 	wix build packaging/windows/Product.wxs \
 		-arch x64 \
 		-ext WixToolset.Util.wixext \
@@ -40,7 +41,8 @@ build-msi-amd64: build-windows
 
 build-msi-arm64: build-windows-arm64
 	mkdir -p dist
-	wix extension add --global WixToolset.Util.wixext/4.0.5 || true
+	@wix extension list --global 2>/dev/null | grep -q "WixToolset.Util.wixext" || \
+		wix extension add --global WixToolset.Util.wixext/4.0.5
 	wix build packaging/windows/Product.wxs \
 		-arch arm64 \
 		-ext WixToolset.Util.wixext \

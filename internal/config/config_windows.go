@@ -3,6 +3,8 @@
 package config
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 
 	"golang.org/x/sys/windows"
@@ -30,8 +32,11 @@ func isElevated() bool {
 // Windows; this is what does. Mirrors the icacls pattern used in
 // internal/schtasks/schtasks.go for the agent.log directory.
 //
-// Best-effort: a non-zero icacls exit is logged but does not fail the
-// configure call — the config is still functional with default inherited
+// Best-effort: on failure we emit a warning to stderr (which the MSI's
+// WixQuietExec custom action captures into the install log, making it
+// visible to SCCM admins during troubleshooting) AND return the error so
+// callers MAY surface it further if they choose. The install does not
+// abort — the config is still functional with default inherited
 // ProgramData ACLs (which are also Administrators/SYSTEM full + Users
 // read-and-execute on existing files, just not as tightly scoped).
 func hardenMachineConfigACL(path string) error {
@@ -43,5 +48,11 @@ func hardenMachineConfigACL(path string) error {
 		"/grant:r", "*S-1-5-32-545:R", // BUILTIN\Users = Read
 		"/Q",
 	}
-	return exec.Command("icacls", args...).Run()
+	output, err := exec.Command("icacls", args...).CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"warning: icacls hardening of %q failed: %v\nicacls output:\n%s\n",
+			path, err, output)
+	}
+	return err
 }
