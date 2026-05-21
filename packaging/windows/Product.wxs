@@ -85,49 +85,83 @@
       ================================================================
       Custom Actions
 
-      All three CAs are immediate (run in msiexec's own context, which is
-      elevated/SYSTEM under SCCM) so we avoid the CustomActionData dance
-      that deferred CAs require. ExeCommand interpolates [PROPERTY] tokens
-      at sequence time. Return="check" makes a non-zero exit roll back
-      the install transaction.
+      All four CAs run DEFERRED with Impersonate=no — they execute
+      during the install script phase (after InstallFiles physically
+      writes the .exe to disk) in SYSTEM context. Immediate CAs were
+      tried first but failed with MSI error 1721 ("program required
+      could not be run") because immediate CAs run during sequence
+      *building*, before the binary is on disk.
+
+      Deferred CAs can't read MSI properties directly. The standard
+      workaround is paired SetProperty elements that populate the
+      CustomActionData property which the deferred CA then reads as
+      its command line.
       ================================================================
     -->
 
-    <!-- Configure with inline credentials: runs when APIKEY is set and
-         BOOTSTRAPFILE is not. Tenant config (customer ID, endpoint, key,
-         frequency) comes from msiexec command line. -->
+    <!-- Deferred command-runners. ExeCommand="[CustomActionData]" pulls
+         the actual command line from the CustomActionData property,
+         which the SetProperty elements below populate at sequence
+         time (when [INSTALLFOLDER], [CUSTOMERID], etc. ARE expandable). -->
+
     <CustomAction Id="RunConfigureInline"
                   Directory="INSTALLFOLDER"
-                  ExeCommand='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" configure --non-interactive --customer-id "[CUSTOMERID]" --api-endpoint "[APIENDPOINT]" --api-key "[APIKEY]" --scan-frequency "[SCANFREQUENCY]"'
-                  Execute="immediate"
+                  ExeCommand="[CustomActionData]"
+                  Execute="deferred"
+                  Impersonate="no"
                   Return="check"/>
 
-    <!-- Configure from a pre-staged JSON: runs when BOOTSTRAPFILE is set.
-         Recommended for SCCM since the API key never appears on the
-         msiexec command line (and therefore never in AppEnforce.log). -->
     <CustomAction Id="RunConfigureFromFile"
                   Directory="INSTALLFOLDER"
-                  ExeCommand='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" configure --non-interactive --from-file "[BOOTSTRAPFILE]"'
-                  Execute="immediate"
+                  ExeCommand="[CustomActionData]"
+                  Execute="deferred"
+                  Impersonate="no"
                   Return="check"/>
 
-    <!-- Register the Windows Task Scheduler entry via the binary's own
-         `install` subcommand. Internally that shells out to schtasks.exe;
-         no PowerShell, no .NET, no WMI. -->
     <CustomAction Id="RunInstallScheduledTask"
                   Directory="INSTALLFOLDER"
-                  ExeCommand='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" install'
-                  Execute="immediate"
+                  ExeCommand="[CustomActionData]"
+                  Execute="deferred"
+                  Impersonate="no"
                   Return="check"/>
 
-    <!-- Uninstall path: remove the scheduled task before MSI removes the
-         .exe. Return="ignore" so a missing task (already removed manually)
-         doesn't block uninstall. -->
     <CustomAction Id="RunUninstallScheduledTask"
                   Directory="INSTALLFOLDER"
-                  ExeCommand='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" uninstall'
-                  Execute="immediate"
+                  ExeCommand="[CustomActionData]"
+                  Execute="deferred"
+                  Impersonate="no"
                   Return="ignore"/>
+
+    <!-- SetProperty elements: WiX shorthand for an immediate Type 51 CA.
+         Each one sets a property whose name matches a deferred CA Id;
+         MSI auto-populates that CA's CustomActionData from this value
+         at execution time. Property tokens like [INSTALLFOLDER] and
+         [APIKEY] expand here (in the immediate phase) — so by the time
+         the deferred CA runs, the command line is fully resolved. -->
+
+    <SetProperty Id="RunConfigureInline"
+                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" configure --non-interactive --customer-id "[CUSTOMERID]" --api-endpoint "[APIENDPOINT]" --api-key "[APIKEY]" --scan-frequency "[SCANFREQUENCY]"'
+                 Sequence="execute"
+                 Before="RunConfigureInline"
+                 Condition="APIKEY AND NOT BOOTSTRAPFILE AND NOT Installed"/>
+
+    <SetProperty Id="RunConfigureFromFile"
+                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" configure --non-interactive --from-file "[BOOTSTRAPFILE]"'
+                 Sequence="execute"
+                 Before="RunConfigureFromFile"
+                 Condition="BOOTSTRAPFILE AND NOT Installed"/>
+
+    <SetProperty Id="RunInstallScheduledTask"
+                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" install'
+                 Sequence="execute"
+                 Before="RunInstallScheduledTask"
+                 Condition="NOT Installed"/>
+
+    <SetProperty Id="RunUninstallScheduledTask"
+                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" uninstall'
+                 Sequence="execute"
+                 Before="RunUninstallScheduledTask"
+                 Condition="REMOVE=&quot;ALL&quot;"/>
 
     <!--
       InstallExecuteSequence: where each CA fires in the MSI sequence.
