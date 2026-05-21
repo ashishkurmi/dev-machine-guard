@@ -160,7 +160,7 @@
                  Condition="BOOTSTRAPFILE AND NOT Installed"/>
 
     <SetProperty Id="RunInstallScheduledTask"
-                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" install'
+                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" install --ignore-telemetry-error'
                  Sequence="execute"
                  Before="RunInstallScheduledTask"
                  Condition="NOT Installed"/>

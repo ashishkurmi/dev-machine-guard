@@ -47,6 +47,14 @@ type Config struct {
 	ConfigAPIEndpoint   string // --api-endpoint
 	ConfigAPIKey        string // --api-key (also accepts env var DMG_API_KEY)
 	ConfigScanFrequency string // --scan-frequency (hours)
+
+	// IgnoreTelemetryError opts the `install` subcommand into treating an
+	// initial-telemetry POST failure as a warning rather than a fatal exit.
+	// Default behavior (flag absent) preserves dev-workflow ergonomics —
+	// a failed first telemetry surfaces misconfigurations immediately. MSI
+	// custom actions and other unattended orchestrators set this so a
+	// transient network hiccup doesn't roll back the whole install.
+	IgnoreTelemetryError bool
 }
 
 // supportedHookAgents lists the agent names accepted by `hooks --agent <name>` and `_hook <agent> ...`.
@@ -157,6 +165,8 @@ func Parse(args []string) (*Config, error) {
 			continue // skip the i++ at the bottom
 		case arg == "--non-interactive":
 			cfg.NonInteractive = true
+		case arg == "--ignore-telemetry-error":
+			cfg.IgnoreTelemetryError = true
 		case arg == "--from-file":
 			i++
 			if i >= len(args) {
@@ -375,6 +385,9 @@ Non-interactive configure (for MSI / SCCM / Intune deployments):
   --api-endpoint URL            StepSecurity backend URL
   --api-key KEY                 Authentication key (or set DMG_API_KEY env var)
   --scan-frequency HOURS        Scheduled scan frequency
+  --ignore-telemetry-error      On 'install', treat a failed initial telemetry POST
+                                as a warning instead of a fatal exit (use in MSI
+                                custom actions to avoid rollback on transient network)
 
 Configuration:
   Per-user config:    ~/.stepsecurity/config.json

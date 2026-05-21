@@ -204,8 +204,18 @@ func main() {
 		}
 
 		if telemetryErr != nil {
-			log.Error("%v", telemetryErr)
-			os.Exit(1)
+			if cfg.IgnoreTelemetryError {
+				// Opt-in tolerance for MSI/SCCM/Intune deployments: the
+				// scheduled task is already registered and will retry
+				// telemetry on its next firing, so a transient first-run
+				// network hiccup shouldn't roll back the whole install.
+				// Default (dev-workflow) behavior remains exit non-zero
+				// to surface real misconfigurations during interactive use.
+				log.Warn("initial telemetry failed (%v) — the scheduled task will retry on its next firing", telemetryErr)
+			} else {
+				log.Error("%v", telemetryErr)
+				os.Exit(1)
+			}
 		}
 		runHookStateReconcile(exec, log)
 

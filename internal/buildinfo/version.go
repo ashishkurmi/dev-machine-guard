@@ -3,7 +3,7 @@ package buildinfo
 import "fmt"
 
 const (
-	Version  = "1.11.2-msi-test6"
+	Version  = "1.11.2-msi-test8"
 	AgentURL = "https://github.com/step-security/dev-machine-guard"
 )
 
