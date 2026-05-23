@@ -30,12 +30,12 @@ jobs:
 
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@58077d3c7e43986b6b15fba718e8ea69e387dfcc # v2.15.1
+        uses: step-security/harden-runner@v2
         with:
           egress-policy: audit
 
       - name: Checkout repository at requested commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.commit_id }}
           fetch-depth: 0
@@ -51,12 +51,12 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
       - name: Run GoReleaser (snapshot, no publish)
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: latest
@@ -65,13 +65,54 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: List dist/
-        run: find dist -maxdepth 2 -type f
+        run: find dist -type f
+
+      - name: Stage artifacts with release-style names
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          mkdir -p staging
+
+          # Goreleaser snapshot leaves the per-OS/arch binaries inside their
+          # builder subdirectories (e.g. dist/stepsecurity-dev-machine-guard_linux_amd64_v1/...).
+          # Locate each by name+arch path and copy out to staging/ with the
+          # release-style filename, so the artifacts look the same as a real
+          # release and the MSI job's Get-ChildItem filter still matches.
+          find_one() {
+            local result
+            result=$(find dist -type f "$@" | head -1)
+            if [ -z "$result" ] || [ ! -f "$result" ]; then
+              echo "::error::No file matched: $*"
+              find dist -type f
+              exit 1
+            fi
+            printf '%s\n' "$result"
+          }
+
+          darwin_src=$(find_one -name '*-darwin_unnotarized')
+          linux_amd64_src=$(find_one -name 'stepsecurity-dev-machine-guard' -path '*linux_amd64*')
+          linux_arm64_src=$(find_one -name 'stepsecurity-dev-machine-guard' -path '*linux_arm64*')
+          win_amd64_src=$(find_one -name 'stepsecurity-dev-machine-guard.exe' -path '*windows_amd64*')
+          win_arm64_src=$(find_one -name 'stepsecurity-dev-machine-guard.exe' -path '*windows_arm64*')
+          win_task_amd64_src=$(find_one -name 'stepsecurity-dev-machine-guard-task.exe' -path '*windows_amd64*')
+          win_task_arm64_src=$(find_one -name 'stepsecurity-dev-machine-guard-task.exe' -path '*windows_arm64*')
+
+          cp "$darwin_src"          "staging/stepsecurity-dev-machine-guard-${version}-darwin_unnotarized"
+          cp "$linux_amd64_src"     "staging/stepsecurity-dev-machine-guard-${version}-linux_amd64"
+          cp "$linux_arm64_src"     "staging/stepsecurity-dev-machine-guard-${version}-linux_arm64"
+          cp "$win_amd64_src"       "staging/stepsecurity-dev-machine-guard-${version}-windows_amd64.exe"
+          cp "$win_arm64_src"       "staging/stepsecurity-dev-machine-guard-${version}-windows_arm64.exe"
+          cp "$win_task_amd64_src"  "staging/stepsecurity-dev-machine-guard-task-${version}-windows_amd64.exe"
+          cp "$win_task_arm64_src"  "staging/stepsecurity-dev-machine-guard-task-${version}-windows_arm64.exe"
+          cp dist/*.deb staging/
+          cp dist/*.rpm staging/
+          ls -la staging/
 
       - name: Upload macOS binary
         uses: actions/upload-artifact@v4
         with:
           name: darwin
-          path: dist/stepsecurity-dev-machine-guard-*-darwin_unnotarized
+          path: staging/stepsecurity-dev-machine-guard-*-darwin_unnotarized
           if-no-files-found: error
 
       - name: Upload Linux binaries and packages
@@ -79,10 +120,10 @@ jobs:
         with:
           name: linux
           path: |
-            dist/stepsecurity-dev-machine-guard-*-linux_amd64
-            dist/stepsecurity-dev-machine-guard-*-linux_arm64
-            dist/*.deb
-            dist/*.rpm
+            staging/stepsecurity-dev-machine-guard-*-linux_amd64
+            staging/stepsecurity-dev-machine-guard-*-linux_arm64
+            staging/*.deb
+            staging/*.rpm
           if-no-files-found: error
 
       - name: Upload Windows .exe binaries
@@ -90,8 +131,10 @@ jobs:
         with:
           name: windows-exes
           path: |
-            dist/stepsecurity-dev-machine-guard-*-windows_amd64.exe
-            dist/stepsecurity-dev-machine-guard-*-windows_arm64.exe
+            staging/stepsecurity-dev-machine-guard-*-windows_amd64.exe
+            staging/stepsecurity-dev-machine-guard-*-windows_arm64.exe
+            staging/stepsecurity-dev-machine-guard-task-*-windows_amd64.exe
+            staging/stepsecurity-dev-machine-guard-task-*-windows_arm64.exe
           if-no-files-found: error
 
   build-msi:
@@ -103,12 +146,12 @@ jobs:
 
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@58077d3c7e43986b6b15fba718e8ea69e387dfcc # v2.15.1
+        uses: step-security/harden-runner@v2
         with:
           egress-policy: audit
 
       - name: Checkout repository at requested commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.commit_id }}
 
@@ -179,7 +222,7 @@ jobs:
 
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@58077d3c7e43986b6b15fba718e8ea69e387dfcc # v2.15.1
+        uses: step-security/harden-runner@v2
         with:
           egress-policy: audit
 
