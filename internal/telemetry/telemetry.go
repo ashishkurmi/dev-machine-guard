@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -387,8 +386,8 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// Full Disk Access. Nil when --include-tcc-protected is set; ShouldSkip
 	// is nil-safe.
 	var tccSkipper *tcc.Skipper
-	if !cfg.IncludeTCCProtected {
-		tccSkipper = tcc.New(resolveHome(exec))
+	if tcc.Enabled(cfg.IncludeTCCProtected) {
+		tccSkipper = tcc.New(executor.ResolveHome(exec))
 		if cands := tccSkipper.Candidates(); len(cands) > 0 {
 			log.Debug("tcc skip list (%d): %v", len(cands), cands)
 		}
@@ -809,24 +808,8 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 
 	fmt.Fprintln(os.Stderr)
 	log.Progress("Telemetry collection completed successfully")
-	logTCCHits(log, tccSkipper)
+	tccSkipper.LogHits(log.Debug)
 	return nil
-}
-
-// logTCCHits surfaces which TCC-protected paths were actually encountered
-// (and short-circuited) during the enterprise scan's directory walks.
-// Quiet when nothing was matched.
-func logTCCHits(log *progress.Logger, s *tcc.Skipper) {
-	hits := s.Hits()
-	if len(hits) == 0 {
-		return
-	}
-	paths := make([]string, 0, len(hits))
-	for p := range hits {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	log.Debug("tcc: encountered and skipped %d protected path(s) during walks: %v", len(paths), paths)
 }
 
 func brewFormulaeCount(scans []model.BrewScanResult) int {
@@ -1153,18 +1136,6 @@ func resolveSearchDirs(exec executor.Executor, dirs []string) []string {
 		resolved = append(resolved, d)
 	}
 	return resolved
-}
-
-// resolveHome returns the home directory of the console user, falling back
-// to the process's current user. Empty string when neither resolves.
-func resolveHome(exec executor.Executor) string {
-	if u, err := exec.LoggedInUser(); err == nil {
-		return u.HomeDir
-	}
-	if u, err := exec.CurrentUser(); err == nil {
-		return u.HomeDir
-	}
-	return ""
 }
 
 func ideDisplayName(ideType string) string {

@@ -7,11 +7,46 @@
 package tcc
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 )
+
+// Enabled reports whether the TCC skipper should be active for this run.
+// The override is the resolved tri-state cfg/config value: nil to defer to
+// the runtime default, true to explicitly include TCC paths (don't skip),
+// false to explicitly exclude (always skip).
+//
+// The default (nil override) only skips when the process is running under
+// macOS launchd: that's the context in which TCC permission prompts
+// actually fire and there's nobody at a keyboard to dismiss them. Direct
+// CLI invocations typically inherit Terminal.app's TCC grants and don't
+// see prompts, so they default to full scan coverage.
+func Enabled(override *bool) bool {
+	if override != nil {
+		// Override semantics: true = "include TCC paths" = skipper OFF.
+		return !*override
+	}
+	return IsRunningUnderLaunchd()
+}
+
+// IsRunningUnderLaunchd reports whether the process appears to be running
+// as a macOS launchd-managed daemon or agent. Detection signals (in
+// order): an explicit STEPSEC_VIA_LAUNCHD=1 env var (escape hatch for
+// tests and forward-compat plist changes), then PPID==1 on darwin
+// (launchd is PID 1 and reparents its jobs). Returns false off darwin.
+func IsRunningUnderLaunchd() bool {
+	if os.Getenv("STEPSEC_VIA_LAUNCHD") == "1" {
+		return true
+	}
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	return os.Getppid() == 1
+}
 
 // Skipper matches TCC-protected directories. Build one per scan via New;
 // share across detectors. Hits are tracked so callers can prove from logs
@@ -54,12 +89,28 @@ func (s *Skipper) ShouldSkip(path, walkRoot string) bool {
 		return true
 	}
 	for _, p := range s.prefixes {
-		if strings.HasPrefix(cleaned, p) {
+		if hasPathPrefix(cleaned, p) {
 			s.recordHit(cleaned)
 			return true
 		}
 	}
 	return false
+}
+
+// hasPathPrefix returns true when s starts with prefix AND the character
+// immediately after is a path separator, a dot, or end-of-string. This
+// keeps a sentinel like "/Volumes/.timemachine" from matching unrelated
+// paths such as "/Volumes/.timemachine_backup", while still matching the
+// real Time Machine mount form "/Volumes/.timemachine.donottouch.<uuid>".
+func hasPathPrefix(s, prefix string) bool {
+	if !strings.HasPrefix(s, prefix) {
+		return false
+	}
+	if len(s) == len(prefix) {
+		return true
+	}
+	c := s[len(prefix)]
+	return c == '/' || c == '.'
 }
 
 func (s *Skipper) recordHit(path string) {
@@ -89,6 +140,28 @@ func (s *Skipper) Hits() map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+// LogHits emits a single summary line listing the protected paths that
+// were actually encountered during walks. Quiet when nothing was matched
+// (or on a nil receiver). The emit callback decouples this from any
+// specific logger — pass log.Warn (interactive) or log.Debug (daemon) to
+// pick the level. Single source of truth for both community scan and
+// enterprise telemetry.
+func (s *Skipper) LogHits(emit func(format string, args ...any)) {
+	if s == nil || emit == nil {
+		return
+	}
+	hits := s.Hits()
+	if len(hits) == 0 {
+		return
+	}
+	paths := make([]string, 0, len(hits))
+	for p := range hits {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	emit("macOS TCC: encountered and skipped %d protected path(s) during walks: %v", len(paths), paths)
 }
 
 // Candidates returns the exact-match protected paths the Skipper would

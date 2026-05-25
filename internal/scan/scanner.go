@@ -3,7 +3,6 @@ package scan
 import (
 	"context"
 	"os"
-	"sort"
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/buildinfo"
@@ -39,8 +38,8 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) error {
 	// permission prompts. Nil when --include-tcc-protected is set; the
 	// skipper's ShouldSkip is nil-safe so downstream callers don't branch.
 	var tccSkipper *tcc.Skipper
-	if !cfg.IncludeTCCProtected {
-		tccSkipper = tcc.New(resolveHome(exec))
+	if tcc.Enabled(cfg.IncludeTCCProtected) {
+		tccSkipper = tcc.New(executor.ResolveHome(exec))
 		if cands := tccSkipper.Candidates(); len(cands) > 0 {
 			log.Warn("macOS TCC: skipping %d protected dirs (Documents, Downloads, ~/Library/Mail, ...) to avoid permission prompts. Pass --include-tcc-protected to scan them.", len(cands))
 			log.Debug("tcc skip list: %v", cands)
@@ -334,7 +333,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) error {
 
 	log.Debug("scan complete: ais=%d ides=%d extensions=%d mcp=%d node_projects=%d brew_formulae=%d brew_casks=%d python_projects=%d",
 		len(aiTools), len(ides), len(extensions), len(mcpConfigs), len(nodeProjects), len(brewFormulae), len(brewCasks), len(pythonProjects))
-	logTCCHits(log, tccSkipper)
+	tccSkipper.LogHits(log.Warn)
 
 	// Output
 	switch cfg.OutputFormat {
@@ -363,35 +362,6 @@ func resolveSearchDirs(exec executor.Executor, dirs []string) []string {
 		resolved = append(resolved, d)
 	}
 	return resolved
-}
-
-// resolveHome returns the home directory of the console user when present,
-// falling back to the process's current user (issue #63 fallback). Empty
-// string when neither resolves — callers degrade gracefully.
-func resolveHome(exec executor.Executor) string {
-	if u, err := exec.LoggedInUser(); err == nil {
-		return u.HomeDir
-	}
-	if u, err := exec.CurrentUser(); err == nil {
-		return u.HomeDir
-	}
-	return ""
-}
-
-// logTCCHits surfaces which TCC-protected paths were actually encountered
-// (and short-circuited) during the scan's directory walks. Quiet when
-// nothing was matched.
-func logTCCHits(log *progress.Logger, s *tcc.Skipper) {
-	hits := s.Hits()
-	if len(hits) == 0 {
-		return
-	}
-	paths := make([]string, 0, len(hits))
-	for p := range hits {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	log.Warn("macOS TCC: encountered and skipped %d protected path(s) during walks: %v", len(paths), paths)
 }
 
 func mergeAITools(cli, agents, frameworks []model.AITool) []model.AITool {
