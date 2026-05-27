@@ -87,12 +87,14 @@ stepsecurity-dev-machine-guard --pretty --enable-npm-scan --no-include-tcc-prote
 }
 ```
 
-The agent reads this on every run. On an MDM-deployed fleet the loader
-script writes `config.json` on every periodic tick (see the
-`agent-api/scripts/macos-device-agent/stepsecurity-loader.sh` template),
-so to roll out `include_tcc_protected` across a fleet you'd update the
-loader template you serve to customers (or have admins write the field
-directly on each box).
+The agent reads this on every run. On an MDM-deployed fleet the
+StepSecurity loader script (the `.sh` file the dashboard generates for
+each customer) writes `config.json` on every periodic tick, so to roll
+out `include_tcc_protected` across a fleet either edit the loader
+script's `write_config()` heredoc before deploying it via MDM, or have
+admins write the field into `~/.stepsecurity/config.json` directly on
+each box (e.g., via a Configuration Profile or `defaults`-style file
+deployment).
 
 ## Granting the agent Full Disk Access (so it can actually scan TCC paths)
 
@@ -114,12 +116,23 @@ This is the only way to grant FDA at scale without per-user clicks.
 
 #### Inputs you need
 
-- The agent's **bundle/binary identifier**: the loader installs the
-  binary at `~/.stepsecurity/bin/stepsecurity-dev-machine-guard`. PPPC
-  uses the binary path as the identifier when the binary is unsigned
-  CLI; for signed binaries (which Dev Machine Guard releases are) PPPC
-  uses the **code requirement** string derived from the signature.
-- The **code requirement** string. Generate it with:
+- **The install path of the binary.** The loader installs at
+  `~/.stepsecurity/bin/stepsecurity-dev-machine-guard` — that's
+  per-user (`/Users/<username>/.stepsecurity/bin/...`). PPPC's
+  `Identifier` field always takes an absolute filesystem path when
+  `IdentifierType` is `path` (it has no `$HOME`/variable expansion),
+  so you either:
+  - scope a per-user profile that substitutes each user's home path,
+    using your MDM's per-user variables (Jamf's `$HOME`-substituting
+    profile payload variables, Kandji's user-context blueprints,
+    Intune's per-user assignment, etc.), or
+  - have the operator install the binary at a fixed system-wide path
+    (for example `/usr/local/bin/stepsecurity-dev-machine-guard`) so
+    the same profile applies to every user on the device.
+
+- **The code requirement string** derived from the binary's signature.
+  PPPC pairs the install path with this requirement so an impostor
+  binary at the same path can't claim the grant. Generate it with:
 
   ```bash
   codesign -d -r- /path/to/stepsecurity-dev-machine-guard 2>&1 | sed -n 's/^designated => //p'
@@ -173,7 +186,7 @@ granting **SystemPolicyAllFiles** (Full Disk Access) to the agent:
                 <array>
                     <dict>
                         <key>Identifier</key>
-                        <string>stepsecurity-dev-machine-guard</string>
+                        <string>/Users/REPLACE_USERNAME/.stepsecurity/bin/stepsecurity-dev-machine-guard</string>
                         <key>IdentifierType</key>
                         <string>path</string>
                         <key>CodeRequirement</key>
@@ -194,13 +207,16 @@ granting **SystemPolicyAllFiles** (Full Disk Access) to the agent:
 Replace:
 - Both `REPLACE-WITH-UUIDGEN-OUTPUT` values with fresh UUIDs
   (`uuidgen` on macOS).
+- `REPLACE_USERNAME` with the target user's short username so the
+  `Identifier` resolves to the actual on-disk binary path. For
+  per-user MDM scoping, use your MDM's per-user variable instead of a
+  literal username (e.g., Jamf's `$USERNAME`, Kandji's user-context
+  variable). For a fixed system-wide install, replace the whole
+  `Identifier` value with the absolute path you chose
+  (e.g., `/usr/local/bin/stepsecurity-dev-machine-guard`).
 - `REPLACE_TEAM_ID` with the Apple Developer Team ID embedded in
   the binary's code requirement (the trailing `subject.OU` field
   from the `codesign -d -r-` output above).
-- The `Identifier` value with the binary's full install path if
-  your MDM requires `IdentifierType=path` to be absolute
-  (typically `/Users/<user>/.stepsecurity/bin/stepsecurity-dev-machine-guard`
-  or wherever your loader installs it).
 
 #### Push the profile
 
@@ -289,8 +305,11 @@ If a popup appears after deploying the PPPC profile and setting
 
 ## Related
 
-- `internal/tcc/tcc.go` — the skip-list source of truth.
-- `agent-api/scripts/macos-device-agent/stepsecurity-loader.sh` —
-  the customer-side loader that writes `config.json` on each tick.
+- `internal/tcc/tcc.go` — the skip-list source of truth in this repo.
+- The StepSecurity macOS loader script (the `.sh` your dashboard
+  generates for your customer ID) — writes `config.json` on each
+  periodic tick, so the `include_tcc_protected` flag travels with the
+  loader rollout. Source for this loader lives in the StepSecurity
+  agent-api backend, not in this repository.
 - [Apple developer docs on PPPC payload](https://developer.apple.com/documentation/devicemanagement/privacypreferencespolicycontrol)
   — the full schema for the `com.apple.TCC.configuration-profile-policy` payload.
