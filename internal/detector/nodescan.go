@@ -376,7 +376,7 @@ func defaultPnpmBinDir(exec executor.Executor) string {
 		}
 	case model.PlatformWindows:
 		if localAppData := exec.Getenv("LOCALAPPDATA"); localAppData != "" {
-			return filepath.Join(localAppData, "pnpm")
+			return filepath.Join(localAppData, "pnpm", "bin")
 		}
 	}
 	return ""
