@@ -87,7 +87,8 @@ func New(agentVersion string) *State {
 // returns a fresh empty state — the next run becomes a full sync naturally.
 // The error is non-nil only to surface why fallback happened, for logging.
 func Load(path, agentVersion string) (*State, error) {
-	data, err := os.ReadFile(path)
+	cleanedPath := filepath.Clean(path)	
+	data, err := os.ReadFile(cleanedPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return New(agentVersion), nil
@@ -122,7 +123,7 @@ func Load(path, agentVersion string) (*State, error) {
 // On any error before the rename the original file is untouched.
 func (s *State) Save(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
