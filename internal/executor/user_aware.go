@@ -39,10 +39,22 @@ func NewUserAwareExecutor(inner Executor, username string) Executor {
 	return &UserAwareExecutor{inner: inner, username: username}
 }
 
+// posixShellQuote wraps s in single quotes so it survives the shell's word-
+// splitting and globbing when embedded in a command string for RunAsUser,
+// escaping any embedded single quote (POSIX close-quote, escaped quote, reopen). Every command name, argument and
+// path handed to RunAsUser must be quoted — otherwise an argument containing
+// spaces (a "/Applications/LM Studio.app/..." path, a multi-word PlistBuddy
+// "-c" expression) is split into multiple argv entries and the command fails.
+// UserAwareExecutor never wraps on Windows (NewUserAwareExecutor passes through
+// there), so POSIX single-quote quoting is sufficient.
+func posixShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func (e *UserAwareExecutor) Run(ctx context.Context, name string, args ...string) (string, string, int, error) {
-	cmd := name
+	cmd := posixShellQuote(name)
 	for _, a := range args {
-		cmd += " " + a
+		cmd += " " + posixShellQuote(a)
 	}
 	stdout, err := e.inner.RunAsUser(ctx, e.username, cmd)
 	if err != nil {
@@ -66,10 +78,12 @@ func (e *UserAwareExecutor) RunWithTimeout(ctx context.Context, timeout time.Dur
 func (e *UserAwareExecutor) RunInDir(ctx context.Context, dir string, timeout time.Duration, name string, args ...string) (string, string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	// For user-aware execution, use cd + command via RunAsUser
-	cmd := "cd " + dir + " && " + name
+	// For user-aware execution, use cd + command via RunAsUser. Quote the dir,
+	// command and every arg so paths with spaces (e.g. "/Users/me/My App")
+	// survive the shell's word-splitting as single argv entries.
+	cmd := "cd " + posixShellQuote(dir) + " && " + posixShellQuote(name)
 	for _, a := range args {
-		cmd += " " + a
+		cmd += " " + posixShellQuote(a)
 	}
 	stdout, err := e.inner.RunAsUser(ctx, e.username, cmd)
 	if err != nil {
@@ -86,7 +100,7 @@ func (e *UserAwareExecutor) RunAsUser(ctx context.Context, username, command str
 }
 
 func (e *UserAwareExecutor) LookPath(name string) (string, error) {
-	stdout, err := e.inner.RunAsUser(context.Background(), e.username, "which "+name)
+	stdout, err := e.inner.RunAsUser(context.Background(), e.username, "which "+posixShellQuote(name))
 	path := strings.TrimSpace(stdout)
 	if err != nil || path == "" || !strings.HasPrefix(path, "/") {
 		return "", fmt.Errorf("%s not found in user PATH", name)
