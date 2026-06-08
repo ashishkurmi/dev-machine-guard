@@ -428,3 +428,80 @@ type PipNetrcStatus struct {
 	Exists bool   `json:"exists"`
 	Mode   string `json:"mode,omitempty"` // empty on Windows
 }
+
+// --- Malicious-file detection (rule_scan) ---
+//
+// These types are the agent → backend wire contract for the malicious-file
+// detection engine (internal/detector/rules). They are emitted on the
+// telemetry Payload as the additive `rule_scan` field. The agent never sends
+// file content: a finding is a path, a whole-file hash, per-condition
+// booleans, and file metadata.
+
+// RuleScan is the top-level result of one malicious-file scan. It carries the
+// scan-level completeness flag, every rule the engine evaluated (even those
+// with zero matches), and the per-rule match results. ScanComplete is false
+// when a global file/time budget cut the walk short, which suppresses backend
+// auto-resolution for the whole run.
+type RuleScan struct {
+	ScanComplete   bool            `json:"scan_complete"`
+	EvaluatedRules []EvaluatedRule `json:"evaluated_rules"`
+	Results        []RuleResult    `json:"results"`
+}
+
+// EvaluatedRule records one rule the engine ran this scan, including rules
+// that matched nothing. Complete is false if the rule hit its per-rule match
+// cap (matches_truncated) or wasn't fully walked. RuleRevision is the opaque
+// revision echoed back for backend audit/drift detection.
+type EvaluatedRule struct {
+	RuleID       string `json:"rule_id"`
+	RuleRevision string `json:"rule_revision,omitempty"`
+	Complete     bool   `json:"complete"`
+}
+
+// RuleResult is one rule that matched at least one file. MatchesTruncated is
+// true when more than the per-rule cap (200) of files matched; the Files
+// slice is capped and the corresponding EvaluatedRule.Complete is false.
+type RuleResult struct {
+	RuleID           string          `json:"rule_id"`
+	RuleRevision     string          `json:"rule_revision,omitempty"`
+	MatchesTruncated bool            `json:"matches_truncated,omitempty"`
+	Files            []RuleFileMatch `json:"files"`
+}
+
+// RuleFileMatch is one candidate file reported for a rule. SizeExceeded is set
+// when the file was larger than the rule's size guard: it is reported but not
+// read, so FileSHA256 and Groups are empty. FileAttrs (Stat-only metadata) is
+// always present.
+type RuleFileMatch struct {
+	Path         string        `json:"path"`
+	MatchedGlob  string        `json:"matched_glob"`
+	FileSHA256   string        `json:"file_sha256,omitempty"`
+	SizeExceeded bool          `json:"size_exceeded,omitempty"`
+	Groups       []GroupResult `json:"groups,omitempty"`
+	FileAttrs    FileAttrs     `json:"file_attrs"`
+}
+
+// GroupResult reports one condition group. FullMatch is true when every
+// condition in the group matched (after applying negation).
+type GroupResult struct {
+	GroupID    string            `json:"group_id"`
+	FullMatch  bool              `json:"full_match"`
+	Conditions []ConditionResult `json:"conditions"`
+}
+
+// ConditionResult reports the boolean outcome of one condition. No matched
+// text is ever captured — only whether the condition matched.
+type ConditionResult struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"` // "regex" | "sha256"
+	Matched bool   `json:"matched"`
+}
+
+// FileAttrs is file metadata only, never content. Times are unix seconds UTC,
+// 0 when unavailable on the platform.
+type FileAttrs struct {
+	SizeBytes  int64 `json:"size_bytes"`
+	ModifiedAt int64 `json:"modified_at"` // mtime
+	CreatedAt  int64 `json:"created_at"`  // birth time (best-effort)
+	ChangedAt  int64 `json:"changed_at"`  // ctime
+}
