@@ -10,13 +10,10 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/model"
 )
 
-// parseBunfig parses a bunfig.toml payload into ordered BunSections. Each
-// nested TOML table becomes a section keyed by its dotted path; scalar leaves
-// hang off the nearest enclosing section.
-//
-// Parser is tolerant: a malformed file returns ([], error) and the caller
-// surfaces the error as ParseError on the file record without dropping the
-// rest of the audit.
+// parseBunfig parses bunfig.toml into ordered BunSections. Each nested TOML
+// table becomes a section keyed by its dotted path; scalar leaves hang off
+// the nearest enclosing section. Malformed files return (nil, error) — the
+// caller records ParseError without aborting the rest of the audit.
 func parseBunfig(data []byte) ([]model.BunSection, error) {
 	var root map[string]any
 	if err := toml.Unmarshal(data, &root); err != nil {
@@ -48,9 +45,8 @@ func parseBunfig(data []byte) ([]model.BunSection, error) {
 	return out, nil
 }
 
-// walkBunfig descends through the decoded TOML tree, lifting scalars into
-// the section keyed by their dotted ancestor path and recursing into nested
-// tables (and tables-of-tables, surfaced as map[string]any by go-toml/v2).
+// walkBunfig lifts scalars into the section keyed by their dotted ancestor
+// path and recurses into nested tables.
 func walkBunfig(sections map[string]*model.BunSection, prefix string, node map[string]any) {
 	for k, v := range node {
 		switch typed := v.(type) {
@@ -78,12 +74,8 @@ func joinSection(prefix, key string) string {
 	return prefix + "." + key
 }
 
-// buildBunEntry classifies a TOML key/value into an NPMRCEntry. Auth keys
-// (token / password / username) under [install.scopes.*] / [install.registry]
-// are detected and redacted; env-ref substrings (`${VAR}`) are preserved.
-//
-// go-toml/v2 does not cheaply expose per-key line numbers, so LineNum stays
-// 0 for bun entries — documented on BunSection.
+// buildBunEntry classifies a TOML key/value into an NPMRCEntry. LineNum is
+// always 0 — go-toml/v2 doesn't cheaply expose per-key positions.
 func buildBunEntry(key string, value any) model.NPMRCEntry {
 	raw := stringifyBunValue(value)
 	isAuth := isBunAuthKey(key)
@@ -105,9 +97,8 @@ func buildBunEntry(key string, value any) model.NPMRCEntry {
 	}
 }
 
-// stringifyBunValue renders any TOML scalar (string, bool, int, float, array)
-// into a printable form. Arrays render `["a", "b"]`; everything else uses
-// fmt's %v.
+// stringifyBunValue renders any TOML scalar. Arrays → `[a, b]`, nil → "",
+// everything else → fmt %v.
 func stringifyBunValue(v any) string {
 	switch typed := v.(type) {
 	case nil:
@@ -125,9 +116,8 @@ func stringifyBunValue(v any) string {
 	}
 }
 
-// bunAuthKeys are the leaf names that indicate a credential. Lowercase
-// comparison; matched on the last segment only since bun nests creds under
-// dotted section paths (install.scopes.@foo.token).
+// bunAuthKeys: leaf names that indicate a credential. Match the last segment
+// only since bun nests creds under dotted section paths (install.scopes.<x>.token).
 var bunAuthKeys = map[string]bool{
 	"token":    true,
 	"password": true,

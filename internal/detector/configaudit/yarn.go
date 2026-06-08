@@ -17,9 +17,8 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/tcc"
 )
 
-// yarnEnvVars is the set of yarn-relevant process environment variables. We
-// keep one stable list across classic and berry; berry's YARN_NPM_* keys and
-// classic's YARN_REGISTRY are both captured.
+// yarnEnvVars: classic and berry env names in one stable list. Berry's
+// YARN_NPM_* keys override .yarnrc.yml; classic honors YARN_REGISTRY.
 var yarnEnvVars = []string{
 	"YARN_REGISTRY",
 	"YARN_NPM_REGISTRY_SERVER",
@@ -38,14 +37,12 @@ var yarnEnvVars = []string{
 	"NODE_TLS_REJECT_UNAUTHORIZED",
 }
 
-// maxYarnFiles caps total files reported (.yarnrc + .yarnrc.yml across all
-// walked dirs) to keep the payload bounded on pathological monorepos.
+// maxYarnFiles bounds the payload on pathological monorepos.
 const maxYarnFiles = 1000
 
-// YarnDetector audits yarn configuration across both flavors. It picks
-// flavor from `yarn --version`: 1.x is classic, 2.0+ is berry. Both flavors'
-// files are still discovered regardless — having a berry file in a v1
-// project (or vice versa) is itself a signal worth surfacing.
+// YarnDetector audits both yarn flavors. Both file shapes are always
+// discovered — a v1 binary with a berry file (or vice versa) is itself a
+// signal the renderer surfaces.
 type YarnDetector struct {
 	exec    executor.Executor
 	skipper *tcc.Skipper
@@ -131,10 +128,9 @@ func (d *YarnDetector) Detect(ctx context.Context, searchDirs []string, loggedIn
 	return audit
 }
 
-// discoverAuthSideChannel reuses the npmrc walker to surface every .npmrc
-// yarn would read for auth (classic uses .npmrc for `_authToken`; berry
-// reads .npmrc only for the npm-auth keys it doesn't define natively).
-// Builtin / global scopes are dropped because those belong to npm proper.
+// discoverAuthSideChannel reuses the npmrc walker for any .npmrc yarn reads
+// for auth. builtin/global belong to npm proper and are dropped. See the
+// bun-side note about overlapping work — same caveat applies.
 func (d *YarnDetector) discoverAuthSideChannel(ctx context.Context, searchDirs []string, loggedInUser *user.User) []model.NPMRCFile {
 	side := NewNPMRCDetector(d.exec)
 	side.skipper = d.skipper
@@ -276,8 +272,8 @@ func (d *YarnDetector) yarnVersion(ctx context.Context) string {
 	return v
 }
 
-// yarnFlavorFromVersion maps a yarn --version string to flavor. Yarn v1.x
-// is "classic"; 2.0+ is "berry". "unknown" if the version is unparseable.
+// yarnFlavorFromVersion maps a yarn --version string to flavor. v0.x and v1.x
+// are "classic"; 2+ is "berry"; "unknown" when unparseable.
 func yarnFlavorFromVersion(v string) string {
 	if v == "" || v == "unknown" {
 		return "unknown"
@@ -286,7 +282,6 @@ func yarnFlavorFromVersion(v string) string {
 		return "classic"
 	}
 	if dot := strings.IndexByte(v, '.'); dot > 0 {
-		// Anything 2+ → berry.
 		major := v[:dot]
 		if major == "0" || major == "1" {
 			return "classic"
@@ -296,8 +291,7 @@ func yarnFlavorFromVersion(v string) string {
 	return "unknown"
 }
 
-// yarnFlavorFromFilename returns "berry" for `.yarnrc.yml`, "classic" for
-// `.yarnrc`.
+// yarnFlavorFromFilename returns "berry" for `.yarnrc.yml`, "classic" otherwise.
 func yarnFlavorFromFilename(name string) string {
 	if name == ".yarnrc.yml" {
 		return "berry"
@@ -305,7 +299,6 @@ func yarnFlavorFromFilename(name string) string {
 	return "classic"
 }
 
-// collectEnv snapshots yarn-relevant env vars with redaction for token names.
 func (d *YarnDetector) collectEnv() []model.NPMRCEnvVar {
 	out := make([]model.NPMRCEnvVar, 0, len(yarnEnvVars))
 	for _, name := range yarnEnvVars {

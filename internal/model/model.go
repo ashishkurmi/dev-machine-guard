@@ -326,10 +326,8 @@ type NPMRCEnvVar struct {
 	ValueSHA256  string `json:"value_sha256,omitempty"`
 }
 
-// PnpmAudit is the top-level structure produced by the pnpm detector. The
-// file model is reused verbatim from npm — pnpm reads the same .npmrc syntax
-// across the same scope layering. The effective view, env vars, and binary
-// metadata are pnpm-specific.
+// PnpmAudit reuses NPMRCFile/NPMRCEnvVar — pnpm reads the same .npmrc syntax
+// as npm. Only the effective view and env list diverge.
 type PnpmAudit struct {
 	Available      bool           `json:"pnpm_available"`
 	PnpmVersion    string         `json:"pnpm_version,omitempty"`
@@ -340,22 +338,18 @@ type PnpmAudit struct {
 	DiscoveryError string         `json:"discovery_error,omitempty"`
 }
 
-// PnpmEffective mirrors the merged-config view emitted by
-// `pnpm config list --json`. pnpm doesn't print source attribution comments
-// the way `npm config ls -l` does, so SourceByKey is typically empty —
-// retained on the struct so consumers can share rendering code with the
-// npm view.
+// PnpmEffective mirrors `pnpm config list --json`. SourceByKey is kept on
+// the struct for renderer parity with npm but is typically empty — pnpm
+// doesn't emit per-key source attribution.
 type PnpmEffective struct {
 	SourceByKey map[string]string `json:"source_by_key,omitempty"`
 	Config      map[string]any    `json:"config,omitempty"`
 	Error       string            `json:"error,omitempty"`
 }
 
-// BunAudit is the top-level structure produced by the bun detector. Unlike
-// npm/pnpm/pip there is no `bun config list` equivalent — Effective is
-// deliberately absent from this audit. Consumers render the union of parsed
-// files instead, and the NPMRCFiles slot carries any .npmrc files bun reads
-// for auth side-channels.
+// BunAudit has no Effective field — bun has no `config list` equivalent.
+// Consumers render the union of parsed files. NPMRCFiles carries any .npmrc
+// bun would read for auth.
 type BunAudit struct {
 	Available      bool            `json:"bun_available"`
 	BunVersion     string          `json:"bun_version,omitempty"`
@@ -366,9 +360,7 @@ type BunAudit struct {
 	DiscoveryError string          `json:"discovery_error,omitempty"`
 }
 
-// BunConfigFile is a single bunfig.toml. Scope captures where the file lives:
-// user (~/.bunfig.toml), user-xdg (~/.config/.bunfig.toml), or project
-// (bunfig.toml in a walked search dir).
+// BunConfigFile is a single bunfig.toml. Scope: user | user-xdg | project.
 type BunConfigFile struct {
 	Path        string       `json:"path"`
 	Scope       string       `json:"scope"`
@@ -389,22 +381,17 @@ type BunConfigFile struct {
 	ParseError  string       `json:"parse_error,omitempty"`
 }
 
-// BunSection groups entries by their dotted section path: "install",
-// "install.scopes", "install.scopes.@step-security", etc. The entry shape is
-// reused from NPMRCEntry — bun TOML key/value pairs surface with the same
-// auth / env-ref / redaction semantics. LineNum is best-effort: go-toml/v2
-// doesn't cheaply expose per-key positions, so all bun entries currently
-// report LineNum=0.
+// BunSection groups NPMRCEntry by dotted section path (e.g. "install",
+// "install.scopes.@step-security"). Entry LineNum is always 0 — go-toml/v2
+// doesn't cheaply expose per-key positions.
 type BunSection struct {
 	Name    string       `json:"name"`
 	Entries []NPMRCEntry `json:"entries"`
 }
 
-// YarnAudit covers both yarn classic (v1.x, .yarnrc) and yarn berry (v2+,
-// .yarnrc.yml). Flavor reflects the detected yarn binary's major version;
-// per-file Flavor on YarnConfigFile reflects the file's own syntax. A
-// mismatch (e.g. a v1 binary with a project .yarnrc.yml) is itself a useful
-// signal — the renderer surfaces it.
+// YarnAudit covers both classic (v1.x, .yarnrc) and berry (v2+, .yarnrc.yml).
+// Top-level Flavor reflects the binary's major; per-file Flavor reflects the
+// file's own syntax — the renderer flags mismatches.
 type YarnAudit struct {
 	Available      bool             `json:"yarn_available"`
 	YarnVersion    string           `json:"yarn_version,omitempty"`
@@ -417,8 +404,6 @@ type YarnAudit struct {
 }
 
 // YarnConfigFile is a discovered .yarnrc (classic) or .yarnrc.yml (berry).
-// Flavor reflects the file's own syntax, independent of the YarnAudit
-// top-level Flavor.
 type YarnConfigFile struct {
 	Path        string      `json:"path"`
 	Scope       string      `json:"scope"`  // "user" | "project"
@@ -440,11 +425,9 @@ type YarnConfigFile struct {
 	ParseError  string      `json:"parse_error,omitempty"`
 }
 
-// YarnEntry is a single parsed key/value from either yarn flavor. Berry
-// nested maps (npmScopes / npmRegistries) flatten to dotted keys —
-// `npmScopes.@step-security.npmAuthToken`,
-// `npmRegistries.https://npm.example.com/.npmAuthToken` — so a single
-// flat slice can carry both classic and berry shapes.
+// YarnEntry is a parsed key/value from either flavor. Berry nested maps
+// flatten to dotted keys (e.g. `npmScopes.@step-security.npmAuthToken`) so
+// the same slice carries both flavors.
 type YarnEntry struct {
 	Key          string   `json:"key"`
 	DisplayValue string   `json:"display_value"`

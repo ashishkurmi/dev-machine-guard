@@ -11,12 +11,8 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/executor"
 )
 
-// ownerInfo carries the resolved owning user / group for a file. OK is false
-// on Windows (we don't resolve SIDs) or when the file doesn't exist; callers
-// treat that as "owner unknown" and leave the corresponding model fields empty.
-//
-// Tests substitute a deterministic ownerLookup hook on each detector so they
-// never invoke statOwner.
+// ownerInfo carries the resolved owning user / group for a file. OK=false
+// on Windows (we don't resolve SIDs) or when the file doesn't exist.
 type ownerInfo struct {
 	UID       int
 	GID       int
@@ -25,11 +21,8 @@ type ownerInfo struct {
 	OK        bool
 }
 
-// defaultInGitRepo walks parent directories looking for a `.git` entry
-// (directory for a regular repo, file for a git worktree). Stops at the
-// filesystem root. Used by every rc/config detector to decide whether the
-// discovered file lives inside a repository — which is the prerequisite for
-// the more expensive `git ls-files` tracked check.
+// defaultInGitRepo walks parents looking for a `.git` entry (dir or worktree
+// file). Stops at the filesystem root.
 func defaultInGitRepo(path string) bool {
 	dir := filepath.Dir(path)
 	for {
@@ -44,10 +37,8 @@ func defaultInGitRepo(path string) bool {
 	}
 }
 
-// gitTrackedViaExec shells out to git to check whether path is tracked by the
-// repo that contains it. Returns false on any error (git not installed, not
-// in a repo, untracked) — the caller has already established via
-// defaultInGitRepo that this is even worth asking.
+// gitTrackedViaExec shells out to git ls-files. Returns false on any error
+// (not installed, not in a repo, untracked). Callers gate on defaultInGitRepo.
 func gitTrackedViaExec(ctx context.Context, exec executor.Executor, path string) bool {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
@@ -55,8 +46,7 @@ func gitTrackedViaExec(ctx context.Context, exec executor.Executor, path string)
 	return err == nil && exit == 0
 }
 
-// sha256Hex returns the hex SHA-256 of a string. Used to fingerprint env-var
-// values and other small inputs without exposing them.
+// sha256Hex returns hex SHA-256 of s, or "" if s is empty.
 func sha256Hex(s string) string {
 	if s == "" {
 		return ""

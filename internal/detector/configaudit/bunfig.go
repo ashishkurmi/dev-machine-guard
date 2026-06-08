@@ -17,14 +17,9 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/tcc"
 )
 
-// maxBunfigFiles caps the number of project bunfig.toml files reported.
-// Same rationale as maxNPMRCFiles: keeps a pathological monorepo from
-// blowing up the payload.
+// maxBunfigFiles bounds the payload on pathological monorepos.
 const maxBunfigFiles = 500
 
-// bunEnvVars is the set of bun-relevant process environment variables we
-// always record. An unset value is still emitted so the audit shape stays
-// stable across hosts.
 var bunEnvVars = []string{
 	"BUN_CONFIG_REGISTRY",
 	"BUN_CONFIG_TOKEN",
@@ -40,11 +35,8 @@ var bunEnvVars = []string{
 	"NODE_TLS_REJECT_UNAUTHORIZED",
 }
 
-// BunDetector audits bun configuration. Discovers user-scope bunfig.toml at
-// the two well-known locations (~/.bunfig.toml and $XDG_CONFIG_HOME/.bunfig.toml)
-// plus any project-scope bunfig.toml under the walked search dirs. bun also
-// reads .npmrc files for auth side-channels; those are surfaced via the
-// NPMRCFiles slot reusing the NPMRCDetector's discovery.
+// BunDetector audits bun: bunfig.toml at user + XDG + project scopes, plus
+// any .npmrc bun would read as an auth side-channel.
 type BunDetector struct {
 	exec    executor.Executor
 	skipper *tcc.Skipper
@@ -131,20 +123,19 @@ func (d *BunDetector) Detect(ctx context.Context, searchDirs []string, loggedInU
 	return audit
 }
 
-// discoverAuthSideChannel reuses the npmrc walker to surface any .npmrc files
-// bun would read for registry auth. The audit doesn't re-parse or duplicate
-// those files — the NPMRCDetector already owns that — it just makes the
-// relationship visible to consumers of the bun audit.
+// discoverAuthSideChannel reuses the npmrc walker for any .npmrc bun reads
+// for registry auth. builtin/global belong to npm proper and are dropped;
+// only user + project scopes — the ones bun actually consumes — are kept.
+//
+// NB: this re-invokes the full NPMRCDetector (npm subprocess calls + a fresh
+// searchDirs walk). The .npmrc walk overlaps with the npm + pnpm audits; if
+// scan time becomes a concern, share results across detectors.
 func (d *BunDetector) discoverAuthSideChannel(ctx context.Context, searchDirs []string, loggedInUser *user.User) []model.NPMRCFile {
 	side := NewNPMRCDetector(d.exec)
 	side.skipper = d.skipper
 	side.ownerLookup = d.ownerLookup
 	side.gitTracked = d.gitTracked
 	side.inGitRepo = d.inGitRepo
-	// The NPMRCDetector also probes `npm config get builtinconfig`; for the
-	// bun audit we only care about the side-channel files, so disable that
-	// path. The audit re-renders user + project scopes that bun actually
-	// reads; builtin/global belong to npm proper.
 	audit := side.Detect(ctx, searchDirs, loggedInUser)
 	out := make([]model.NPMRCFile, 0, len(audit.Files))
 	for _, f := range audit.Files {
@@ -189,8 +180,7 @@ func (d *BunDetector) findProjectBunfigs(dir string) []string {
 }
 
 // collectFile gathers metadata + parses a bunfig.toml. Non-existent files
-// surface with Exists=false so callers can see "we looked here, nothing
-// was there."
+// surface with Exists=false.
 func (d *BunDetector) collectFile(ctx context.Context, path, scope string) model.BunConfigFile {
 	f := model.BunConfigFile{Path: path, Scope: scope}
 
@@ -277,8 +267,6 @@ func (d *BunDetector) bunVersion(ctx context.Context) string {
 	return v
 }
 
-// collectEnv snapshots bun-relevant env vars with redaction for token-bearing
-// names.
 func (d *BunDetector) collectEnv() []model.NPMRCEnvVar {
 	out := make([]model.NPMRCEnvVar, 0, len(bunEnvVars))
 	for _, name := range bunEnvVars {

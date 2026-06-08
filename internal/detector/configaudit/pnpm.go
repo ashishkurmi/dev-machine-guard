@@ -18,10 +18,8 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/tcc"
 )
 
-// pnpmEnvVars is the set of process environment variables we always record
-// on the pnpm audit. Includes pnpm-specific names plus the npm-side ones
-// pnpm honors (pnpm reads `npm_config_*` for back-compat). An unset var is
-// still emitted so the audit shape stays stable across hosts.
+// pnpmEnvVars: pnpm-specific names plus the npm_config_* lowercase variants
+// pnpm honors for back-compat.
 var pnpmEnvVars = []string{
 	"PNPM_HOME",
 	"PNPM_CONFIG_REGISTRY",
@@ -41,10 +39,8 @@ var pnpmEnvVars = []string{
 }
 
 // PnpmDetector audits pnpm configuration. pnpm reads the same .npmrc syntax
-// across the same four scopes as npm, so file discovery, parsing, and
-// redaction are reused from the npmrc path; the divergence is the effective
-// view (different key set, no source-attribution output) and the env-var
-// list.
+// as npm; only the effective view (different key set, no source attribution)
+// and env-var list diverge.
 type PnpmDetector struct {
 	exec    executor.Executor
 	skipper *tcc.Skipper
@@ -99,8 +95,7 @@ func (d *PnpmDetector) Detect(ctx context.Context, searchDirs []string, loggedIn
 		files = append(files, d.collectFile(ctx, path, scope))
 	}
 
-	// pnpm doesn't expose a "builtinconfig" the way npm does; the user/global/
-	// project layering is what matters for audit. Skip builtin.
+	// pnpm has no `builtinconfig` equivalent; only global/user/project apply.
 	if v := d.exec.Getenv("PNPM_CONFIG_GLOBALCONFIG"); v != "" {
 		add("global", v)
 	} else {
@@ -231,10 +226,8 @@ func (d *PnpmDetector) collectFile(ctx context.Context, path, scope string) mode
 	return f
 }
 
-// captureEffective runs `pnpm config list --json`. Returns nil when pnpm is
-// unavailable; populates Error when the call fails. SourceByKey is not
-// populated — pnpm's `config list` output doesn't include per-key source
-// attribution the way `npm config ls -l` does.
+// captureEffective runs `pnpm config list --json`. SourceByKey stays empty —
+// pnpm doesn't emit per-key source attribution like `npm config ls -l` does.
 func (d *PnpmDetector) captureEffective(ctx context.Context) *model.PnpmEffective {
 	eff := &model.PnpmEffective{
 		SourceByKey: map[string]string{},
@@ -281,9 +274,6 @@ func (d *PnpmDetector) pnpmConfigGet(ctx context.Context, key string) string {
 	return v
 }
 
-// collectEnv snapshots pnpm-relevant env vars. Sensitive values are redacted;
-// the hash lets a future change-tracking layer notice rotation without
-// surfacing the secret.
 func (d *PnpmDetector) collectEnv() []model.NPMRCEnvVar {
 	out := make([]model.NPMRCEnvVar, 0, len(pnpmEnvVars))
 	for _, name := range pnpmEnvVars {

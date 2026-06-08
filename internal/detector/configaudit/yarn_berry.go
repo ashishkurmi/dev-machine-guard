@@ -10,18 +10,14 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/model"
 )
 
-// parseYarnBerry parses a yarn berry `.yarnrc.yml` file. Nested maps are
-// flattened to dotted keys so a single YarnEntry slice can carry both
-// classic and berry shapes:
+// parseYarnBerry parses `.yarnrc.yml`. Nested maps flatten to dotted keys
+// so a single YarnEntry slice carries both flavors, e.g.
 //
 //	npmScopes:
 //	  "@step-security":
 //	    npmAuthToken: ${COMPANY_TOKEN}
 //
-// becomes the entry `npmScopes.@step-security.npmAuthToken = ${COMPANY_TOKEN}`.
-//
-// Returns ([entries...], "") on success, or ([], error) when the YAML is
-// malformed. The caller surfaces the error as ParseError on the file record.
+// → `npmScopes.@step-security.npmAuthToken = ${COMPANY_TOKEN}`.
 func parseYarnBerry(data []byte) ([]model.YarnEntry, error) {
 	if len(data) == 0 {
 		return nil, nil
@@ -46,9 +42,8 @@ func parseYarnBerry(data []byte) ([]model.YarnEntry, error) {
 	return out, nil
 }
 
-// flattenYarnBerry walks a decoded yaml.v3 tree and returns dotted-path
-// leaves keyed to their stringified scalar values. Arrays serialize as
-// `[a, b, c]` so a single audit entry can carry them.
+// flattenYarnBerry returns dotted-path leaves from a yaml.v3 decoded tree.
+// Arrays serialize as `[a, b, c]`.
 func flattenYarnBerry(prefix string, node map[string]any) map[string]string {
 	out := map[string]string{}
 	for k, v := range node {
@@ -72,8 +67,8 @@ func joinYarnKey(prefix, key string) string {
 	return prefix + "." + key
 }
 
-// stringifyYarnValue renders a YAML scalar / array into the form we display.
-// Arrays become `[a, b]`; nil renders empty; everything else uses %v.
+// stringifyYarnValue renders a YAML scalar or array. Arrays → `[a, b]`,
+// nil → "", everything else → fmt %v.
 func stringifyYarnValue(v any) string {
 	switch typed := v.(type) {
 	case nil:
@@ -91,17 +86,14 @@ func stringifyYarnValue(v any) string {
 	}
 }
 
-// yarnBerryAuthSuffixes are the leaf-key names that denote credentials in
-// .yarnrc.yml (the most common keys live under `npmScopes.*` and
-// `npmRegistries.*`).
+// yarnBerryAuthSuffixes: leaf-key names that denote credentials, typically
+// nested under `npmScopes.*` / `npmRegistries.*`.
 var yarnBerryAuthSuffixes = []string{
 	"npmauthtoken",
 	"npmauthident",
 	"password",
 }
 
-// isYarnBerryAuthKey reports whether a flattened dotted key denotes a
-// credential by the berry syntax.
 func isYarnBerryAuthKey(key string) bool {
 	last := key
 	if idx := strings.LastIndex(key, "."); idx >= 0 {

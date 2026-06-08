@@ -8,17 +8,10 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/model"
 )
 
-// parseYarnClassic parses a yarn v1 `.yarnrc` file into ordered YarnEntries.
-//
-// Format reference (yarn v1):
-//   - One entry per line: `key value` (whitespace-separated), or `key "quoted value"`.
-//   - `#` and `;` at the start of a non-whitespace line begin a comment.
-//   - URI-prefixed keys (`//npm.example.com/:_authToken`) are valid.
-//   - Boolean / numeric / string values are all serialized as bare tokens;
-//     we don't try to coerce types — the audit just records the textual form.
-//
-// The parser is tolerant: malformed lines surface as best-effort entries
-// rather than aborting the whole parse, mirroring npmrc_parse.go's behavior.
+// parseYarnClassic parses a yarn v1 `.yarnrc`: `key value` per line with
+// optional double-quoted value, `#` / `;` line comments, URI-prefixed keys
+// like `//npm.example.com/:_authToken`. Tolerant of malformed lines — they
+// surface as best-effort entries rather than aborting the parse.
 func parseYarnClassic(data []byte) []model.YarnEntry {
 	var entries []model.YarnEntry
 
@@ -50,14 +43,11 @@ func parseYarnClassic(data []byte) []model.YarnEntry {
 	return entries
 }
 
-// splitYarnClassicLine extracts the (key, value, quoted) triple from a
-// yarn v1 line. Values surrounded by matching double quotes are unwrapped;
-// the quoted flag preserves the fact that they were quoted in the source.
+// splitYarnClassicLine returns (key, unquoted-value, was-quoted). Matching
+// outer double quotes are stripped from the returned value.
 func splitYarnClassicLine(line string) (string, string, bool) {
-	// Locate the first whitespace run.
 	idx := strings.IndexAny(line, " \t")
 	if idx < 0 {
-		// Key with no value.
 		return line, "", false
 	}
 	key := line[:idx]
@@ -71,9 +61,8 @@ func splitYarnClassicLine(line string) (string, string, bool) {
 	return key, rest, false
 }
 
-// yarnClassicAuthSuffixes are the trailing key segments that mean "this is a
-// credential" in a yarn v1 file. We compare against the suffix after the
-// final `:` so URI-prefixed keys like `//npm.example.com/:_authToken` match.
+// yarnClassicAuthSuffixes match the segment after the final `:` so
+// URI-prefixed keys like `//npm.example.com/:_authToken` resolve correctly.
 var yarnClassicAuthSuffixes = []string{
 	"_auth",
 	"_authtoken",
@@ -81,8 +70,6 @@ var yarnClassicAuthSuffixes = []string{
 	"npmauthtoken",
 }
 
-// isYarnClassicAuthKey reports whether key denotes a credential by the
-// classic v1 syntax.
 func isYarnClassicAuthKey(key string) bool {
 	suffix := key
 	if idx := strings.LastIndex(key, ":"); idx >= 0 {
@@ -97,8 +84,6 @@ func isYarnClassicAuthKey(key string) bool {
 	return false
 }
 
-// buildYarnEntry produces a YarnEntry from a key/value, classifying auth /
-// env-ref / quoted state and redacting credentials before display.
 func buildYarnEntry(key, value string, quoted bool, lineNum int) model.YarnEntry {
 	isAuth := isYarnClassicAuthKey(key) || isYarnBerryAuthKey(key)
 	envRefVars, isEnvRef := extractEnvRefs(value)
