@@ -29,9 +29,20 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/scan"
 	"github.com/step-security/dev-machine-guard/internal/schtasks"
 	"github.com/step-security/dev-machine-guard/internal/systemd"
+	"github.com/step-security/dev-machine-guard/internal/tcc"
 	"github.com/step-security/dev-machine-guard/internal/telemetry"
 	"github.com/step-security/dev-machine-guard/internal/winproc"
 )
+
+// auditSkipper builds a TCC skipper if scanning into TCC-protected dirs is
+// not opted in. Mirrors scan.Run / telemetry.Run so the focused *Only audits
+// don't accidentally prompt the user on macOS.
+func auditSkipper(exec executor.Executor, cfg *cli.Config) *tcc.Skipper {
+	if !tcc.Enabled(cfg.IncludeTCCProtected) {
+		return nil
+	}
+	return tcc.New(executor.ResolveHome(exec))
+}
 
 // hookReconcileTimeout caps the entire reconcile step (fetch + cache
 // write + install/uninstall). Generous because install can chown a
@@ -491,7 +502,7 @@ func runPnpmRCOnly(exec executor.Executor, cfg *cli.Config) error {
 	loggedInUser, _ := exec.LoggedInUser()
 
 	searchDirs := resolveScanSearchDirs(exec, cfg.SearchDirs)
-	audit := configaudit.NewPnpmDetector(exec).Detect(ctx, searchDirs, loggedInUser)
+	audit := configaudit.NewPnpmDetector(exec).WithSkipper(auditSkipper(exec, cfg)).Detect(ctx, searchDirs, loggedInUser)
 
 	if cfg.OutputFormat == "json" {
 		return scanJSONEncoder(os.Stdout).Encode(audit)
@@ -508,7 +519,7 @@ func runBunfigOnly(exec executor.Executor, cfg *cli.Config) error {
 	loggedInUser, _ := exec.LoggedInUser()
 
 	searchDirs := resolveScanSearchDirs(exec, cfg.SearchDirs)
-	audit := configaudit.NewBunDetector(exec).Detect(ctx, searchDirs, loggedInUser)
+	audit := configaudit.NewBunDetector(exec).WithSkipper(auditSkipper(exec, cfg)).Detect(ctx, searchDirs, loggedInUser)
 
 	if cfg.OutputFormat == "json" {
 		return scanJSONEncoder(os.Stdout).Encode(audit)
@@ -526,7 +537,7 @@ func runYarnRCOnly(exec executor.Executor, cfg *cli.Config) error {
 	loggedInUser, _ := exec.LoggedInUser()
 
 	searchDirs := resolveScanSearchDirs(exec, cfg.SearchDirs)
-	audit := configaudit.NewYarnDetector(exec).Detect(ctx, searchDirs, loggedInUser)
+	audit := configaudit.NewYarnDetector(exec).WithSkipper(auditSkipper(exec, cfg)).Detect(ctx, searchDirs, loggedInUser)
 
 	if cfg.OutputFormat == "json" {
 		return scanJSONEncoder(os.Stdout).Encode(audit)

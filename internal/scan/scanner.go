@@ -246,34 +246,33 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) error {
 		log.StepDone(time.Since(start))
 	}
 
-	// pnpm config audit — same .npmrc file shape as npm with pnpm-specific
-	// effective view and env vars.
-	var pnpmAudit model.PnpmAudit
+	// pnpm/bun/yarn config audits — pointers stay nil unless the
+	// corresponding feature gate ran the detector, so JSON `omitempty`
+	// drops the field entirely instead of emitting a zero-valued struct.
+	var pnpmAudit *model.PnpmAudit
 	if featuregate.IsEnabled(featuregate.FeaturePnpmConfigAudit) {
 		log.StepStart("Auditing pnpm configuration")
 		start = time.Now()
-		pnpmAudit = configaudit.NewPnpmDetector(exec).WithSkipper(tccSkipper).Detect(ctx, searchDirs, loggedInUser)
+		a := configaudit.NewPnpmDetector(exec).WithSkipper(tccSkipper).Detect(ctx, searchDirs, loggedInUser)
+		pnpmAudit = &a
 		log.StepDone(time.Since(start))
 	}
 
-	// bun config audit — surfaces bunfig.toml inventory plus any .npmrc bun
-	// reads as an auth side-channel. No effective view (bun has no
-	// `config list` equivalent).
-	var bunAudit model.BunAudit
+	var bunAudit *model.BunAudit
 	if featuregate.IsEnabled(featuregate.FeatureBunConfigAudit) {
 		log.StepStart("Auditing bun configuration")
 		start = time.Now()
-		bunAudit = configaudit.NewBunDetector(exec).WithSkipper(tccSkipper).Detect(ctx, searchDirs, loggedInUser)
+		a := configaudit.NewBunDetector(exec).WithSkipper(tccSkipper).Detect(ctx, searchDirs, loggedInUser)
+		bunAudit = &a
 		log.StepDone(time.Since(start))
 	}
 
-	// yarn config audit — covers both v1 (.yarnrc) and v2+ (.yarnrc.yml)
-	// with auth-side-channel .npmrc files surfaced separately.
-	var yarnAudit model.YarnAudit
+	var yarnAudit *model.YarnAudit
 	if featuregate.IsEnabled(featuregate.FeatureYarnConfigAudit) {
 		log.StepStart("Auditing yarn configuration")
 		start = time.Now()
-		yarnAudit = configaudit.NewYarnDetector(exec).WithSkipper(tccSkipper).Detect(ctx, searchDirs, loggedInUser)
+		a := configaudit.NewYarnDetector(exec).WithSkipper(tccSkipper).Detect(ctx, searchDirs, loggedInUser)
+		yarnAudit = &a
 		log.StepDone(time.Since(start))
 	}
 
@@ -347,9 +346,9 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) error {
 		FlatpakPackages:   flatpakPackages,
 		NPMRCAudit:        &npmrcAudit,
 		PipAudit:          &pipAudit,
-		PnpmAudit:         &pnpmAudit,
-		BunAudit:          &bunAudit,
-		YarnAudit:         &yarnAudit,
+		PnpmAudit:         pnpmAudit,
+		BunAudit:          bunAudit,
+		YarnAudit:         yarnAudit,
 		Summary: model.Summary{
 			AIAgentsAndToolsCount: len(aiTools),
 			IDEInstallationsCount: len(ides),

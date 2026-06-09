@@ -449,7 +449,7 @@ Options:
   --pipconfig                   Run ONLY the pip config audit (verbose pretty view; --json supported)
   --pnpmrc                      Run ONLY the pnpm config audit (verbose pretty view; --json supported)
   --bunfig                      Run ONLY the bun config audit (verbose pretty view; --json supported)
-  --yarnrc                      Run ONLY the yarn config audit covering both v1 (.yarnrc) and v2+ (.yarnrc.yml)
+  --yarnrc                      Run ONLY the yarn config audit covering both v1 (.yarnrc) and v2+ (.yarnrc.yml) (verbose pretty view; --json supported)
   --log-level=LEVEL      Log level: error | warn | info | debug (default: info)
   --install-dir=DIR      Base directory the agent puts ALL its files under
                          (logs, hook errors, binary placement via loader).
