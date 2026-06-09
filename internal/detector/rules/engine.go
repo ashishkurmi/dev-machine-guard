@@ -213,31 +213,36 @@ func (e *Engine) evaluate(st *scanState, rstate *ruleState, path, matchedGlob st
 	return false
 }
 
-// fileCache reads each candidate file at most once per scan (a file matched by
-// several rules is read once), caching its bytes and whole-file SHA-256.
+// fileCache memoizes the bytes + whole-file SHA-256 of the single file
+// currently being processed. Every rule whose globs match a given path is
+// evaluated consecutively (within one WalkDir callback, or one resolveAbsolute
+// path), so a file matched by several rules is still read and hashed only once.
+// As soon as processing moves to a new path, the previous file's bytes are
+// released — bounding peak memory to one file (<= MaxFileSize) instead of
+// retaining every matched file's bytes for the whole scan.
 type fileCache struct {
-	m map[string]cachedFile
+	path   string
+	data   []byte
+	hash   string
+	ok     bool
+	loaded bool // path/data/hash/ok are populated for the current path
 }
 
-type cachedFile struct {
-	data []byte
-	hash string
-	ok   bool
-}
-
-func newFileCache() *fileCache { return &fileCache{m: make(map[string]cachedFile)} }
+func newFileCache() *fileCache { return &fileCache{} }
 
 func (fc *fileCache) read(exec executor.Executor, path string) (data []byte, hash string, ok bool) {
-	if c, found := fc.m[path]; found {
-		return c.data, c.hash, c.ok
+	if fc.loaded && fc.path == path {
+		return fc.data, fc.hash, fc.ok
 	}
 	b, err := exec.ReadFile(path)
 	if err != nil {
-		fc.m[path] = cachedFile{}
+		// Cache the failure for this path (a sibling rule matching the same file
+		// must not re-attempt the read) while releasing any prior file's bytes.
+		*fc = fileCache{path: path, loaded: true}
 		return nil, "", false
 	}
 	sum := sha256.Sum256(b)
 	h := hex.EncodeToString(sum[:])
-	fc.m[path] = cachedFile{data: b, hash: h, ok: true}
+	*fc = fileCache{path: path, data: b, hash: h, ok: true, loaded: true}
 	return b, h, true
 }
