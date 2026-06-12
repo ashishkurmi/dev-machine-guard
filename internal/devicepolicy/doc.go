@@ -24,11 +24,11 @@
 //
 // Seams (highest first), each independently testable:
 //   - Verify (verify.go): pure {write_ok, readback_match} → state.
-//   - Writer (writer.go / settings_writer.go): injected; manages only the
+//   - Writer (settings_writer.go): injected; manages only the
 //     extensions.allowed key, preserving the rest of the user's settings.
 //   - Probe (probe.go + per-OS files): read-only managed-policy presence.
-//   - Fetcher (fetch.go) / Reporter (report.go): the two dedicated endpoints
-//     on the existing developer-mdm-agent auth channel.
+//   - Fetcher / Reporter (api.go): the two dedicated endpoints on the
+//     existing developer-mdm-agent auth channel.
 //   - Reconciler (reconcile.go): orchestrates fetch → probe → idempotency →
 //     drift → ownership-safe write → verify → report, with malformed-→-no-op.
 package devicepolicy
