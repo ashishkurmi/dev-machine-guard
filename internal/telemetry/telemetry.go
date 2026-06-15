@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -661,6 +662,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	var pythonPkgManagers []model.PkgManager
 	var pythonGlobalPkgs []model.PythonScanResult
 	var pythonProjects []model.ProjectInfo
+	var pythonDiscovered []string
 
 	if pythonEnabled {
 		phaseCtx, phaseCancel = startPhase(ctx, tracker, "python_scan")
@@ -685,7 +687,14 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 
 		log.Progress("Searching for Python projects...")
 		pyProjectDetector := detector.NewPythonProjectDetector(exec).WithSkipper(tccSkipper)
-		pythonProjects = pyProjectDetector.ListProjects(searchDirs)
+		var knownPython map[string]time.Time
+		if scanState != nil && !scanStateFullSync {
+			knownPython = make(map[string]time.Time, len(scanState.PythonProjects))
+			for path, entry := range scanState.PythonProjects {
+				knownPython[path] = entry.LastVerifiedAt
+			}
+		}
+		pythonProjects, pythonDiscovered = pyProjectDetector.ListProjects(searchDirs, knownPython)
 		log.Progress("  Found %d Python projects", len(pythonProjects))
 		fmt.Fprintln(os.Stderr)
 		endPhase(phaseCtx, phaseCancel, tracker, log, "python_scan")
@@ -768,6 +777,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	var pkgManagers []model.PkgManager
 	var globalPkgs []model.NodeScanResult
 	var nodeProjects []model.NodeScanResult
+	var nodeDiscovered []string
 	var nodeScanMs int64
 
 	if npmEnabled {
@@ -811,7 +821,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 				knownNPM[path] = entry.LastVerifiedAt
 			}
 		}
-		nodeProjects = nodeScanner.ScanProjects(phaseCtx, searchDirs, knownNPM)
+		nodeProjects, nodeDiscovered = nodeScanner.ScanProjects(phaseCtx, searchDirs, knownNPM)
 		nodeScanMs = time.Since(scanStart).Milliseconds()
 		log.Progress("  Found %d Node.js projects", len(nodeProjects))
 		log.Progress("  Scan duration: %dms", nodeScanMs)
@@ -988,7 +998,9 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	endPhase(phaseCtx, phaseCancel, tracker, log, "telemetry_upload")
 
 	if scanState != nil {
-		commitScanState(log, scanState, scanStatePath, executionID, nodeProjects, scanStateFullSync)
+		commitScanState(log, scanState, scanStatePath, executionID,
+			nodeProjects, nodeDiscovered, pythonProjects, pythonDiscovered,
+			globalPkgs, pythonGlobalPkgs, scanStateFullSync)
 	}
 
 	fmt.Fprintln(os.Stderr)
@@ -1019,10 +1031,30 @@ func writeTelemetryFile(path string, payload *Payload) error {
 	return nil
 }
 
-// commitScanState records the scan outcome for npm projects in the per-device
-// state file. Called only after a successful S3 upload + backend notify, so
-// the file always reflects what the backend has been told about.
-func commitScanState(log *progress.Logger, s *state.State, path, executionID string, npmResults []model.NodeScanResult, fullSync bool) {
+// decodeBase64OrRaw returns the bytes decoded from a standard base64 string,
+// falling back to the raw string bytes when the input isn't valid base64.
+func decodeBase64OrRaw(s string) []byte {
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return []byte(s)
+	}
+	return decoded
+}
+
+// commitScanState records the scan outcome for npm and Python projects in the
+// per-device state file. Called only after a successful S3 upload + backend
+// notify, so the file always reflects what the backend has been told about.
+//
+// `discovered` is the un-capped set of project paths found on disk; it drives
+// removed-project detection (state path absent from discovered = gone, vs.
+// absent from scanned but present in discovered = dropped by the cap).
+func commitScanState(
+	log *progress.Logger, s *state.State, path, executionID string,
+	npmResults []model.NodeScanResult, npmDiscovered []string,
+	pythonResults []model.ProjectInfo, pythonDiscovered []string,
+	npmGlobals []model.NodeScanResult, pythonGlobals []model.PythonScanResult,
+	fullSync bool,
+) {
 	npmRecords := make([]state.ScanRecord, 0, len(npmResults))
 	for _, r := range npmResults {
 		if r.ProjectPath == "" {
@@ -1033,10 +1065,60 @@ func commitScanState(log *progress.Logger, s *state.State, path, executionID str
 		))
 	}
 
-	changed, unchanged := s.Partition(state.EcosystemNPM, npmRecords, fullSync)
-	log.Debug("scan-state: npm partition changed=%d unchanged=%d full_sync=%v", len(changed), len(unchanged), fullSync)
+	pythonRecords := make([]state.ScanRecord, 0, len(pythonResults))
+	for _, r := range pythonResults {
+		if r.Path == "" {
+			continue
+		}
+		// Python's lister returns nil packages on pip-list failure. Treat
+		// nil as a failed scan so the prior hash (if any) is kept for retry.
+		exitCode := 0
+		if r.Packages == nil {
+			exitCode = 1
+		}
+		pythonRecords = append(pythonRecords, state.ScanRecordFromValue(
+			r.Path, r.PackageManager, "", r.Packages, exitCode,
+		))
+	}
 
-	s.CommitAfterUpload(time.Now(), executionID, buildinfo.Version, npmRecords, nil, nil, nil, fullSync)
+	npmGlobalRecords := make([]state.GlobalRecord, 0, len(npmGlobals))
+	for _, r := range npmGlobals {
+		if r.PackageManager == "" {
+			continue
+		}
+		hash, _ := state.CanonicalHashJSON(decodeBase64OrRaw(r.RawStdoutBase64))
+		npmGlobalRecords = append(npmGlobalRecords, state.GlobalRecord{
+			PM: r.PackageManager, Hash: hash, ExitCode: r.ExitCode,
+		})
+	}
+	pythonGlobalRecords := make([]state.GlobalRecord, 0, len(pythonGlobals))
+	for _, r := range pythonGlobals {
+		if r.PackageManager == "" {
+			continue
+		}
+		hash, _ := state.CanonicalHashJSON(decodeBase64OrRaw(r.RawStdoutBase64))
+		pythonGlobalRecords = append(pythonGlobalRecords, state.GlobalRecord{
+			PM: r.PackageManager, Hash: hash, ExitCode: r.ExitCode,
+		})
+	}
+
+	npmChanged, npmUnchanged := s.Partition(state.EcosystemNPM, npmRecords, fullSync)
+	pyChanged, pyUnchanged := s.Partition(state.EcosystemPython, pythonRecords, fullSync)
+	npmGlobalChanged, npmGlobalUnchanged := s.PartitionGlobals(state.EcosystemNPM, npmGlobalRecords, fullSync)
+	pyGlobalChanged, pyGlobalUnchanged := s.PartitionGlobals(state.EcosystemPython, pythonGlobalRecords, fullSync)
+
+	now := time.Now()
+	_, _, npmRemoved := s.Reconcile(state.EcosystemNPM, npmDiscovered)
+	_, _, pyRemoved := s.Reconcile(state.EcosystemPython, pythonDiscovered)
+	s.MarkRemovedPending(state.EcosystemNPM, npmRemoved, now)
+	s.MarkRemovedPending(state.EcosystemPython, pyRemoved, now)
+
+	log.Debug("scan-state: partition npm(changed=%d unchanged=%d removed=%d global_changed=%d global_unchanged=%d) python(changed=%d unchanged=%d removed=%d global_changed=%d global_unchanged=%d) full_sync=%v",
+		len(npmChanged), len(npmUnchanged), len(npmRemoved), len(npmGlobalChanged), len(npmGlobalUnchanged),
+		len(pyChanged), len(pyUnchanged), len(pyRemoved), len(pyGlobalChanged), len(pyGlobalUnchanged), fullSync)
+
+	s.CommitAfterUpload(now, executionID, buildinfo.Version,
+		npmRecords, pythonRecords, npmGlobalRecords, pythonGlobalRecords, fullSync)
 
 	if err := s.Save(path); err != nil {
 		log.Warn("scan-state: save failed (%v) — next run will full-sync", err)

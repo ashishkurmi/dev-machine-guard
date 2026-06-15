@@ -394,7 +394,11 @@ type projectEntry struct {
 // come first, sorted by mtime descending. Already-known projects follow,
 // sorted by their LastVerifiedAt ascending so the stalest are re-checked
 // first. Pass a nil map for plain mtime-descending order.
-func (s *NodeScanner) ScanProjects(ctx context.Context, searchDirs []string, knownLastVerified map[string]time.Time) []model.NodeScanResult {
+//
+// The second return is every project directory discovered on disk (before
+// the cap), so callers can distinguish "missing from disk" from "dropped by
+// the cap" when comparing against prior state.
+func (s *NodeScanner) ScanProjects(ctx context.Context, searchDirs []string, knownLastVerified map[string]time.Time) (results []model.NodeScanResult, discovered []string) {
 	var projects []projectEntry
 	for _, dir := range searchDirs {
 		s.log.Progress("  Searching in: %s", dir)
@@ -431,11 +435,14 @@ func (s *NodeScanner) ScanProjects(ctx context.Context, searchDirs []string, kno
 
 	s.log.Debug("node project discovery: found %d package.json files across %d search dir(s)", len(projects), len(searchDirs))
 
+	discovered = make([]string, 0, len(projects))
+	for _, p := range projects {
+		discovered = append(discovered, p.dir)
+	}
+
 	projects = orderScanProjects(projects, knownLastVerified)
 
-	// Phase 3: Scan in order, respecting limits
 	maxBytes := getMaxProjectScanBytes()
-	var results []model.NodeScanResult
 	totalSize := int64(0)
 
 	totalProjects := len(projects)
@@ -481,7 +488,7 @@ func (s *NodeScanner) ScanProjects(ctx context.Context, searchDirs []string, kno
 		results = append(results, r)
 	}
 
-	return results
+	return results, discovered
 }
 
 // orderScanProjects sorts discovered projects so that paths absent from
