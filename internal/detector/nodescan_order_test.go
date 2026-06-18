@@ -57,11 +57,11 @@ func TestOrderScanProjects_UnknownFirstByMtime_KnownAfterByStaleness(t *testing.
 
 	got := orderScanProjects(in, known)
 	wantOrder := []string{
-		"/unknown-new",   // unknown, mtime 500 (highest)
-		"/unknown-old",   // unknown, mtime 200
-		"/known-stale",   // known, verified 2024 (oldest)
-		"/known-mid",     // known, verified 2025
-		"/known-fresh",   // known, verified 2026 (newest)
+		"/unknown-new", // unknown, mtime 500 (highest)
+		"/unknown-old", // unknown, mtime 200
+		"/known-stale", // known, verified 2024 (oldest)
+		"/known-mid",   // known, verified 2025
+		"/known-fresh", // known, verified 2026 (newest)
 	}
 	for i, want := range wantOrder {
 		if got[i].dir != want {

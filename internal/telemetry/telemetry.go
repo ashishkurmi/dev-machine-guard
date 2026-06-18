@@ -46,18 +46,18 @@ type Payload struct {
 	// PayloadSchemaVersion gates the delta-protocol sibling fields below
 	// (NodeProjectsUnchanged etc.). Zero/absent = legacy snapshot, every
 	// scanned project ships its full body in NodeProjects/PythonProjects.
-	PayloadSchemaVersion int    `json:"payload_schema_version,omitempty"`
-	CustomerID           string `json:"customer_id"`
-	DeviceID             string `json:"device_id"`
-	SerialNumber   string                 `json:"serial_number"`
-	UserIdentity   string                 `json:"user_identity"`
-	Hostname       string                 `json:"hostname"`
-	Platform       string                 `json:"platform"`
-	OSVersion      string                 `json:"os_version"`
-	Resources      model.MachineResources `json:"resources"`
-	AgentVersion   string                 `json:"agent_version"`
-	CollectedAt    int64                  `json:"collected_at"`
-	NoUserLoggedIn bool                   `json:"no_user_logged_in"`
+	PayloadSchemaVersion int                    `json:"payload_schema_version,omitempty"`
+	CustomerID           string                 `json:"customer_id"`
+	DeviceID             string                 `json:"device_id"`
+	SerialNumber         string                 `json:"serial_number"`
+	UserIdentity         string                 `json:"user_identity"`
+	Hostname             string                 `json:"hostname"`
+	Platform             string                 `json:"platform"`
+	OSVersion            string                 `json:"os_version"`
+	Resources            model.MachineResources `json:"resources"`
+	AgentVersion         string                 `json:"agent_version"`
+	CollectedAt          int64                  `json:"collected_at"`
+	NoUserLoggedIn       bool                   `json:"no_user_logged_in"`
 
 	// InvocationMethod is "install" when the agent ran from an installed
 	// launchd/systemd/schtasks unit, "one_time" for a manual CLI run.
@@ -70,36 +70,36 @@ type Payload struct {
 	// streamed via the run-status endpoint during the run.
 	StatusInfo *RunStatusInfo `json:"status_info,omitempty"`
 
-	IDEExtensions        []model.Extension               `json:"ide_extensions"`
-	IDEInstallations     []model.IDE                     `json:"ide_installations"`
-	NodePkgManagers      []model.PkgManager              `json:"node_package_managers"`
-	NodeGlobalPackages   []model.NodeScanResult          `json:"node_global_packages"`
-	NodeProjects         []model.NodeScanResult          `json:"node_projects"`
-	BrewPkgManager       *model.PkgManager               `json:"brew_package_manager,omitempty"`
-	BrewScans            []model.BrewScanResult          `json:"brew_scans"`
-	BrewFormulae         []model.BrewPackage             `json:"brew_formulae,omitempty"`
-	BrewCasks            []model.BrewPackage             `json:"brew_casks,omitempty"`
-	PythonPkgManagers    []model.PkgManager              `json:"python_package_managers"`
-	PythonGlobalPackages []model.PythonScanResult        `json:"python_global_packages"`
-	PythonProjects       []model.ProjectInfo             `json:"python_projects"`
+	IDEExtensions        []model.Extension        `json:"ide_extensions"`
+	IDEInstallations     []model.IDE              `json:"ide_installations"`
+	NodePkgManagers      []model.PkgManager       `json:"node_package_managers"`
+	NodeGlobalPackages   []model.NodeScanResult   `json:"node_global_packages"`
+	NodeProjects         []model.NodeScanResult   `json:"node_projects"`
+	BrewPkgManager       *model.PkgManager        `json:"brew_package_manager,omitempty"`
+	BrewScans            []model.BrewScanResult   `json:"brew_scans"`
+	BrewFormulae         []model.BrewPackage      `json:"brew_formulae,omitempty"`
+	BrewCasks            []model.BrewPackage      `json:"brew_casks,omitempty"`
+	PythonPkgManagers    []model.PkgManager       `json:"python_package_managers"`
+	PythonGlobalPackages []model.PythonScanResult `json:"python_global_packages"`
+	PythonProjects       []model.ProjectInfo      `json:"python_projects"`
 	// Delta-protocol siblings (PayloadSchemaVersion >= 1). NodeProjects /
 	// NodeGlobalPackages / PythonProjects / PythonGlobalPackages above carry
 	// only the `changed` subset; everything else is here.
-	NodeProjectsUnchanged   []model.UnchangedProjectRef `json:"node_projects_unchanged,omitempty"`
-	NodeProjectsRemoved     []model.RemovedProjectRef   `json:"node_projects_removed,omitempty"`
-	NodeGlobalsUnchanged    []model.UnchangedGlobalRef  `json:"node_globals_unchanged,omitempty"`
-	PythonProjectsUnchanged []model.UnchangedProjectRef `json:"python_projects_unchanged,omitempty"`
-	PythonProjectsRemoved   []model.RemovedProjectRef   `json:"python_projects_removed,omitempty"`
-	PythonGlobalsUnchanged  []model.UnchangedGlobalRef  `json:"python_globals_unchanged,omitempty"`
-	SystemPackageScans   []model.SystemPackageScanResult `json:"system_package_scans"`
-	AIAgents             []model.AITool                  `json:"ai_agents"`
-	MCPConfigs           []model.MCPConfigEnterprise     `json:"mcp_configs"`
-	NPMRCAudit           *model.NPMRCAudit               `json:"npmrc_audit,omitempty"`
-	PipAudit             *model.PipAudit                 `json:"pip_audit,omitempty"`
-	RuleScan             *model.RuleScan                 `json:"rule_scan,omitempty"`
-	PnpmAudit            *model.PnpmAudit                `json:"pnpm_audit,omitempty"`
-	BunAudit             *model.BunAudit                 `json:"bun_audit,omitempty"`
-	YarnAudit            *model.YarnAudit                `json:"yarn_audit,omitempty"`
+	NodeProjectsUnchanged   []model.UnchangedProjectRef     `json:"node_projects_unchanged,omitempty"`
+	NodeProjectsRemoved     []model.RemovedProjectRef       `json:"node_projects_removed,omitempty"`
+	NodeGlobalsUnchanged    []model.UnchangedGlobalRef      `json:"node_globals_unchanged,omitempty"`
+	PythonProjectsUnchanged []model.UnchangedProjectRef     `json:"python_projects_unchanged,omitempty"`
+	PythonProjectsRemoved   []model.RemovedProjectRef       `json:"python_projects_removed,omitempty"`
+	PythonGlobalsUnchanged  []model.UnchangedGlobalRef      `json:"python_globals_unchanged,omitempty"`
+	SystemPackageScans      []model.SystemPackageScanResult `json:"system_package_scans"`
+	AIAgents                []model.AITool                  `json:"ai_agents"`
+	MCPConfigs              []model.MCPConfigEnterprise     `json:"mcp_configs"`
+	NPMRCAudit              *model.NPMRCAudit               `json:"npmrc_audit,omitempty"`
+	PipAudit                *model.PipAudit                 `json:"pip_audit,omitempty"`
+	RuleScan                *model.RuleScan                 `json:"rule_scan,omitempty"`
+	PnpmAudit               *model.PnpmAudit                `json:"pnpm_audit,omitempty"`
+	BunAudit                *model.BunAudit                 `json:"bun_audit,omitempty"`
+	YarnAudit               *model.YarnAudit                `json:"yarn_audit,omitempty"`
 
 	ExecutionLogs      *ExecutionLogs      `json:"execution_logs,omitempty"`
 	PerformanceMetrics *PerformanceMetrics `json:"performance_metrics,omitempty"`
@@ -963,17 +963,17 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// Build payload
 	payload := &Payload{
 		PayloadSchemaVersion: schemaVersion,
-		CustomerID:     config.CustomerID,
-		DeviceID:       dev.SerialNumber,
-		SerialNumber:   dev.SerialNumber,
-		UserIdentity:   dev.UserIdentity,
-		Hostname:       dev.Hostname,
-		Platform:       dev.Platform,
-		OSVersion:      dev.OSVersion,
-		Resources:      dev.Resources,
-		AgentVersion:   buildinfo.Version,
-		CollectedAt:    endTime.Unix(),
-		NoUserLoggedIn: noUserLoggedIn,
+		CustomerID:           config.CustomerID,
+		DeviceID:             dev.SerialNumber,
+		SerialNumber:         dev.SerialNumber,
+		UserIdentity:         dev.UserIdentity,
+		Hostname:             dev.Hostname,
+		Platform:             dev.Platform,
+		OSVersion:            dev.OSVersion,
+		Resources:            dev.Resources,
+		AgentVersion:         buildinfo.Version,
+		CollectedAt:          endTime.Unix(),
+		NoUserLoggedIn:       noUserLoggedIn,
 
 		InvocationMethod: invocationMethod,
 		StatusInfo:       &finalStatusInfo,
@@ -997,15 +997,15 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		PythonProjectsUnchanged: pyUnchangedRefs,
 		PythonProjectsRemoved:   pyRemovedRefs,
 		PythonGlobalsUnchanged:  pyGlobalsUnchangedRefs,
-		SystemPackageScans:   systemPackageScans,
-		AIAgents:             allAI,
-		MCPConfigs:           mcpConfigs,
-		NPMRCAudit:           &npmrcAudit,
-		PipAudit:             &pipAudit,
-		RuleScan:             ruleScan,
-		PnpmAudit:            &pnpmAudit,
-		BunAudit:             &bunAudit,
-		YarnAudit:            &yarnAudit,
+		SystemPackageScans:      systemPackageScans,
+		AIAgents:                allAI,
+		MCPConfigs:              mcpConfigs,
+		NPMRCAudit:              &npmrcAudit,
+		PipAudit:                &pipAudit,
+		RuleScan:                ruleScan,
+		PnpmAudit:               &pnpmAudit,
+		BunAudit:                &bunAudit,
+		YarnAudit:               &yarnAudit,
 
 		ExecutionLogs: &ExecutionLogs{
 			OutputBase64: execLogsBase64,
@@ -1119,7 +1119,6 @@ func decodeBase64OrRaw(s string) []byte {
 	}
 	return decoded
 }
-
 
 func brewFormulaeCount(scans []model.BrewScanResult) int {
 	for _, s := range scans {
