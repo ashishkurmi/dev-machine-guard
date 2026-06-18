@@ -10,11 +10,46 @@ which auto-updates the binary, then runs `send-telemetry`. `RunAtLoad` is
 only the interval does. The one-off initial scan runs explicitly at install
 time. To force an out-of-cycle run, `kickstart` it (or run the loader by hand).
 
+## Scheduling: `RunAtLoad` and `StartInterval`
+
+`RunAtLoad` controls one thing — whether launchd runs the job **once,
+immediately, the moment the plist loads**:
+
+- `<true/>` — runs as soon as the job loads. "Load" means boot (LaunchDaemon) /
+  login (LaunchAgent), **and** every manual `launchctl bootstrap` / `load`. So a
+  LaunchAgent would re-run on every login and every reload.
+- `<false/>` (our setting, and the default) — does **not** run at load. The job
+  sits idle until another trigger fires it: here that's `StartInterval`, or a
+  manual `launchctl kickstart`.
+
+```xml
+<key>StartInterval</key>
+<integer>14400</integer>   <!-- fire every 4h -->
+<key>RunAtLoad</key>
+<false/>                    <!-- but NOT at load -->
+```
+
+The cadence therefore comes entirely from `StartInterval`. `RunAtLoad=false`
+avoids a redundant scan on every login/reboot (and a fleet-wide boot-time
+stampede); the installer instead runs one explicit `send-telemetry` at install,
+then lets the interval pace the rest.
+
+**Consequence:** after a `bootstrap` / `load` / reload, **nothing runs on its
+own** — use `kickstart` (see Force a run) to trigger a scan immediately.
+(`RunAtLoad` is a one-shot-at-load trigger, unrelated to `KeepAlive`, which
+continuously restarts a long-running daemon — a short-lived scan uses neither.)
+
 ## Variants
 
 Almost always a per-user **LaunchAgent** running as the console user — that's
-what the MDM loader installs. A root **LaunchDaemon** exists only if someone ran
-`sudo <binary> install` directly; check for it, but don't expect it.
+what the loader installs. The loader (and every version-specific loader script)
+**never** creates a root daemon: even when MDM runs it as root it resolves the
+console user and installs a per-user LaunchAgent, and aborts (`no_user`) if no
+one is logged in rather than falling back to root. A root **LaunchDaemon** under
+`/Library/LaunchDaemons/` only appears from a **legacy (≤1.8.x) agent script**
+installed as root (pre-loader), or a manual `sudo <binary> install` (the Go
+binary's installer has a root path the loader never invokes). Check for one — to
+clean up a leftover — but current tooling won't create it.
 
 |         | Per-user **LaunchAgent** (expected)                   | Root **LaunchDaemon** (rare)                          |
 | ------- | ----------------------------------------------------- | ----------------------------------------------------- |
