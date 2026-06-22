@@ -57,7 +57,7 @@ The workflow will:
 The workflow will:
 - Download `stepsecurity-dev-machine-guard-VERSION-darwin_unnotarized` from the draft release
 - Import the Developer ID Application certificate into a temporary keychain
-- Codesign the binary with the hardened runtime and a secure timestamp
+- Codesign the binary with the hardened runtime, a secure timestamp, and a fixed identifier (`stepsecurity-dev-machine-guard`), so the designated requirement stays stable across versions and MDM PPPC/TCC Full Disk Access profiles keep working
 - Submit it to Apple for notarization, printing the submission id and waiting up to 5 minutes
 - Verify with `spctl`, rename the binary to `stepsecurity-dev-machine-guard-VERSION-darwin`, then Sigstore-sign and attest the notarized bytes
 - Upload the notarized binary and its cosign bundle to the draft release, and remove the unsigned `darwin_unnotarized` asset

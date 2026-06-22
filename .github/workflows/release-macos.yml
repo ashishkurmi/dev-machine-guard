@@ -43,7 +43,7 @@ jobs:
         # codesign/notarytool reach Apple endpoints (timestamp.apple.com,
         # notary-api / appstoreconnect, ocsp/crl). Audit mode logs the full set
         # before switching to block mode.
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        uses: step-security/harden-runner@v2
         with:
           egress-policy: audit
 
@@ -125,9 +125,18 @@ jobs:
           bin="dist/stepsecurity-dev-machine-guard-${version}-darwin_unnotarized"
 
           echo "::group::Codesign"
+          # Pin the code-signing identifier with -i so the designated requirement
+          # stays "stepsecurity-dev-machine-guard" regardless of the on-disk
+          # filename. Without -i, codesign derives the identifier from the file
+          # name (e.g. stepsecurity-dev-machine-guard-VERSION-darwin_unnotarized),
+          # which changes every release and breaks MDM PPPC/TCC profiles that
+          # grant Full Disk Access by identifier.
           codesign --sign "Developer ID Application: Step Security, Inc. (D63S9HLM4L)" \
+            --identifier stepsecurity-dev-machine-guard \
             --options runtime --timestamp "$bin"
           codesign --verify --deep --strict --verbose=2 "$bin"
+          # Confirm the embedded identifier is the stable one MDM profiles expect.
+          codesign -d -r- "$bin" 2>&1 | sed -n 's/^designated => //p'
           echo "::endgroup::"
 
           # App Store Connect API key credentials for notarytool.
@@ -181,7 +190,7 @@ jobs:
           echo "Signed + notarized: dist/stepsecurity-dev-machine-guard-${version}-darwin"
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@v4
 
       - name: Sign notarized binary with Sigstore
         run: |
@@ -215,6 +224,6 @@ jobs:
             "stepsecurity-dev-machine-guard-${version}-darwin_unnotarized" -y || true
 
       - name: Attest darwin build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/stepsecurity-dev-machine-guard-${{ steps.version.outputs.version }}-darwin
