@@ -43,7 +43,7 @@ jobs:
         # codesign/notarytool reach Apple endpoints (timestamp.apple.com,
         # notary-api / appstoreconnect, ocsp/crl). Audit mode logs the full set
         # before switching to block mode.
-        uses: step-security/harden-runner@v2
+        uses: step-security/harden-runner@v2.19.4
         with:
           egress-policy: audit
 
@@ -190,7 +190,7 @@ jobs:
           echo "Signed + notarized: dist/stepsecurity-dev-machine-guard-${version}-darwin"
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign notarized binary with Sigstore
         run: |
@@ -224,6 +224,6 @@ jobs:
             "stepsecurity-dev-machine-guard-${version}-darwin_unnotarized" -y || true
 
       - name: Attest darwin build provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@v4.1.0
         with:
           subject-path: dist/stepsecurity-dev-machine-guard-${{ steps.version.outputs.version }}-darwin
