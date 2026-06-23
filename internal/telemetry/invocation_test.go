@@ -9,8 +9,13 @@ import (
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/launchd"
+	"github.com/step-security/dev-machine-guard/internal/progress"
 	"github.com/step-security/dev-machine-guard/internal/systemd"
 )
+
+// invLogger is a quiet logger for the invocation tests; the detector's debug
+// probe lines are suppressed at info level.
+func invLogger() *progress.Logger { return progress.NewLogger(progress.LevelInfo) }
 
 func TestFileExists(t *testing.T) {
 	dir := t.TempDir()
@@ -43,7 +48,7 @@ func TestFileExists(t *testing.T) {
 // real machine. The result is whatever the current dev box reports; we can
 // only assert the value is one of the two valid wire-format strings.
 func TestDetectInvocationMethod_HostMachine(t *testing.T) {
-	got := DetectInvocationMethod(executor.NewReal())
+	got := DetectInvocationMethod(executor.NewReal(), invLogger())
 	if got != InvocationInstall && got != InvocationOneTime {
 		t.Fatalf("DetectInvocationMethod returned %q, want %q or %q",
 			got, InvocationInstall, InvocationOneTime)
@@ -94,7 +99,7 @@ func TestDetectInvocationMethod_RespondsToFilesystem(t *testing.T) {
 
 	// Fresh temp home — detector starts at one_time, flips to install when
 	// the marker appears, flips back when it's removed.
-	if got := DetectInvocationMethod(mock); got != InvocationOneTime {
+	if got := DetectInvocationMethod(mock, invLogger()); got != InvocationOneTime {
 		t.Fatalf("on clean temp home, detector returned %q, want %q",
 			got, InvocationOneTime)
 	}
@@ -108,7 +113,7 @@ func TestDetectInvocationMethod_RespondsToFilesystem(t *testing.T) {
 	// No explicit cleanup: everything lives under t.TempDir() and is
 	// removed by the testing framework when the test ends.
 
-	if got := DetectInvocationMethod(mock); got != InvocationInstall {
+	if got := DetectInvocationMethod(mock, invLogger()); got != InvocationInstall {
 		t.Fatalf("after creating %q, detector returned %q, want %q",
 			path, got, InvocationInstall)
 	}
@@ -119,7 +124,7 @@ func TestDetectInvocationMethod_RespondsToFilesystem(t *testing.T) {
 		t.Fatalf("remove fake artifact: %v", err)
 	}
 
-	if got := DetectInvocationMethod(mock); got != InvocationOneTime {
+	if got := DetectInvocationMethod(mock, invLogger()); got != InvocationOneTime {
 		t.Fatalf("after removing %q, detector returned %q, want %q",
 			path, got, InvocationOneTime)
 	}
@@ -155,19 +160,19 @@ func TestDetectInvocationMethod_RunningState(t *testing.T) {
 	// Job running (launchctl list shows a PID) → scheduler-triggered → install.
 	running := executor.NewMock()
 	running.SetCommand(`{ "PID" = 123; "Label" = "com.stepsecurity.agent"; };`, "", 0, "launchctl", "list", launchd.Label)
-	if got := DetectInvocationMethod(running); got != InvocationInstall {
+	if got := DetectInvocationMethod(running, invLogger()); got != InvocationInstall {
 		t.Errorf("running job: got %q, want %q", got, InvocationInstall)
 	}
 
 	// Job idle (no PID) → manual run on an installed machine → one_time.
 	idle := executor.NewMock()
 	idle.SetCommand(`{ "Label" = "com.stepsecurity.agent"; "LastExitStatus" = 0; };`, "", 0, "launchctl", "list", launchd.Label)
-	if got := DetectInvocationMethod(idle); got != InvocationOneTime {
+	if got := DetectInvocationMethod(idle, invLogger()); got != InvocationOneTime {
 		t.Errorf("idle job: got %q, want %q", got, InvocationOneTime)
 	}
 
 	// Inconclusive probe (unstubbed → error) → keep install, never mislabel.
-	if got := DetectInvocationMethod(executor.NewMock()); got != InvocationInstall {
+	if got := DetectInvocationMethod(executor.NewMock(), invLogger()); got != InvocationInstall {
 		t.Errorf("inconclusive probe: got %q, want %q", got, InvocationInstall)
 	}
 }

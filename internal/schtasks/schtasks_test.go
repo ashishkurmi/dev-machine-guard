@@ -374,12 +374,28 @@ func TestTaskXMLEncodeDecode_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodeTaskXML_UTF8(t *testing.T) {
-	s := "<Task/>"
-	if got := decodeTaskXML(s); got != s {
-		t.Errorf("UTF-8 passthrough = %q, want %q", got, s)
+// TestDecodeTaskXML_Paths exercises every branch of decodeTaskXML.
+func TestDecodeTaskXML_Paths(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want string
+	}{
+		// BOM 0xFF 0xFE, then "AB" as little-endian 16-bit units (low byte, high byte).
+		{"utf16le BOM", []byte{0xFF, 0xFE, 'A', 0x00, 'B', 0x00}, "AB"},
+		// BOM 0xEF 0xBB 0xBF stripped; remainder already UTF-8.
+		{"utf8 BOM", []byte{0xEF, 0xBB, 0xBF, 'A', 'B'}, "AB"},
+		{"no BOM (plain UTF-8/ASCII)", []byte("<Task/>"), "<Task/>"},
+		{"empty", []byte{}, ""},
+		// Stray trailing byte after the BOM (odd-length body) must not panic;
+		// the orphan byte is dropped, "A" survives.
+		{"odd-length utf16le body", []byte{0xFF, 0xFE, 'A', 0x00, 'B'}, "A"},
 	}
-	if got := decodeTaskXML("\xEF\xBB\xBF" + s); got != s {
-		t.Errorf("UTF-8 BOM strip = %q, want %q", got, s)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := decodeTaskXML(string(c.in)); got != c.want {
+				t.Errorf("decodeTaskXML(% x) = %q, want %q", c.in, got, c.want)
+			}
+		})
 	}
 }

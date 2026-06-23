@@ -1,6 +1,7 @@
 package schtasks
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -119,6 +120,11 @@ func Install(exec executor.Executor, log *progress.Logger) error {
 	} else {
 		applyBatterySettings(ctx, exec, log, logonTaskName)
 	}
+
+	// Turn on Task Scheduler's operational history so every fire / miss /
+	// failure is recorded in Event Viewer — the primary way to debug why a
+	// scheduled scan didn't run. Best-effort (needs admin).
+	enableTaskHistory(ctx, exec, log)
 
 	log.Progress("Windows Task Scheduler configuration completed successfully")
 	log.Progress("  Task: %s", taskName)
@@ -286,11 +292,36 @@ func applyBatterySettings(ctx context.Context, exec executor.Executor, log *prog
 		return
 	}
 
+	// Log the exact XML being applied so a failed re-import (or an
+	// unexpected-on-the-device result) can be inspected from agent.log.
+	log.Debug("re-importing task %q with settings XML:\n%s", name, patched)
+
 	if _, rstderr, rcode, rerr := exec.Run(ctx, "schtasks", "/create", "/tn", name, "/xml", tmpPath, "/f"); rerr != nil || rcode != 0 {
 		log.Warn("could not re-import task %q with battery settings (%v, exit %d): %s — keeping defaults", name, rerr, rcode, strings.TrimSpace(rstderr))
 		return
 	}
-	log.Debug("applied battery / StartWhenAvailable settings to task %q", name)
+	log.Debug("applied battery / StartWhenAvailable / retry settings to task %q", name)
+}
+
+// enableTaskHistory turns on the Task Scheduler "All Tasks History" — the
+// Microsoft-Windows-TaskScheduler/Operational event log — which ships disabled
+// on many Windows builds. With it on, every run / miss / failure of our task is
+// recorded in Event Viewer (e.g. event 102 = success, 103 = action failed,
+// 329/332 = missed / condition-not-met), the primary way to diagnose why a
+// scheduled scan didn't fire. Enabling the log needs elevation, so this is
+// best-effort: a non-admin install skips it and logs the manual command.
+func enableTaskHistory(ctx context.Context, exec executor.Executor, log *progress.Logger) {
+	const opLog = "Microsoft-Windows-TaskScheduler/Operational"
+	if !exec.IsRoot() {
+		log.Debug("skipping Task Scheduler history enable (not elevated) — enable manually with: wevtutil set-log %q /enabled:true", opLog)
+		return
+	}
+	_, stderr, code, err := exec.Run(ctx, "wevtutil", "set-log", opLog, "/enabled:true")
+	if err != nil || code != 0 {
+		log.Debug("could not enable Task Scheduler history (%v, exit %d): %s — task still works; history just stays off", err, code, strings.TrimSpace(stderr))
+		return
+	}
+	log.Debug("enabled Task Scheduler operational history (%s)", opLog)
 }
 
 // retryInterval / retryCount control the on-failure retry: if a scheduled run
@@ -354,20 +385,35 @@ func setXMLElement(xml, tag, value string) string {
 	return xml
 }
 
-// decodeTaskXML converts the bytes emitted by `schtasks /query /xml` to a UTF-8
-// string. That output is typically UTF-16LE with a BOM; UTF-8 (with or without
-// BOM) and plain ASCII are handled too.
+// Byte-order marks (BOMs) that prefix `schtasks /query /xml` output and tell us
+// how the bytes are encoded. A BOM is a fixed magic byte sequence at the very
+// start of the data.
+var (
+	bomUTF16LE = []byte{0xFF, 0xFE}       // UTF-16, little-endian (the usual schtasks output)
+	bomUTF8    = []byte{0xEF, 0xBB, 0xBF} // UTF-8
+)
+
+// decodeTaskXML converts the raw bytes emitted by `schtasks /query /xml` into a
+// UTF-8 string, dispatching on the leading BOM:
+//
+//   - UTF-16LE BOM: each character is two bytes in little-endian order (low
+//     byte first), so we rebuild each 16-bit code unit as low | high<<8 and let
+//     utf16.Decode reassemble any surrogate pairs into runes. (i+1 < len guards
+//     a stray trailing byte on malformed/odd-length input.)
+//   - UTF-8 BOM: strip the 3-byte mark; the remainder is already UTF-8.
+//   - no BOM: the data is already UTF-8 / ASCII — return it unchanged.
 func decodeTaskXML(raw string) string {
 	b := []byte(raw)
 	switch {
-	case len(b) >= 2 && b[0] == 0xFF && b[1] == 0xFE: // UTF-16LE BOM
-		u16 := make([]uint16, 0, (len(b)-2)/2)
-		for i := 2; i+1 < len(b); i += 2 {
-			u16 = append(u16, uint16(b[i])|uint16(b[i+1])<<8)
+	case bytes.HasPrefix(b, bomUTF16LE):
+		body := b[len(bomUTF16LE):]
+		u16 := make([]uint16, 0, len(body)/2)
+		for i := 0; i+1 < len(body); i += 2 {
+			u16 = append(u16, uint16(body[i])|uint16(body[i+1])<<8)
 		}
 		return string(utf16.Decode(u16))
-	case len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF: // UTF-8 BOM
-		return string(b[3:])
+	case bytes.HasPrefix(b, bomUTF8):
+		return string(b[len(bomUTF8):])
 	default:
 		return raw
 	}

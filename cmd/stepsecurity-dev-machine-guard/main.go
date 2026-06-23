@@ -23,6 +23,7 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/featuregate"
 	"github.com/step-security/dev-machine-guard/internal/heartbeat"
 	"github.com/step-security/dev-machine-guard/internal/launchd"
+	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/output"
 	"github.com/step-security/dev-machine-guard/internal/paths"
 	"github.com/step-security/dev-machine-guard/internal/progress"
@@ -263,17 +264,17 @@ func main() {
 			os.Exit(1)
 		}
 		switch runtime.GOOS {
-		case "windows":
+		case model.PlatformWindows:
 			if err := schtasks.Install(exec, log); err != nil {
 				log.Error("%v", err)
 				os.Exit(1)
 			}
-		case "darwin":
+		case model.PlatformDarwin:
 			if err := launchd.Install(exec, log); err != nil {
 				log.Error("%v", err)
 				os.Exit(1)
 			}
-		case "linux":
+		case model.PlatformLinux:
 			if err := systemd.Install(exec, log); err != nil {
 				log.Error("%v", err)
 				os.Exit(1)
@@ -302,7 +303,7 @@ func main() {
 		// If no one is logged in (unattended SCCM deploys), the trigger
 		// silently no-ops and the task fires on its next hourly tick;
 		// either way, no SYSTEM-context telemetry ever ships.
-		if runtime.GOOS == "windows" && winproc.IsLocalSystem() {
+		if runtime.GOOS == model.PlatformWindows && winproc.IsLocalSystem() {
 			if err := schtasks.RunNow(exec, log); err != nil {
 				log.Warn("could not trigger initial scan (%v) — the scheduled task will fire on its next interval", err)
 			}
@@ -316,7 +317,7 @@ func main() {
 		// rounds + two uploads), with the second run blocked on the singleton
 		// lock. Mirrors the Windows-SYSTEM path above; the launchd-triggered
 		// scan's output lands in agent.log.
-		if runtime.GOOS == "darwin" {
+		if runtime.GOOS == model.PlatformDarwin {
 			runHookStateReconcile(exec, log)
 			return
 		}
@@ -332,7 +333,7 @@ func main() {
 		// not race with that scan (issue #62). Run regardless of the
 		// telemetry result — the install itself succeeded and the schedule
 		// should activate; a failed initial telemetry run does not undo it.
-		if runtime.GOOS == "linux" {
+		if runtime.GOOS == model.PlatformLinux {
 			if err := systemd.StartTimer(exec, log); err != nil {
 				log.Warn("timer start failed (%v) — scheduled scans will resume after the next user-systemd reload", err)
 			}
@@ -357,17 +358,17 @@ func main() {
 	case "uninstall":
 		_, _ = fmt.Fprintf(os.Stdout, "StepSecurity Dev Machine Guard v%s\n\n", buildinfo.Version)
 		switch runtime.GOOS {
-		case "windows":
+		case model.PlatformWindows:
 			if err := schtasks.Uninstall(exec, log); err != nil {
 				log.Error("%v", err)
 				os.Exit(1)
 			}
-		case "darwin":
+		case model.PlatformDarwin:
 			if err := launchd.Uninstall(exec, log); err != nil {
 				log.Error("%v", err)
 				os.Exit(1)
 			}
-		case "linux":
+		case model.PlatformLinux:
 			if err := systemd.Uninstall(exec, log); err != nil {
 				log.Error("%v", err)
 				os.Exit(1)

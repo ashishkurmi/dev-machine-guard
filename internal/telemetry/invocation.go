@@ -9,6 +9,8 @@ import (
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/launchd"
+	"github.com/step-security/dev-machine-guard/internal/model"
+	"github.com/step-security/dev-machine-guard/internal/progress"
 	"github.com/step-security/dev-machine-guard/internal/schtasks"
 	"github.com/step-security/dev-machine-guard/internal/systemd"
 )
@@ -34,11 +36,11 @@ const jobStateProbeTimeout = 3 * time.Second
 // job state: only when the scheduler job is CONFIRMED idle do we report a manual
 // run; if it's running, or the probe is inconclusive, we keep "install" so a
 // genuine scheduled run is never mislabeled. Best-effort and never errors.
-func DetectInvocationMethod(exec executor.Executor) string {
+func DetectInvocationMethod(exec executor.Executor, log *progress.Logger) string {
 	if !isSchedulerInstalled() {
 		return InvocationOneTime
 	}
-	if idle, known := schedulerJobIdle(exec); known && idle {
+	if idle, known := schedulerJobIdle(exec, log); known && idle {
 		return InvocationOneTime
 	}
 	return InvocationInstall
@@ -46,11 +48,11 @@ func DetectInvocationMethod(exec executor.Executor) string {
 
 func isSchedulerInstalled() bool {
 	switch runtime.GOOS {
-	case "darwin":
+	case model.PlatformDarwin:
 		return fileExists(launchd.DaemonPlistPath) || fileExists(launchd.UserPlistPath())
-	case "linux":
+	case model.PlatformLinux:
 		return fileExists(systemd.TimerUnitPath())
-	case "windows":
+	case model.PlatformWindows:
 		return schtasks.IsTaskRegistered()
 	default:
 		return false
@@ -62,20 +64,22 @@ func isSchedulerInstalled() bool {
 // determined (probe failed / unsupported), so callers fail safe to "install".
 // The signals are locale-independent: launchctl's "PID" key, systemctl's fixed
 // active/activating states, and Get-ScheduledTask's State enum (NOT schtasks
-// /query's localized Status field).
-func schedulerJobIdle(exec executor.Executor) (idle, known bool) {
+// /query's localized Status field). The exact probe command is logged at debug
+// so a misbehaving machine can be reproduced by hand.
+func schedulerJobIdle(exec executor.Executor, log *progress.Logger) (idle, known bool) {
 	switch runtime.GOOS {
-	case "darwin":
+	case model.PlatformDarwin:
 		// `launchctl list <label>` prints a "PID" key only while the job runs.
-		out, _, code, err := exec.RunWithTimeout(context.Background(), jobStateProbeTimeout, "launchctl", "list", launchd.Label)
+		out, code, err := runStateProbe(exec, log, "launchctl", "list", launchd.Label)
 		if err != nil || code != 0 {
 			return false, false
 		}
 		return !strings.Contains(out, `"PID"`), true
-	case "linux":
+	case model.PlatformLinux:
 		// is-active prints active/activating while the oneshot service runs;
-		// inactive/failed when idle. Fixed strings, not localized.
-		out, _, _, err := exec.RunWithTimeout(context.Background(), jobStateProbeTimeout, "systemctl", "--user", "is-active", systemd.ServiceUnitName())
+		// inactive/failed when idle. Fixed strings, not localized. (A non-zero
+		// exit is the normal "inactive" answer, so we key off the text.)
+		out, _, err := runStateProbe(exec, log, "systemctl", "--user", "is-active", systemd.ServiceUnitName())
 		if err != nil {
 			return false, false
 		}
@@ -85,12 +89,11 @@ func schedulerJobIdle(exec executor.Executor) (idle, known bool) {
 		}
 		running := state == "active" || state == "activating"
 		return !running, true
-	case "windows":
+	case model.PlatformWindows:
 		// Get-ScheduledTask's State enum (Ready/Running/...) is locale-independent,
 		// unlike schtasks /query's localized Status. Absent on Server Core minimal
 		// (no ScheduledTasks module) → probe fails → inconclusive → keep "install".
-		out, _, code, err := exec.RunWithTimeout(context.Background(), jobStateProbeTimeout,
-			"powershell", "-NoProfile", "-NonInteractive", "-Command",
+		out, code, err := runStateProbe(exec, log, "powershell", "-NoProfile", "-NonInteractive", "-Command",
 			"(Get-ScheduledTask -TaskName '"+schtasks.TaskName+"').State")
 		if err != nil || code != 0 {
 			return false, false
@@ -103,6 +106,16 @@ func schedulerJobIdle(exec executor.Executor) (idle, known bool) {
 	default:
 		return false, false
 	}
+}
+
+// runStateProbe runs a scheduler state-probe command and logs the exact
+// invocation + result at debug level, so a support engineer can copy the
+// command verbatim and re-run it on the affected machine.
+func runStateProbe(exec executor.Executor, log *progress.Logger, name string, args ...string) (stdout string, code int, err error) {
+	stdout, stderr, code, err := exec.RunWithTimeout(context.Background(), jobStateProbeTimeout, name, args...)
+	log.Debug("invocation state probe: %s %s -> exit=%d err=%v out=%q stderr=%q",
+		name, strings.Join(args, " "), code, err, strings.TrimSpace(stdout), strings.TrimSpace(stderr))
+	return stdout, code, err
 }
 
 func fileExists(path string) bool {

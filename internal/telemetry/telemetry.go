@@ -165,7 +165,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// Detect invocation method once at run start: "install" if the platform's
 	// scheduler footprint is on disk, else "one_time". Threaded into every
 	// run-status post and stamped on the final payload.
-	invocationMethod := DetectInvocationMethod(exec)
+	invocationMethod := DetectInvocationMethod(exec, log)
 
 	// Phase tracker accumulates per-analysis-section completions so the
 	// backend can surface in-flight progress on the console. Reads from the
