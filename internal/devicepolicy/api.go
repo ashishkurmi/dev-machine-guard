@@ -22,17 +22,29 @@ import (
 // matches the hook fetcher's budget.
 const DefaultHTTPTimeout = 5 * time.Second
 
-// maxBodyBytes bounds a response read. The compiled extensions.allowed payload
-// is well under 1 KiB in practice; 256 KiB is generous slack while still
-// bounding a pathological backend.
+// maxBodyBytes bounds the small reads: the non-200 error snippet and the
+// Reporter's non-2xx snippet + body drain. The compiled extensions.allowed
+// payload is well under 1 KiB; 256 KiB is generous slack while still bounding a
+// pathological backend error body from inflating an error string / log line.
 const maxBodyBytes = 256 * 1024
 
-// EffectivePolicy is the parsed FR-19 fetch contract. It is the agent-side
-// mirror of agent-api's EffectivePolicyResponse. Policy carries the compiled
-// VS Code extensions.allowed object as canonical JSON (sorted keys) — the exact
-// bytes the backend hashed — so the agent writes it verbatim and never
-// re-serializes (re-serialization could reorder keys and break the backend's
-// byte-exact applied==desired check).
+// maxRunConfigBytes bounds the run-config success-body read. The policy slice
+// is tiny, but the run-config document also carries the detection-rules bundle,
+// and json.Unmarshal must parse the whole document to reach `policy` — a
+// mid-bundle 256 KiB truncation would yield invalid JSON, a spurious fetch
+// error, and silently-stopped enforcement. 4 MiB mirrors the rules fetcher's
+// own maxBundleBytes. Kept separate from maxBodyBytes so the small
+// error-snippet / drain reads stay bounded at 256 KiB.
+const maxRunConfigBytes = 4 << 20
+
+// EffectivePolicy is the parsed device-policy directive, lifted from the
+// `policy` sub-object of the run-config response (it mirrors agent-api's
+// EffectivePolicyResponse). Policy carries the compiled VS Code
+// extensions.allowed object as canonical JSON (sorted keys) — the exact bytes
+// the backend hashed — so the agent writes it verbatim and never re-serializes
+// (re-serialization could reorder keys and break the backend's byte-exact
+// applied==desired check). A zero EffectivePolicy (present()==false) means
+// run-config carried no directive for this category → reconciler no-op.
 type EffectivePolicy struct {
 	Category    string
 	Clear       bool
@@ -41,10 +53,17 @@ type EffectivePolicy struct {
 	GeneratedAt string
 }
 
-// policyEnvelope is the wire shape (must match agent-api
-// EffectivePolicyResponse). Unknown fields are ignored, so a backend still
-// emitting legacy extras (e.g. the removed min_vscode_version) stays
-// compatible.
+// present reports whether the backend expressed a policy directive for this
+// category — a value to enforce, or an explicit clear. The fetcher guarantees
+// clear=false ⇒ non-empty policy object, so the only successful-fetch state
+// with neither is "no policy in run-config" (absent), which the reconciler
+// treats as a no-op (NEVER a clear).
+func (ep EffectivePolicy) present() bool { return ep.Clear || len(ep.Policy) > 0 }
+
+// policyEnvelope is the wire shape of the run-config `policy` sub-object (must
+// match agent-api EffectivePolicyResponse). Unknown fields are ignored, so a
+// backend still emitting legacy extras (e.g. the removed min_vscode_version)
+// stays compatible.
 type policyEnvelope struct {
 	Category    string          `json:"category"`
 	Clear       bool            `json:"clear"`
@@ -85,16 +104,24 @@ func NewHTTPFetcher(cfg ingest.Config, h *http.Client) (*HTTPFetcher, bool) {
 }
 
 // Fetch issues GET
-// /v1/:customer/developer-mdm-agent/devices/:device_id/effective-policy?category=…
-// over the existing agent auth channel (Bearer tenant key). It returns a parsed
-// EffectivePolicy or an error. Any error is the reconciler's signal to NO-OP
-// (never wipe enforcement on a transient failure or malformed payload):
+// /v1/:customer/developer-mdm-agent/run-config?device_id=…&category=…
+// over the existing agent auth channel (Bearer tenant key) and lifts the
+// device-policy directive from the response's `policy` sub-object. It returns a
+// parsed EffectivePolicy or an error. Any error is the reconciler's signal to
+// NO-OP (never wipe enforcement on a transient failure or malformed payload):
 //   - transport / non-200 status → error;
-//   - body that is not a JSON object → error;
+//   - body that is not valid JSON → error;
 //   - a non-clear result missing policy or hash → error (a malformed policy
 //     must not be written, and must not be mistaken for a clear);
 //   - a non-clear policy that is not itself a JSON object → error (a string or
 //     array written verbatim could even read back "compliant").
+//
+// An omitted/null `policy` is NOT an error: it means run-config carried no
+// directive for this category (a degraded/rules-only response, an older backend
+// not yet emitting policy, or an unknown category). Fetch returns a zero
+// EffectivePolicy (present()==false) and a nil error, and the reconciler
+// no-ops. Unassignment is signaled by the explicit clear:true directive, never
+// by absence.
 func (c *HTTPFetcher) Fetch(ctx context.Context, customerID, deviceID, category string) (EffectivePolicy, error) {
 	if c == nil {
 		return EffectivePolicy{}, errors.New("devicepolicy: nil fetcher")
@@ -111,8 +138,8 @@ func (c *HTTPFetcher) Fetch(ctx context.Context, customerID, deviceID, category 
 
 	endpoint := c.endpoint +
 		"/v1/" + url.PathEscape(customerID) +
-		"/developer-mdm-agent/devices/" + url.PathEscape(deviceID) +
-		"/effective-policy?category=" + url.QueryEscape(category)
+		"/developer-mdm-agent/run-config?device_id=" + url.QueryEscape(deviceID) +
+		"&category=" + url.QueryEscape(category)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -134,21 +161,32 @@ func (c *HTTPFetcher) Fetch(ctx context.Context, customerID, deviceID, category 
 			resp.StatusCode, redact.String(strings.TrimSpace(string(snippet))))
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRunConfigBytes))
 	if err != nil {
 		return EffectivePolicy{}, fmt.Errorf("devicepolicy: read body: %w", err)
 	}
-	var env policyEnvelope
+	// Decode only the `policy` sub-object of run-config; sibling fields
+	// (detection_rules, …) are ignored. The pointer distinguishes an
+	// omitted/null policy (no directive) from a present one.
+	var env struct {
+		Policy *policyEnvelope `json:"policy"`
+	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		return EffectivePolicy{}, fmt.Errorf("devicepolicy: decode body: %w", err)
 	}
+	if env.Policy == nil {
+		// Run-config carried no policy for this category → caller no-ops. NOT an
+		// error and NOT a clear; unassignment is the explicit clear:true directive.
+		return EffectivePolicy{}, nil
+	}
+	p := env.Policy
 
 	ep := EffectivePolicy{
-		Category:    strings.TrimSpace(env.Category),
-		Clear:       env.Clear,
-		Policy:      env.Policy,
-		Hash:        strings.TrimSpace(env.Hash),
-		GeneratedAt: env.GeneratedAt,
+		Category:    strings.TrimSpace(p.Category),
+		Clear:       p.Clear,
+		Policy:      p.Policy,
+		Hash:        strings.TrimSpace(p.Hash),
+		GeneratedAt: p.GeneratedAt,
 	}
 	if ep.Category == "" {
 		ep.Category = category

@@ -21,8 +21,11 @@ func newFetchServer(t *testing.T, status int, body string) (*httptest.Server, *H
 		if got := r.URL.Query().Get("category"); got != CategoryIDEExtension {
 			t.Errorf("category = %q, want %q", got, CategoryIDEExtension)
 		}
-		if !strings.Contains(r.URL.Path, "/developer-mdm-agent/devices/dev-1/effective-policy") {
+		if !strings.Contains(r.URL.Path, "/developer-mdm-agent/run-config") {
 			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("device_id"); got != "dev-1" {
+			t.Errorf("device_id = %q, want dev-1", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -40,9 +43,9 @@ func newFetchServer(t *testing.T, status int, body string) (*httptest.Server, *H
 func TestFetchPolicy(t *testing.T) {
 	// min_vscode_version is no longer part of the contract; it stays in the
 	// fixture to prove a backend still emitting legacy fields is tolerated.
-	body := `{"category":"ide_extension","clear":false,` +
+	body := `{"detection_rules":{"version":1},"policy":{"category":"ide_extension","clear":false,` +
 		`"policy":{"*":false,"ms-python.python":true},` +
-		`"hash":"sha256:abc","min_vscode_version":"1.96.0","generated_at":"2026-06-08T00:00:00Z"}`
+		`"hash":"sha256:abc","min_vscode_version":"1.96.0","generated_at":"2026-06-08T00:00:00Z"}}`
 	_, f := newFetchServer(t, 200, body)
 	ep, err := f.Fetch(context.Background(), "cust", "dev-1", CategoryIDEExtension)
 	if err != nil {
@@ -61,13 +64,62 @@ func TestFetchPolicy(t *testing.T) {
 }
 
 func TestFetchClear(t *testing.T) {
-	_, f := newFetchServer(t, 200, `{"category":"ide_extension","clear":true,"generated_at":"2026-06-08T00:00:00Z"}`)
+	_, f := newFetchServer(t, 200, `{"policy":{"category":"ide_extension","clear":true,"generated_at":"2026-06-08T00:00:00Z"}}`)
 	ep, err := f.Fetch(context.Background(), "cust", "dev-1", CategoryIDEExtension)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
 	if !ep.Clear {
 		t.Fatal("clear should be true")
+	}
+}
+
+func TestFetchAbsentPolicyReturnsEmptyNoError(t *testing.T) {
+	// An omitted/null `policy` means run-config carried no directive for this
+	// category. It is NOT an error and NOT a clear: Fetch returns a zero
+	// EffectivePolicy (present()==false) so the reconciler no-ops.
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"policy omitted", `{"detection_rules":{"version":1,"rules":[]}}`},
+		{"empty object", `{}`},
+		{"explicit null", `{"policy":null}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, f := newFetchServer(t, 200, tc.body)
+			ep, err := f.Fetch(context.Background(), "cust", "dev-1", CategoryIDEExtension)
+			if err != nil {
+				t.Fatalf("absent policy must not error, got %v", err)
+			}
+			if ep.present() {
+				t.Fatalf("absent policy must yield present()==false, got %+v", ep)
+			}
+			if ep.Clear || len(ep.Policy) != 0 || ep.Hash != "" {
+				t.Fatalf("absent policy must yield a zero EffectivePolicy, got %+v", ep)
+			}
+		})
+	}
+}
+
+func TestFetchIgnoresDetectionRules(t *testing.T) {
+	// run-config carries BOTH detection_rules and policy. Fetch decodes only the
+	// `policy` slice and ignores the rules bundle entirely (the rules fetcher
+	// owns that), proving the two consumers decode independent slices.
+	body := `{"detection_rules":{"version":7,"rules":[{"id":"r1"}]},` +
+		`"policy":{"category":"ide_extension","clear":false,` +
+		`"policy":{"ms-python.python":true},"hash":"sha256:xyz","generated_at":"2026-06-08T00:00:00Z"}}`
+	_, f := newFetchServer(t, 200, body)
+	ep, err := f.Fetch(context.Background(), "cust", "dev-1", CategoryIDEExtension)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if ep.Hash != "sha256:xyz" {
+		t.Fatalf("hash = %q, want sha256:xyz", ep.Hash)
+	}
+	if got := string(ep.Policy); !strings.Contains(got, `"ms-python.python":true`) {
+		t.Fatalf("policy = %s", got)
 	}
 }
 
@@ -81,7 +133,7 @@ func TestFetchMalformedBodyIsError(t *testing.T) {
 func TestFetchNonClearMissingPolicyIsError(t *testing.T) {
 	// clear=false but no policy/hash → malformed; must not be written or mistaken
 	// for a clear.
-	_, f := newFetchServer(t, 200, `{"category":"ide_extension","clear":false,"generated_at":"x"}`)
+	_, f := newFetchServer(t, 200, `{"policy":{"category":"ide_extension","clear":false,"generated_at":"x"}}`)
 	if _, err := f.Fetch(context.Background(), "cust", "dev-1", CategoryIDEExtension); err == nil {
 		t.Fatal("non-clear result missing policy/hash must be an error")
 	}
@@ -91,10 +143,10 @@ func TestFetchNonObjectPolicyIsError(t *testing.T) {
 	// A policy that is not a JSON object must never reach the writer: written
 	// verbatim it could even read back as "compliant".
 	for _, body := range []string{
-		`{"category":"ide_extension","clear":false,"policy":"bad","hash":"sha256:x","generated_at":"x"}`,
-		`{"category":"ide_extension","clear":false,"policy":[],"hash":"sha256:x","generated_at":"x"}`,
-		`{"category":"ide_extension","clear":false,"policy":42,"hash":"sha256:x","generated_at":"x"}`,
-		`{"category":"ide_extension","clear":false,"policy":null,"hash":"sha256:x","generated_at":"x"}`,
+		`{"policy":{"category":"ide_extension","clear":false,"policy":"bad","hash":"sha256:x","generated_at":"x"}}`,
+		`{"policy":{"category":"ide_extension","clear":false,"policy":[],"hash":"sha256:x","generated_at":"x"}}`,
+		`{"policy":{"category":"ide_extension","clear":false,"policy":42,"hash":"sha256:x","generated_at":"x"}}`,
+		`{"policy":{"category":"ide_extension","clear":false,"policy":null,"hash":"sha256:x","generated_at":"x"}}`,
 	} {
 		_, f := newFetchServer(t, 200, body)
 		if _, err := f.Fetch(context.Background(), "cust", "dev-1", CategoryIDEExtension); err == nil {
@@ -111,7 +163,7 @@ func TestFetchNon200IsError(t *testing.T) {
 }
 
 func TestFetchEmptyIDsAreErrors(t *testing.T) {
-	_, f := newFetchServer(t, 200, `{"clear":true,"generated_at":"x"}`)
+	_, f := newFetchServer(t, 200, `{"policy":{"clear":true,"generated_at":"x"}}`)
 	if _, err := f.Fetch(context.Background(), "", "dev-1", CategoryIDEExtension); err == nil {
 		t.Fatal("empty customer should error")
 	}

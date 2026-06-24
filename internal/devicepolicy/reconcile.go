@@ -90,6 +90,9 @@ func (r *Reconciler) probe() (bool, string) {
 //   - fetch error (transport / non-200 / malformed) → NO-OP, error returned.
 //     Enforcement on disk is never wiped on a transient or malformed response.
 //   - platform not enforceable (nil Writer) → silent no-op.
+//   - absent policy (run-config carried no `policy` directive for this
+//     category) → silent no-op; the on-disk value and ownership record stand.
+//     This is NOT a clear — removal happens only on an explicit clear directive.
 //   - clear result → remove ONLY the agent-owned settings key; a value the
 //     agent has no record of writing is left untouched. No compliance report
 //     (an unassigned device is backend-derived).
@@ -109,6 +112,14 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 
 	if r.Writer == nil {
 		r.logf("devicepolicy: no settings path on this platform; skipping (category=%s)", cat)
+		return nil
+	}
+
+	if !ep.present() {
+		// Run-config carried no policy directive for this category — no value to
+		// enforce and no explicit clear. Leave the on-disk value and ownership
+		// record untouched; a transient drop must never wipe enforcement.
+		r.logf("devicepolicy: run-config carried no policy for %s; leaving on-disk state untouched", cat)
 		return nil
 	}
 

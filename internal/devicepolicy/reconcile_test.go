@@ -440,6 +440,36 @@ func TestNilWriterPlatformIsNoOp(t *testing.T) {
 	}
 }
 
+func TestReconcileNoOpsWhenPolicyAbsent(t *testing.T) {
+	// Run-config carried no policy directive (zero EffectivePolicy, nil error).
+	// This is NOT a clear: the on-disk value, ownership record, and reporter must
+	// all be left untouched. A transient policy drop must never wipe enforcement.
+	withTempCache(t)
+	if err := WriteAppliedState(CategoryIDEExtension, AppliedCategoryState{AppliedHash: "sha256:H", WrittenValue: samplePolicy}); err != nil {
+		t.Fatal(err)
+	}
+	w := &fakeWriter{value: samplePolicy, present: true}
+	rep := &fakeReporter{}
+	r := &Reconciler{
+		Fetcher:  &fakeFetcher{ep: EffectivePolicy{}}, // present()==false
+		Reporter: rep, Writer: w, CustomerID: "c", DeviceID: "d", Platform: "linux",
+		Probe: func() (bool, string) { return false, "" },
+	}
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("absent policy should no-op without error, got %v", err)
+	}
+	if len(w.writes) != 0 || w.clears != 0 || w.reads != 0 {
+		t.Fatalf("absent policy must touch nothing: writes=%v clears=%d reads=%d", w.writes, w.clears, w.reads)
+	}
+	if len(rep.reports) != 0 {
+		t.Fatalf("absent policy must not report, got %+v", rep.reports)
+	}
+	// Ownership record must stand for next cycle's idempotency check.
+	if st, ok := ReadAppliedState(CategoryIDEExtension); !ok || st.WrittenValue != samplePolicy {
+		t.Fatalf("ownership record must be untouched, got %+v ok=%v", st, ok)
+	}
+}
+
 func TestEnforceStateUnwritablePreflightWritesNothing(t *testing.T) {
 	// If the ownership store can't be persisted, the policy must never be
 	// written: an enforced value with no record would be orphaned (a later
