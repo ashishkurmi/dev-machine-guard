@@ -28,6 +28,7 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/paths"
 	"github.com/step-security/dev-machine-guard/internal/progress"
+	"github.com/step-security/dev-machine-guard/internal/schedinfo"
 	"github.com/step-security/dev-machine-guard/internal/state"
 	"github.com/step-security/dev-machine-guard/internal/tcc"
 )
@@ -164,7 +165,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// Detect invocation method once at run start: "install" if the platform's
 	// scheduler footprint is on disk, else "one_time". Threaded into every
 	// run-status post and stamped on the final payload.
-	invocationMethod := DetectInvocationMethod()
+	invocationMethod := DetectInvocationMethod(exec, log)
 
 	// Phase tracker accumulates per-analysis-section completions so the
 	// backend can surface in-flight progress on the console. Reads from the
@@ -289,6 +290,12 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// short run.
 	postPhaseFinal := func() { sendSnapshot(tailEmitter.ForceAttach) }
 
+	// postPhaseInitial is the first upsert after device_info. Like postPhaseFinal
+	// it FORCES the log tail (bypassing the 2-min throttle) so the run's opening
+	// lines — loader setup, scheduler_info, device_info — reach the backend
+	// right after device_info, even on a short run or one that fails right after.
+	postPhaseInitial := func() { sendSnapshot(tailEmitter.ForceAttach) }
+
 	// Catch SIGINT / SIGTERM so cancellation (Ctrl+C, launchd stop, kill)
 	// still records a failure row and fires the Slack alert before exit.
 	// Go's default signal disposition terminates the process without running
@@ -336,6 +343,13 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	capture := StartCapture()
 	defer capture.Finalize()
 
+	// Fold THIS run's loader-script lines into the capture so the run-status log
+	// tail and final payload include the script's setup — binary auto-update,
+	// config write, version checks — under the same row, not just the binary's
+	// own output. The loader appends them to .loader_log; we read and then delete
+	// it, so it's scoped to the current run. Best-effort; see loader_log.go.
+	seedLoaderLog(capture)
+
 	// Bind the throttled log-tail emitter to the live capture so every
 	// subsequent postPhase() can ship a recent stderr slice attached to
 	// status_info on the throttle's cadence. See log_tail_emitter.go.
@@ -359,7 +373,28 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	}()
 	log.Progress("Lock acquired (PID: %d)", os.Getpid())
 
-	// Device info — first tracked phase. Completes before the "started"
+	// Scheduler info — first tracked phase. Gathers launchd/schtasks/systemd
+	// state (interval, last/next run, RunAtLoad, last exit, missed runs) for
+	// troubleshooting; see docs/launchd-troubleshooting.md. Best-effort —
+	// schedinfo.Gather uses short per-query timeouts and never errors. Like
+	// device_info it completes before the "started" post (so the first
+	// heartbeat includes it), but postPhase() is intentionally NOT called
+	// here: the backend has no run-status row to upsert into until that post,
+	// so this phase's completion ships in the first postPhase() below.
+	schedCtx, schedCancel := startPhase(ctx, tracker, "scheduler_info")
+	log.Progress("Gathering scheduler information...")
+	schedinfo.Log(schedinfo.Gather(schedCtx, exec), log)
+	// Authoritative trigger for this run (same value uploaded as invocation_method
+	// and shown as the Scheduled/Manual badge in the console) — logged here for
+	// at-a-glance triage in agent.log.
+	if invocationMethod == InvocationInstall {
+		log.Progress("  This run: scheduler-triggered (invocation_method=install)")
+	} else {
+		log.Progress("  This run: manual (invocation_method=one_time)")
+	}
+	endPhase(schedCtx, schedCancel, tracker, log, "scheduler_info")
+
+	// Device info — second tracked phase. Completes before the "started"
 	// post so the first heartbeat already includes it in phases_completed.
 	phaseCtx, phaseCancel := startPhase(ctx, tracker, "device_info")
 	log.Progress("Gathering device information...")
@@ -425,9 +460,12 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	reportRunStatus(ctx, log, executionID, deviceID, runStatusStarted, "", invocationMethod)
 
 	// First progress upsert: surfaces device_info completion immediately
-	// without waiting for the 5-minute heartbeat. Safe to call after the
+	// without waiting for the 5-minute heartbeat, and FORCE-attaches the log
+	// tail (bypassing the 2-min throttle) so the opening lines — loader setup,
+	// scheduler_info, device_info — reach the backend right after device_info,
+	// even on a short run or one that fails right after. Safe to call after the
 	// "started" post because the backend now has a row to upsert into.
-	postPhase()
+	postPhaseInitial()
 
 	// Heartbeat goroutine: pushes status_info on a ticker so a long-running
 	// phase (brew on a 200k-package macbook, syspkg on a fat dpkg machine)
