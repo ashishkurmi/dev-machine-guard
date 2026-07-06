@@ -93,11 +93,21 @@ func main() {
 	if cfg.EnableNPMScan == nil && config.EnableNPMScan != nil {
 		cfg.EnableNPMScan = config.EnableNPMScan
 	}
+	// --legacy-node-scan / --disk-node-scan override the config-file value
+	// (which config.Load already applied to config.UseLegacyNodeScan).
+	if cfg.UseLegacyNodeScan != nil {
+		config.UseLegacyNodeScan = *cfg.UseLegacyNodeScan
+	}
 	if cfg.EnableBrewScan == nil && config.EnableBrewScan != nil {
 		cfg.EnableBrewScan = config.EnableBrewScan
 	}
 	if cfg.EnablePythonScan == nil && config.EnablePythonScan != nil {
 		cfg.EnablePythonScan = config.EnablePythonScan
+	}
+	// --legacy-python-scan / --disk-python-scan override the config-file value
+	// (which config.Load already applied to config.UseLegacyPythonScan).
+	if cfg.UseLegacyPythonScan != nil {
+		config.UseLegacyPythonScan = *cfg.UseLegacyPythonScan
 	}
 	if cfg.IncludeTCCProtected == nil && config.IncludeTCCProtected != nil {
 		cfg.IncludeTCCProtected = config.IncludeTCCProtected
