@@ -65,9 +65,14 @@ func NodeGlobalRoots(exec executor.Executor) []nodeGlobalRoot {
 		}
 	}
 
-	// --- pnpm: <pnpm-home>/global/<n>/node_modules (the <n> is a store-format id). ---
+	// --- pnpm globals. Layout varies by pnpm major:
+	//   - pnpm <=9: <pnpm-home>/global/<n>/node_modules       (<n> is a store-format id)
+	//   - pnpm v10+: <pnpm-home>/global/v<major>/<hash>/node_modules
+	//     (each `pnpm add -g` gets its own hashed install dir under global/v<major>)
+	// Match both so a modern pnpm's globals aren't silently missed.
 	for _, pnpmHome := range pnpmGlobalHomes(exec, home) {
 		addGlob("pnpm", filepath.Join(pnpmHome, "global", "*", "node_modules"))
+		addGlob("pnpm", filepath.Join(pnpmHome, "global", "*", "*", "node_modules"))
 	}
 
 	// --- yarn classic: ~/.config/yarn/global/node_modules. ---
