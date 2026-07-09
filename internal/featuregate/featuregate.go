@@ -36,18 +36,8 @@ var enabled = map[Feature]bool{
 	FeaturePnpmConfigAudit: true,
 	FeatureBunConfigAudit:  true,
 	FeatureYarnConfigAudit: true,
-	// Agent skills inventory ships on by default: metadata + content hashes only,
-	// never file content. To disable, comment out this line and rebuild — there
-	// is deliberately NO per-feature env kill-switch (the shared
-	// STEPSECURITY_OVERRIDE_GATE only force-ENABLES features). When disabled, no
-	// scan section is emitted, which is indistinguishable from "no information",
-	// so no skill state is affected.
+	FeatureDevicePolicy:    true,
 	FeatureAgentSkillsScan: true,
-	// FeatureDevicePolicy stays gated until GA: the backend's
-	// MinEnforcementAgentVersion is still a placeholder (1.13.0) and the agent
-	// version floor has not been finalized. Enable via --override-gate /
-	// STEPSECURITY_OVERRIDE_GATE=1 for dogfooding.
-	// FeatureDevicePolicy: true,
 }
 
 var override bool
