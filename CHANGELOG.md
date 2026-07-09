@@ -11,7 +11,7 @@ See [VERSIONING.md](VERSIONING.md) for why the version starts at 1.8.1.
 
 ### Added
 
-- **Device policy enforcement**: the agent now applies device policy profiles fetched from run-config, including OS-native enforcement of a VS Code extension allowlist. Policy identity is target-aware (category + target) and on-device state is keyed by category; state files written by a newer schema version are rejected.
+- **Device policy enforcement**: the agent now applies device policy profiles fetched from run-config, including OS-native enforcement of a VS Code extension allowlist. Policy identity is target-aware (category + target) and on-device state is keyed by category; state files written by a newer schema version are rejected. Generally available and enabled by default for all enterprise customers.
 - **Classic Visual Studio detection**: scans now discover classic Visual Studio installs and their extensions.
 - **Disk-based package scanning**: npm packages are discovered by parsing lockfiles and Python packages by reading `dist-info` metadata on disk, so package inventory no longer depends solely on invoking the package manager.
 - **Run-on-login scheduling and scheduler diagnostics**: scans can be scheduled to run on login, Windows Task Scheduler history is enabled, and a new scheduler-info subsystem reports cross-platform scheduling state for troubleshooting.
