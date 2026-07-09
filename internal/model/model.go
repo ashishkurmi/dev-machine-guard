@@ -693,7 +693,7 @@ type FileAttrs struct {
 // hashes, and census counts only.
 type AgentSkill struct {
 	// Identity
-	SkillSlug    string   `json:"skill_slug"`              // directory basename (or lock alias for lock-only)
+	SkillSlug    string   `json:"skill_slug"`              // directory basename
 	SkillName    string   `json:"skill_name"`              // frontmatter name, else slug
 	Description  string   `json:"description,omitempty"`   // frontmatter description, ≤1024 runes (standard max)
 	Version      string   `json:"version,omitempty"`       // frontmatter version (or metadata.version fallback)
@@ -710,14 +710,14 @@ type AgentSkill struct {
 
 	// Attribution
 	Agent  string `json:"agent"`  // "claude-code"|"codex"|"opencode"|"cursor"|"pi"|"factory"|"amp"|"copilot"|"shared"
-	Source string `json:"source"` // atomic attribution key. "claude_user"|"claude_project"|"claude_plugin"|
+	Source string `json:"source"` // atomic attribution key. "claude_user"|"claude_project"|
 	//                              // "agents_user"|"agents_project"|"codex_user"|"codex_system"|"codex_admin"|
 	//                              // "opencode_user"|"opencode_project"|"cursor_user"|"cursor_project"|"pi_user"|
 	//                              // "pi_project"|"factory_user"|"factory_project"|"factory_agent_project"|
 	//                              // "amp_user"|"copilot_user"|"github_project"
 	Scope       string `json:"scope"`                  // "global" | "project" | "system"
 	ProjectPath string `json:"project_path,omitempty"` // project root for project scope
-	PluginName  string `json:"plugin_name,omitempty"`  // owning plugin (claude_plugin source or lock pluginName)
+	PluginName  string `json:"plugin_name,omitempty"`  // owning plugin, from skills.sh lock pluginName
 
 	// Location
 	SkillDirPath   string   `json:"skill_dir_path,omitempty"` // absolute, symlink-resolved dir of the physical skill (the collapse group key)

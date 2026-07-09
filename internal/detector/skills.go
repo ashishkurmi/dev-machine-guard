@@ -21,7 +21,7 @@ const (
 	maxSkillsPerRoot    = 500     // skill dirs emitted per root before truncating
 	maxProjects         = 200     // project roots probed (sorted, deterministic)
 	maxSkillMDReadBytes = 1 << 20 // 1 MiB SKILL.md frontmatter read cap
-	maxJSONConfigBytes  = 5 << 20 // 5 MiB cap on a parsed JSON config (lock file / plugin manifest)
+	maxJSONConfigBytes  = 5 << 20 // 5 MiB cap on a parsed JSON config (lock file)
 	maxDescriptionRunes = 1024    // standard hard max
 	maxNameRunes        = 128     // standard max is 64; we tolerate + record nonconforming
 	maxLicenseRunes     = 128
@@ -44,7 +44,7 @@ var hashExcludedNames = map[string]bool{
 }
 
 // SkillsDetector discovers installed AI agent skills across every recognized
-// root (global, project, plugin, and skills.sh lock-managed). It performs pure
+// root (global, project, and skills.sh lock-managed). It performs pure
 // filesystem reads only — no subprocesses — so it needs no user shell.
 type SkillsDetector struct {
 	exec executor.Executor
@@ -84,7 +84,6 @@ type skillsRoot struct {
 	agent       string // owning directory convention
 	scope       string // "global" | "project" | "system"
 	projectPath string // project root for project scope; "" otherwise
-	pluginName  string // owning plugin for claude_plugin roots
 	excludeName string // a direct child name to skip (codex .system carve-out)
 }
 
@@ -143,12 +142,6 @@ func (d *SkillsDetector) Detect(ctx context.Context, extraProjectRoots []string)
 		discovered = append(discovered, d.enumerateRoot(ctx, root, info, memo)...)
 	}
 
-	// Plugin roots: walk the two plugin subtrees for skills/ dirs and
-	// plugin.json-declared skill dirs.
-	for _, root := range d.walkPlugins(ctx, info) {
-		discovered = append(discovered, d.enumerateRoot(ctx, root, info, memo)...)
-	}
-
 	// Project roots: Claude Code registry ∪ node/python roots, deduped, capped,
 	// then the candidate skill dirs are probed on each.
 	projects := d.discoverProjects(extraProjectRoots, info)
@@ -161,7 +154,7 @@ func (d *SkillsDetector) Detect(ctx context.Context, extraProjectRoots []string)
 
 	// Lock files: parse the global lock + each project lock and join skills.sh
 	// provenance onto matching on-disk records. A lock entry with no folder on
-	// disk is not an install and is dropped (no lock-only synthesis).
+	// disk is not an install and is dropped — the inventory is on-disk skills only.
 	discovered = d.applyLocks(discovered, projects, info)
 
 	// Collapse symlink shadows: one record per physical skill dir, the linked
@@ -449,7 +442,6 @@ func (d *SkillsDetector) emitSkill(ctx context.Context, records *[]discoveredSki
 		Source:       root.source,
 		Scope:        root.scope,
 		ProjectPath:  root.projectPath,
-		PluginName:   root.pluginName,
 		SkillDirPath: dir,
 		RootRelPath:  rel,
 		SkillMDPath:  mdPath,
@@ -579,9 +571,10 @@ func collapseSymlinkShadows(discovered []discoveredSkill) []model.AgentSkill {
 		}
 		rec := members[canon].rec
 
-		// symlink_sources = the sorted, deduped source of every OTHER member —
-		// each is a root whose entry symlinks into this physical dir.
-		seen := map[string]bool{}
+		// symlink_sources = the sorted, deduped sources of the other members,
+		// pre-seeded with the canonical source so a member that shares it is never
+		// echoed back — each entry is a distinct root symlinking into this dir.
+		seen := map[string]bool{members[canon].rec.Source: true}
 		var srcs []string
 		for i, m := range members {
 			if i == canon || seen[m.rec.Source] {

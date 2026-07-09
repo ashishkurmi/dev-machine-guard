@@ -571,51 +571,6 @@ func TestLoadLock_OversizeSkipped(t *testing.T) {
 	}
 }
 
-func TestAddManifestSkillDirs_OversizeSkipped(t *testing.T) {
-	m := executor.NewMock()
-	manifest := testHome + "/.claude/plugins/repos/p/.claude-plugin/plugin.json"
-	// Oversized plugin.json must be stat-gated and skipped before the read, so no
-	// skill root is registered from it (DoS guard, mirrors the lock-read guard).
-	m.SetFile(manifest, make([]byte, maxJSONConfigBytes+1))
-
-	called := false
-	pluginRoot := filepath.Dir(filepath.Dir(manifest))
-	NewSkillsDetector(m).addManifestSkillDirs(manifest, pluginRoot, func(dir, pluginName string) { called = true })
-	if called {
-		t.Error("oversized plugin.json must be skipped before read; addRoot must not fire")
-	}
-}
-
-func TestAddManifestSkillDirs_Branches(t *testing.T) {
-	m := executor.NewMock()
-	root := testHome + "/.claude/plugins/repos/p"
-	manifest := root + "/.claude-plugin/plugin.json"
-	// No "name" → plugin name falls back to the plugin-root basename; a non-string
-	// skills entry is skipped; a "../escape" entry is clamped to the plugin root.
-	m.SetFile(manifest, []byte(`{"skills":["extra",123,"../escape"]}`))
-	var got []string
-	NewSkillsDetector(m).addManifestSkillDirs(manifest, root, func(dir, pluginName string) {
-		if pluginName != "p" {
-			t.Errorf("pluginName = %q, want fallback 'p'", pluginName)
-		}
-		got = append(got, dir)
-	})
-	// Only "extra" survives — 123 (non-string) and "../escape" (climbs above the
-	// plugin root) are dropped.
-	if len(got) != 1 || filepath.Base(got[0]) != "extra" {
-		t.Errorf("addRoot dirs = %v, want just <root>/extra", got)
-	}
-
-	// A malformed manifest is tolerated (lenient parse) — no roots, no panic.
-	bad := testHome + "/.claude/plugins/repos/q/.claude-plugin/plugin.json"
-	m.SetFile(bad, []byte("{not json"))
-	fired := false
-	NewSkillsDetector(m).addManifestSkillDirs(bad, filepath.Dir(filepath.Dir(bad)), func(string, string) { fired = true })
-	if fired {
-		t.Error("malformed plugin.json must register no roots")
-	}
-}
-
 func TestCollectProjectRoots(t *testing.T) {
 	got := CollectProjectRoots(
 		[]model.ProjectInfo{{Path: "/a"}, {Path: ""}, {Path: "/b"}},
@@ -914,7 +869,7 @@ func TestDetect_DanglingSymlink(t *testing.T) {
 	}
 }
 
-// TestDetect_SkillsShSymlinkLayout is the headline v2 case: skills.sh installs a
+// TestDetect_SkillsShSymlinkLayout is the headline case: skills.sh installs a
 // real folder under ~/.agents/skills and symlinks it into ~/.claude/skills, and
 // records provenance in the global lock. Both roots surface the skill, but the
 // symlink-shadow collapse folds them to ONE record — the real ~/.agents dir is
@@ -1152,11 +1107,11 @@ func TestDetect_LockV3(t *testing.T) {
 		t.Error("local on-disk path leaked into provenance")
 	}
 
-	// v2: a lock entry with no folder on disk is not an install — no record is
+	// A lock entry with no folder on disk is not an install — no record is
 	// synthesized for it, under any source.
 	for i := range records {
 		if records[i].SkillSlug == "ghost-skill" {
-			t.Errorf("ghost-skill (lock-only, no dir on disk) must be absent in v2, got %+v", records[i])
+			t.Errorf("ghost-skill (lock entry, no dir on disk) must be absent, got %+v", records[i])
 		}
 	}
 }
@@ -1310,67 +1265,6 @@ func TestDiscoverProjects_Truncation(t *testing.T) {
 	}
 	if !hasErrorContaining(info.Errors, "truncated") {
 		t.Errorf("expected truncation error, got %v", info.Errors)
-	}
-}
-
-// TestDetect_PluginSkills covers the standard <plugin>/skills/ subdir, a
-// .claude-plugin/plugin.json manifest declaring an extra container dir, and the
-// marketplaces/ subtree that must never be scanned.
-func TestDetect_PluginSkills(t *testing.T) {
-	m, fs := newSkillsMock()
-	pluginRoot := testHome + "/.claude/plugins/repos/acme/coolplugin"
-	// (a) standard skills/ subdir — pluginName derived from the dir above skills/.
-	fs.addSkill(filepath.Join(pluginRoot, "skills", "greet"), "SKILL.md", validFrontmatter("greet", "d"), nil)
-	// (b) manifest-declared extra container dir — pluginName from manifest "name".
-	fs.addFile(filepath.Join(pluginRoot, ".claude-plugin", "plugin.json"), `{"name":"CoolPlugin","skills":["extra"]}`)
-	fs.addSkill(filepath.Join(pluginRoot, "extra", "helper"), "SKILL.md", validFrontmatter("helper", "d"), nil)
-	// marketplaces subtree must be ignored (catalog of available, not installed).
-	fs.addSkill(testHome+"/.claude/plugins/repos/marketplaces/mp/skills/x", "SKILL.md", validFrontmatter("x", "d"), nil)
-	fs.commit()
-
-	records, _ := NewSkillsDetector(m).Detect(context.Background(), nil)
-
-	greet := findSkill(records, "claude_plugin", "greet")
-	if greet == nil {
-		t.Fatalf("greet plugin skill not found; records=%+v", records)
-	}
-	if greet.PluginName != "coolplugin" {
-		t.Errorf("greet PluginName = %q, want coolplugin", greet.PluginName)
-	}
-	helper := findSkill(records, "claude_plugin", "helper")
-	if helper == nil {
-		t.Fatal("manifest-declared skill 'helper' not found")
-	}
-	if helper.PluginName != "CoolPlugin" {
-		t.Errorf("helper PluginName = %q, want CoolPlugin", helper.PluginName)
-	}
-	if findSkill(records, "claude_plugin", "x") != nil {
-		t.Error("marketplaces subtree must not be scanned")
-	}
-}
-
-// TestDetect_PluginManifestPathTraversal guards the plugin-root clamp: a
-// plugin.json "skills" entry containing ".." must not escape the plugin folder
-// and pull in skills from an unrelated location, while a legitimate relative
-// entry is still resolved.
-func TestDetect_PluginManifestPathTraversal(t *testing.T) {
-	m, fs := newSkillsMock()
-	pluginRoot := testHome + "/.claude/plugins/repos/acme/evil"
-	// Manifest declares one escaping entry and one legit relative entry.
-	fs.addFile(filepath.Join(pluginRoot, ".claude-plugin", "plugin.json"),
-		`{"name":"Evil","skills":["../../../../../../../../etc/secret","legit"]}`)
-	// A skill sits at the escape target — it must NOT be inventoried.
-	fs.addSkill("/etc/secret/leak", "SKILL.md", validFrontmatter("leak", "d"), nil)
-	// A skill under the legit container — it must be inventoried.
-	fs.addSkill(filepath.Join(pluginRoot, "legit", "good"), "SKILL.md", validFrontmatter("good", "d"), nil)
-	fs.commit()
-
-	records, _ := NewSkillsDetector(m).Detect(context.Background(), nil)
-	if findSkill(records, "claude_plugin", "leak") != nil {
-		t.Error("plugin manifest '..' entry must not escape the plugin root")
-	}
-	if findSkill(records, "claude_plugin", "good") == nil {
-		t.Error("legit relative manifest entry must still be resolved")
 	}
 }
 
