@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
@@ -217,6 +218,86 @@ func TestSplitFrontmatter(t *testing.T) {
 			t.Errorf("body rule not preserved: %q", body)
 		}
 	})
+	t.Run("triple dash inside quoted value not a fence", func(t *testing.T) {
+		fm, body, ok := splitFrontmatter("---\ndescription: \"a---b\"\n---\nhello\n")
+		if !ok {
+			t.Fatal("expected frontmatter")
+		}
+		if !strings.Contains(fm, `"a---b"`) {
+			t.Errorf("in-value --- consumed as fence: fm=%q", fm)
+		}
+		if !strings.Contains(body, "hello") {
+			t.Errorf("body = %q", body)
+		}
+	})
+	t.Run("CRLF preserved", func(t *testing.T) {
+		fm, body, ok := splitFrontmatter("---\r\nname: t\r\n---\r\nhello\r\n")
+		if !ok {
+			t.Fatal("expected frontmatter")
+		}
+		if !strings.Contains(fm, "name: t") || !strings.Contains(fm, "\r\n") {
+			t.Errorf("CRLF not preserved in fm: %q", fm)
+		}
+		if !strings.Contains(body, "hello") {
+			t.Errorf("body = %q", body)
+		}
+	})
+	t.Run("empty frontmatter", func(t *testing.T) {
+		fm, body, ok := splitFrontmatter("---\n---\nhello\n")
+		if !ok {
+			t.Fatal("expected frontmatter")
+		}
+		if fm != "" {
+			t.Errorf("fm = %q, want empty", fm)
+		}
+		if !strings.Contains(body, "hello") {
+			t.Errorf("body = %q", body)
+		}
+	})
+	t.Run("trailing-space fence lines", func(t *testing.T) {
+		_, body, ok := splitFrontmatter("--- \nname: t\n--- \nhello\n")
+		if !ok {
+			t.Fatal("a fence line with trailing whitespace must still close")
+		}
+		if !strings.Contains(body, "hello") {
+			t.Errorf("body = %q", body)
+		}
+	})
+	t.Run("no trailing newline", func(t *testing.T) {
+		fm, body, ok := splitFrontmatter("---\nname: t\n---")
+		if !ok {
+			t.Fatal("closing fence without a trailing newline must still close")
+		}
+		if !strings.Contains(fm, "name: t") {
+			t.Errorf("fm = %q", fm)
+		}
+		if body != "" {
+			t.Errorf("body = %q, want empty", body)
+		}
+	})
+	t.Run("strict open fence", func(t *testing.T) {
+		if _, _, ok := splitFrontmatter("----\nname: t\n----\nbody\n"); ok {
+			t.Error(`"----" is not a "---" fence`)
+		}
+		if _, _, ok := splitFrontmatter("---foo\nname: t\n---\nbody\n"); ok {
+			t.Error(`"---foo" is not a "---" fence`)
+		}
+	})
+	t.Run("indented fence line inside block scalar stays content", func(t *testing.T) {
+		// The closing fence must start at column zero (YAML document-marker rule):
+		// an indented "---" under `description: |` is scalar content and must not
+		// close the frontmatter early.
+		fm, body, ok := splitFrontmatter("---\ndescription: |\n  before\n  ---\n  after\nhooks:\n  a: b\n---\nbody\n")
+		if !ok {
+			t.Fatal("expected frontmatter")
+		}
+		if !strings.Contains(fm, "  ---") || !strings.Contains(fm, "hooks:") {
+			t.Errorf("indented --- closed the fence early: fm=%q", fm)
+		}
+		if body != "body\n" {
+			t.Errorf("body = %q, want %q", body, "body\n")
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +452,91 @@ func TestParseSkillMD_Unreadable(t *testing.T) {
 	meta := NewSkillsDetector(m).parseSkillMD(testHome + "/nope/SKILL.md")
 	if meta.frontmatterError != "unreadable" {
 		t.Errorf("frontmatterError = %q, want unreadable", meta.frontmatterError)
+	}
+}
+
+// pipeFileInfo / pipeDirEntry model a non-regular filesystem node (a FIFO). The
+// mock's own fakes cannot represent one — mockFileInfo.Mode() is hardcoded to a
+// regular 0o644 — so these exercise the reject-non-regular guards. A reader-less
+// FIFO would block os.ReadFile forever (no ctx); the mock cannot simulate a
+// blocking read, so the tests assert the node is skipped, not an interrupted read.
+type pipeFileInfo struct{ name string }
+
+func (fi pipeFileInfo) Name() string       { return fi.name }
+func (fi pipeFileInfo) Size() int64        { return 0 }
+func (fi pipeFileInfo) IsDir() bool        { return false }
+func (fi pipeFileInfo) ModTime() time.Time { return time.Time{} }
+func (fi pipeFileInfo) Mode() os.FileMode  { return os.ModeNamedPipe }
+func (fi pipeFileInfo) Sys() any           { return nil }
+
+type pipeDirEntry struct{ name string }
+
+func (e pipeDirEntry) Name() string               { return e.name }
+func (e pipeDirEntry) IsDir() bool                { return false }
+func (e pipeDirEntry) Type() os.FileMode          { return os.ModeNamedPipe }
+func (e pipeDirEntry) Info() (os.FileInfo, error) { return pipeFileInfo{name: e.name}, nil }
+
+func TestFindSkillMD_RejectsNonRegular(t *testing.T) {
+	// A FIFO named SKILL.md must not qualify — parseSkillMD's os.ReadFile would
+	// block forever on a reader-less pipe, hanging the synchronous scan.
+	if _, ok := findSkillMD([]os.DirEntry{pipeDirEntry{name: "SKILL.md"}}); ok {
+		t.Error("a non-regular SKILL.md (FIFO) must be rejected")
+	}
+	// A regular SKILL.md still qualifies.
+	if name, ok := findSkillMD([]os.DirEntry{executor.MockDirEntry("SKILL.md", false)}); !ok || name != "SKILL.md" {
+		t.Errorf("regular SKILL.md must be accepted: name=%q ok=%v", name, ok)
+	}
+}
+
+func TestParseSkillMD_NonRegularSkipped(t *testing.T) {
+	m, _ := newSkillsMock()
+	md := testHome + "/s/SKILL.md"
+	// Stat reports a FIFO; valid bytes are also registered so that WITHOUT the
+	// guard the read would succeed and parse clean — the "unreadable" result
+	// proves the mode guard tripped before the blocking read.
+	m.SetFileInfo(md, pipeFileInfo{name: "SKILL.md"})
+	m.SetFile(md, []byte(validFrontmatter("s", "d")))
+	meta := NewSkillsDetector(m).parseSkillMD(md)
+	if meta.frontmatterError != "unreadable" {
+		t.Errorf("frontmatterError = %q, want unreadable (non-regular skipped)", meta.frontmatterError)
+	}
+}
+
+func TestParseSkillMD_InValueTripleDash(t *testing.T) {
+	m, _ := newSkillsMock()
+	md := testHome + "/s/SKILL.md"
+	// A "---" inside a quoted value and a real hooks block: the line-based fence
+	// must parse this clean (was invalid_yaml / hasHooks=false under substring split).
+	m.SetFile(md, []byte("---\nname: My Skill\ndescription: \"a---b\"\nhooks:\n  PreToolUse:\n    - command: echo hi\n---\nBody.\n"))
+	meta := NewSkillsDetector(m).parseSkillMD(md)
+	if meta.frontmatterError != "" {
+		t.Errorf("frontmatterError = %q, want empty", meta.frontmatterError)
+	}
+	if meta.description != "a---b" {
+		t.Errorf("description = %q, want a---b", meta.description)
+	}
+	if !meta.hasHooks {
+		t.Error("hasHooks = false, want true (hooks block below the in-value ---)")
+	}
+}
+
+func TestParseSkillMD_BlockScalarTripleDash(t *testing.T) {
+	m, _ := newSkillsMock()
+	md := testHome + "/s/SKILL.md"
+	// An indented "---" line inside a block scalar is scalar content, not the
+	// closing fence. An early close here is the worst failure shape: the severed
+	// frontmatter still parses as valid YAML — truncated description, hooks:
+	// silently lost in the body, and NO frontmatterError — so assert all three.
+	m.SetFile(md, []byte("---\nname: bs\ndescription: |\n  before\n  ---\n  after\nhooks:\n  PreToolUse:\n    - command: echo hi\n---\nBody.\n"))
+	meta := NewSkillsDetector(m).parseSkillMD(md)
+	if meta.frontmatterError != "" {
+		t.Errorf("frontmatterError = %q, want empty", meta.frontmatterError)
+	}
+	if !strings.Contains(meta.description, "---") || !strings.Contains(meta.description, "after") {
+		t.Errorf("description truncated at the in-scalar ---: %q", meta.description)
+	}
+	if !meta.hasHooks {
+		t.Error("hasHooks = false — hooks block after the block scalar was lost")
 	}
 }
 
@@ -568,6 +734,56 @@ func TestLoadLock_OversizeSkipped(t *testing.T) {
 	}
 	if info.LockFilesParsed != 0 {
 		t.Errorf("LockFilesParsed = %d, want 0 (oversized lock not parsed)", info.LockFilesParsed)
+	}
+}
+
+func TestLoadLock_NonRegularSkipped(t *testing.T) {
+	m := executor.NewMock()
+	lp := testHome + "/.agents/.skill-lock.json"
+	// Stat reports a FIFO; valid lock bytes are also registered so that WITHOUT
+	// the guard the read would parse one entry — the skip + "not a regular file"
+	// error proves the mode guard tripped before the blocking read.
+	m.SetFileInfo(lp, pipeFileInfo{name: ".skill-lock.json"})
+	m.SetFile(lp, []byte(`{"skills":{"s":{"source":"a/b","sourceType":"github"}}}`))
+
+	info := &model.AgentSkillScanInfo{}
+	entries := NewSkillsDetector(m).loadLock(lp, testHome+"/.agents/skills", info)
+	if entries != nil {
+		t.Errorf("non-regular lock must yield no entries, got %d", len(entries))
+	}
+	if !hasErrorContaining(info.Errors, "not a regular file") {
+		t.Errorf("expected a non-regular error, got %v", info.Errors)
+	}
+	if info.LockFilesParsed != 0 {
+		t.Errorf("LockFilesParsed = %d, want 0 (non-regular lock not parsed)", info.LockFilesParsed)
+	}
+}
+
+func TestParseLock_HostileKeysDropped(t *testing.T) {
+	installBase := testHome + "/.agents/skills"
+	// Only "good" is a safe single-segment folder name. Every other key is a
+	// traversal / separator / volume attempt and must be dropped before it is
+	// joined onto installBase. Backslashes are escaped once for JSON.
+	content := []byte(`{"skills":{
+		"good":{"source":"acme/good","sourceType":"github"},
+		"../../.claude/skills/victim":{"source":"evil/a","sourceType":"github"},
+		"a/b":{"source":"evil/b","sourceType":"github"},
+		"a\\b":{"source":"evil/c","sourceType":"github"},
+		"C:\\evil":{"source":"evil/d","sourceType":"github"},
+		"..":{"source":"evil/e","sourceType":"github"}
+	}}`)
+	entries, err := parseLock(content, testHome+"/x/skills-lock.json", installBase)
+	if err != nil {
+		t.Fatalf("parseLock error: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("want exactly 1 surviving entry (good), got %d: %+v", len(entries), entries)
+	}
+	if entries[0].localName != "good" {
+		t.Errorf("surviving key = %q, want good", entries[0].localName)
+	}
+	if want := filepath.Join(installBase, "good"); entries[0].expectedDir != want {
+		t.Errorf("expectedDir = %q, want %q", entries[0].expectedDir, want)
 	}
 }
 
@@ -1116,6 +1332,39 @@ func TestDetect_LockV3(t *testing.T) {
 	}
 }
 
+func TestDetect_LockKeyTraversalNoEnrichment(t *testing.T) {
+	m, fs := newSkillsMock()
+	// Legit skills.sh install under ~/.agents/skills.
+	fs.addSkill(testHome+"/.agents/skills/legit", "SKILL.md", validFrontmatter("legit", "d"), nil)
+	// Unrelated victim skill in the Claude scope.
+	fs.addSkill(testHome+"/.claude/skills/victim", "SKILL.md", validFrontmatter("victim", "d"), nil)
+	// Global lock (install base ~/.agents/skills): a legit key plus a traversal
+	// key that filepath.Join would resolve to ~/.claude/skills/victim. The
+	// traversal key must be dropped so the victim keeps its own empty provenance.
+	fs.addFile(testHome+"/.agents/.skill-lock.json", `{"skills":{
+		"legit":{"source":"acme/legit","sourceType":"github","sourceUrl":"https://github.com/acme/legit","ref":"v1"},
+		"../../.claude/skills/victim":{"source":"evil/pwn","sourceType":"github","sourceUrl":"https://github.com/evil/pwn","ref":"main"}
+	}}`)
+	fs.commit()
+
+	records, _ := NewSkillsDetector(m).Detect(context.Background(), nil)
+
+	legit := findSkill(records, "agents_user", "legit")
+	if legit == nil || legit.ManagedBy != "skills.sh" {
+		t.Fatalf("legit skill should be enriched via its safe key: %+v", legit)
+	}
+	victim := findSkill(records, "claude_user", "victim")
+	if victim == nil {
+		t.Fatal("victim skill missing")
+	}
+	if victim.ManagedBy != "" {
+		t.Errorf("victim enriched via a traversal lock key (ManagedBy=%q) — key sanitization failed", victim.ManagedBy)
+	}
+	if victim.SourceSlug != "" || victim.SourceURL != "" {
+		t.Errorf("victim provenance forged: slug=%q url=%q", victim.SourceSlug, victim.SourceURL)
+	}
+}
+
 func TestDetect_LockMalformed(t *testing.T) {
 	m, fs := newSkillsMock()
 	fs.addSkill(testHome+"/.agents/skills/s", "SKILL.md", validFrontmatter("s", "d"), nil)
@@ -1185,6 +1434,100 @@ func TestDetect_PanicStillSetsScanInfo(t *testing.T) {
 	}
 	if !hasErrorContaining(info.Errors, "panic in skills detect") {
 		t.Errorf("recovered panic must be recorded in Errors, got %v", info.Errors)
+	}
+	if !info.Truncated {
+		t.Error("a recovered panic aborts the walk mid-flight — Truncated must be set so the backend suppresses deletions")
+	}
+}
+
+func TestDetect_DeadlineMarksTruncated(t *testing.T) {
+	m, fs := newSkillsMock()
+	fs.addSkill(testHome+"/.claude/skills/s", "SKILL.md", validFrontmatter("s", "d"), nil)
+	fs.commit()
+
+	// A pre-cancelled context short-circuits the walk: the inventory is partial
+	// and must be flagged so the backend does not treat it as authoritative.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, info := NewSkillsDetector(m).Detect(ctx, nil)
+	if !info.Truncated {
+		t.Error("a cancelled/deadline-exceeded scan must set Truncated")
+	}
+	if !hasErrorContaining(info.Errors, "incomplete") {
+		t.Errorf("expected an 'incomplete' error, got %v", info.Errors)
+	}
+}
+
+// seedOverCapSkills spreads >maxSkillsTotal skills across several project roots
+// so no single root hits its own 500-skill cap; only the aggregate cap should
+// trip. Returns the extra project roots to pass to Detect.
+func seedOverCapSkills(fs *fakeFS) []string {
+	const projects, perProject = 5, 450 // 2250 > maxSkillsTotal (2000)
+	var extra []string
+	for p := range projects {
+		proj := fmt.Sprintf("/work/proj%d", p)
+		extra = append(extra, proj)
+		for i := range perProject {
+			dir := filepath.Join(proj, ".claude", "skills", fmt.Sprintf("s%04d", i))
+			fs.addSkill(dir, "SKILL.md", validFrontmatter(fmt.Sprintf("n%d_%04d", p, i), "d"), nil)
+		}
+	}
+	fs.commit()
+	return extra
+}
+
+func TestDetect_GlobalCapTruncates(t *testing.T) {
+	m, fs := newSkillsMock()
+	extra := seedOverCapSkills(fs)
+
+	records, info := NewSkillsDetector(m).Detect(context.Background(), extra)
+	if len(records) != maxSkillsTotal {
+		t.Errorf("len(records) = %d, want %d (global cap)", len(records), maxSkillsTotal)
+	}
+	if info.SkillsFound != maxSkillsTotal {
+		t.Errorf("SkillsFound = %d, want %d", info.SkillsFound, maxSkillsTotal)
+	}
+	if !info.Truncated {
+		t.Error("exceeding the global cap must set Truncated")
+	}
+	if !hasErrorContaining(info.Errors, "capped") {
+		t.Errorf("expected a 'capped' error, got %v", info.Errors)
+	}
+}
+
+// xdgPanicExec panics on the XDG_STATE_HOME lookup, which happens only inside
+// applyLocks — i.e. AFTER every root has been enumerated — standing in for a
+// late-phase panic with a full discovery accumulator.
+type xdgPanicExec struct {
+	*executor.Mock
+}
+
+func (p xdgPanicExec) Getenv(key string) string {
+	if key == "XDG_STATE_HOME" {
+		panic("injected late boom")
+	}
+	return p.Mock.Getenv(key)
+}
+
+func TestDetect_PanicRecoveryAppliesGlobalCap(t *testing.T) {
+	m, fs := newSkillsMock()
+	extra := seedOverCapSkills(fs)
+
+	records, info := NewSkillsDetector(xdgPanicExec{m}).Detect(context.Background(), extra)
+	if !hasErrorContaining(info.Errors, "panic in skills detect") {
+		t.Fatalf("expected the recovered panic in Errors, got %v", info.Errors)
+	}
+	// The recovery path must apply the same aggregate cap as the normal return —
+	// a late panic must not ship an uncapped record list.
+	if len(records) != maxSkillsTotal {
+		t.Errorf("len(records) = %d, want %d (cap applies in recovery)", len(records), maxSkillsTotal)
+	}
+	if info.SkillsFound != maxSkillsTotal {
+		t.Errorf("SkillsFound = %d, want %d", info.SkillsFound, maxSkillsTotal)
+	}
+	if !info.Truncated {
+		t.Error("recovered panic must leave the scan marked Truncated")
 	}
 }
 

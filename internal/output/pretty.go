@@ -127,7 +127,11 @@ func Pretty(w io.Writer, result *model.ScanResult, colorMode string) error {
 
 	// AGENT SKILLS
 	printSectionHeader(w, c, "AGENT SKILLS", result.Summary.AgentSkillsCount)
-	if len(result.AgentSkills) > 0 {
+	if result.AgentSkillScan == nil {
+		// Distinguish "scan didn't run" (feature gate off — nil scan info) from
+		// "scanned, found nothing" ("None detected" below).
+		fmt.Fprintf(w, "    %sNot scanned%s\n", c.dim, c.reset)
+	} else if len(result.AgentSkills) > 0 {
 		for _, s := range result.AgentSkills {
 			tag := ""
 			if s.ManagedBy != "" {

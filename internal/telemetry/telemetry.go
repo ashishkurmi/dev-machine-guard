@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -1247,9 +1248,11 @@ func totalSystemPackagesCount(scans []model.SystemPackageScanResult) int {
 
 // collectProjectRoots flattens the enterprise node and python project lists
 // into a deduplicated []string of project roots for the skills detector's
-// per-project discovery. NodeScanResult keys off ProjectPath, ProjectInfo off
-// Path; empties are dropped and first occurrence wins. The skills detector
-// re-resolves, re-dedupes and sorts internally, so ordering here is immaterial.
+// per-project discovery. NodeScanResult.ProjectPath is already a project root;
+// python ProjectInfo.Path is the venv directory, so it is mapped up to its
+// parent — skills live under <project>/.claude/skills, not <venv>/.claude/skills.
+// Empties are dropped and first occurrence wins. The skills detector re-resolves,
+// re-dedupes and sorts internally, so ordering here is immaterial.
 func collectProjectRoots(nodeProjects []model.NodeScanResult, pythonProjects []model.ProjectInfo) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -1264,7 +1267,12 @@ func collectProjectRoots(nodeProjects []model.NodeScanResult, pythonProjects []m
 		add(n.ProjectPath)
 	}
 	for _, p := range pythonProjects {
-		add(p.Path)
+		// Guard the empty case: filepath.Dir("") == ".", which would inject a bogus
+		// "." root. Non-empty venv paths map up one level to the project root.
+		if p.Path == "" {
+			continue
+		}
+		add(filepath.Dir(p.Path))
 	}
 	return out
 }

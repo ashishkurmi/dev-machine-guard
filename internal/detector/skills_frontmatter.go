@@ -40,6 +40,13 @@ func (d *SkillsDetector) parseSkillMD(mdPath string) skillMeta {
 	if fi, err := d.exec.Stat(mdPath); err != nil {
 		m.frontmatterError = "unreadable"
 		return m
+	} else if !fi.Mode().IsRegular() {
+		// Defense-in-depth behind findSkillMD's DirEntry check: a non-regular file
+		// (FIFO/socket/device) would block the ReadFile below forever (os.ReadFile,
+		// no ctx). Stat mode is authoritative here (no DirEntry). Residual open-time
+		// TOCTOU accepted — the real close needs a ctx-aware / O_NONBLOCK open.
+		m.frontmatterError = "unreadable"
+		return m
 	} else if fi.Size() > maxSkillMDReadBytes {
 		m.frontmatterError = "file_too_large"
 		return m
@@ -112,22 +119,58 @@ func (d *SkillsDetector) parseSkillMD(mdPath string) skillMeta {
 }
 
 // splitFrontmatter detects a leading YAML frontmatter fence. Frontmatter exists
-// only when the content (after leading whitespace) starts with "---" and a
-// closing "---" fence follows (≥3 chunks when split), so a body horizontal-rule
-// is not misread as frontmatter. Returns the YAML block,
-// the remaining body, and whether frontmatter was found.
+// only when the first non-blank line is a fence — a line whose content trimmed
+// of spaces/tabs/CR is exactly "---" (leading whitespace tolerated, matching the
+// lenient open detection this parser has always applied) — and a later closing
+// "---" line follows. The closing fence must start at column zero (only trailing
+// spaces/CR tolerated), per the YAML document-marker rule, so an indented "---"
+// inside a block scalar (e.g. under `description: |`) stays scalar content
+// instead of closing the frontmatter early and silently dropping every field
+// after it. Scanning line by line rather than splitting on the "---" substring
+// means a "---" inside a quoted YAML value (e.g. `description: "a---b"`) or a
+// body horizontal rule is never mistaken for a fence. The returned fm and body
+// are slices of the original content, so CRLF endings, trailing spaces, and a
+// missing final newline all survive verbatim for the frontmatter YAML parse and
+// the downstream body shell-scan.
 func splitFrontmatter(content string) (fm, body string, ok bool) {
-	s := strings.TrimLeft(content, " \t\r\n")
-	if !strings.HasPrefix(s, "---") {
-		return "", "", false
+	n := len(content)
+	pos := 0
+	fmStart := -1
+	// Opening fence: skip only leading blank lines; the first content line must
+	// be a standalone "---" or there is no frontmatter.
+	for pos < n {
+		line, lineEnd := content[pos:], n
+		if nl := strings.IndexByte(content[pos:], '\n'); nl >= 0 {
+			line, lineEnd = content[pos:pos+nl], pos+nl+1
+		}
+		t := strings.Trim(line, " \t\r")
+		if t == "" {
+			pos = lineEnd
+			continue
+		}
+		if t != "---" {
+			return "", "", false
+		}
+		fmStart, pos = lineEnd, lineEnd
+		break
 	}
-	parts := strings.Split(s, "---")
-	if len(parts) < 3 {
-		return "", "", false // unterminated fence
+	if fmStart < 0 {
+		return "", "", false // no content
 	}
-	// parts[0] is "" (before the opening fence); parts[1] is the YAML block;
-	// the body is everything after, rejoined so body "---" rules survive.
-	return parts[1], strings.Join(parts[2:], "---"), true
+	// Closing fence: the next "---" line starting at column zero (TrimRight, not
+	// Trim — an indented "---" is block-scalar content, never a fence). fm is the
+	// bytes between the fences; body is everything after the closing fence line.
+	for pos < n {
+		lineStart, line, lineEnd := pos, content[pos:], n
+		if nl := strings.IndexByte(content[pos:], '\n'); nl >= 0 {
+			line, lineEnd = content[pos:pos+nl], pos+nl+1
+		}
+		if strings.TrimRight(line, " \t\r") == "---" {
+			return content[fmStart:lineStart], content[lineEnd:], true
+		}
+		pos = lineEnd
+	}
+	return "", "", false // unterminated fence
 }
 
 // hasLoadTimeShellExec reports whether a skill body contains Claude Code

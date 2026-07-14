@@ -19,6 +19,7 @@ const (
 	maxSkillWalkDepth   = 10      // recursive discovery + intra-skill walk
 	maxDirsPerRoot      = 2000    // dirs visited per root before truncating
 	maxSkillsPerRoot    = 500     // skill dirs emitted per root before truncating
+	maxSkillsTotal      = 2000    // aggregate skill records emitted across all roots (matches backend payload cap)
 	maxProjects         = 200     // project roots probed (sorted, deterministic)
 	maxSkillMDReadBytes = 1 << 20 // 1 MiB SKILL.md frontmatter read cap
 	maxJSONConfigBytes  = 5 << 20 // 5 MiB cap on a parsed JSON config (lock file)
@@ -126,8 +127,10 @@ func (d *SkillsDetector) Detect(ctx context.Context, extraProjectRoots []string)
 	defer func() {
 		if r := recover(); r != nil {
 			d.addError(info, fmt.Sprintf("panic in skills detect: %v", r))
-			skills = collapseSymlinkShadows(discovered)
-			sortSkills(skills)
+			// A panic aborted the walk mid-flight — the inventory is partial. Mark it
+			// so the backend keeps the scan non-authoritative and suppresses deletions.
+			info.Truncated = true
+			skills = d.finalizeSkills(discovered, info)
 			info.SkillsFound = len(skills)
 			info.DurationMs = time.Since(start).Milliseconds()
 		}
@@ -157,16 +160,42 @@ func (d *SkillsDetector) Detect(ctx context.Context, extraProjectRoots []string)
 	// disk is not an install and is dropped — the inventory is on-disk skills only.
 	discovered = d.applyLocks(discovered, projects, info)
 
-	// Collapse symlink shadows: one record per physical skill dir, the linked
-	// roots recorded in symlink_sources.
-	skills = collapseSymlinkShadows(discovered)
+	// Collapse symlink shadows, sort, and apply the aggregate cap — shared with
+	// the panic-recovery path so both return identically bounded, ordered records.
+	skills = d.finalizeSkills(discovered, info)
 
-	// Deterministic ordering: (source, project_path, skill_slug).
-	sortSkills(skills)
+	// A deadline or parent cancellation short-circuits the walk, yielding a
+	// partial inventory. Mark it truncated so the backend does not treat this scan
+	// as authoritative and delete records for skills we simply never reached.
+	if ctx.Err() != nil {
+		info.Truncated = true
+		d.addError(info, fmt.Sprintf("skills phase incomplete: %v", ctx.Err()))
+	}
 
 	info.SkillsFound = len(skills)
 	info.DurationMs = time.Since(start).Milliseconds()
 	return skills, info
+}
+
+// finalizeSkills projects the accumulated discoveries into the final record
+// list: collapse symlink shadows (one record per physical skill dir, the linked
+// roots recorded in symlink_sources), sort deterministically by (source,
+// project_path, skill_slug), and enforce the aggregate cap. The per-root caps
+// reset per root, so the total can exceed the backend's payload limit; capping
+// the sorted list keeps the retained prefix deterministic and matched to the
+// backend's own truncation, and Truncated tells the backend the scan is
+// non-authoritative so it suppresses deletions. Detect's normal return and its
+// panic-recovery path both funnel through here so a late panic cannot bypass
+// the cap.
+func (d *SkillsDetector) finalizeSkills(discovered []discoveredSkill, info *model.AgentSkillScanInfo) []model.AgentSkill {
+	skills := collapseSymlinkShadows(discovered)
+	sortSkills(skills)
+	if len(skills) > maxSkillsTotal {
+		info.Truncated = true
+		d.addError(info, fmt.Sprintf("skills truncated: %d found, capped at %d", len(skills), maxSkillsTotal))
+		skills = skills[:maxSkillsTotal]
+	}
+	return skills
 }
 
 // resolveGlobalRoots expands the global/system source table for the
@@ -520,7 +549,14 @@ func (d *SkillsDetector) addError(info *model.AgentSkillScanInfo, msg string) {
 // qualifies; only regular files do.
 func findSkillMD(entries []os.DirEntry) (string, bool) {
 	for _, e := range entries {
-		if e.IsDir() || e.Type()&os.ModeSymlink != 0 {
+		// Only a regular file qualifies. e.Type() (not e.Info()) is authoritative:
+		// os.ReadDir resolves DT_UNKNOWN so the type bits are reliable, and this one
+		// check subsumes the dir/symlink skips while also rejecting a FIFO/socket/
+		// device named SKILL.md — parseSkillMD's os.ReadFile would block forever on a
+		// reader-less FIFO (no ctx), hanging the synchronous scan. Residual TOCTOU
+		// (regular at check, swapped before read) is accepted; closing it needs a
+		// ctx-aware / O_NONBLOCK open, out of scope here.
+		if !e.Type().IsRegular() {
 			continue
 		}
 		if e.Name() == "SKILL.md" {

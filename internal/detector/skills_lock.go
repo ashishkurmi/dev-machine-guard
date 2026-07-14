@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/step-security/dev-machine-guard/internal/model"
 )
@@ -95,9 +96,17 @@ func (d *SkillsDetector) loadLock(lockPath, installBase string, info *model.Agen
 	// hostile multi-GB skills-lock.json cannot balloon RSS (the sibling node/python
 	// dist scanners cap their lockfile reads the same way). Stat errors fall
 	// through to ReadFile, which treats a missing file as "absent, not an error".
-	if fi, err := d.exec.Stat(lockPath); err == nil && fi.Size() > maxJSONConfigBytes {
-		d.addError(info, fmt.Sprintf("lock %s exceeds %d bytes — skipped", lockPath, maxJSONConfigBytes))
-		return nil
+	if fi, err := d.exec.Stat(lockPath); err == nil {
+		if !fi.Mode().IsRegular() {
+			// A non-regular lock path (FIFO/socket/device) would block the ReadFile
+			// below forever (os.ReadFile, no ctx). Skip it.
+			d.addError(info, fmt.Sprintf("lock %s is not a regular file — skipped", lockPath))
+			return nil
+		}
+		if fi.Size() > maxJSONConfigBytes {
+			d.addError(info, fmt.Sprintf("lock %s exceeds %d bytes — skipped", lockPath, maxJSONConfigBytes))
+			return nil
+		}
 	}
 	content, err := d.exec.ReadFile(lockPath)
 	if err != nil || len(content) == 0 {
@@ -129,6 +138,14 @@ func parseLock(content []byte, lockPath, installBase string) ([]lockEntry, error
 
 	out := make([]lockEntry, 0, len(names))
 	for _, n := range names {
+		if !isSafeLockKey(n) {
+			// The key is the install folder name and is joined onto installBase to
+			// build expectedDir; a traversal/absolute key from an untrusted project
+			// lock could redirect that path to a victim scope and forge its
+			// provenance. Drop the hostile entry but keep parsing the rest of the
+			// file (a single bad key must not blank the whole inventory).
+			continue
+		}
 		r := env.Skills[n]
 		out = append(out, lockEntry{
 			localName:       n,
@@ -146,6 +163,27 @@ func parseLock(content []byte, lockPath, installBase string) ([]lockEntry, error
 		})
 	}
 	return out, nil
+}
+
+// isSafeLockKey reports whether a lock "skills" map key is safe to join onto the
+// install base as a single folder name. The key is untrusted (it comes from a
+// project skills-lock.json present in any cloned repo), so anything that could
+// escape the install base or name a volume/stream — a path separator, a "..",
+// an empty/dot name, or a ":" (Windows drive / NTFS ADS) — is rejected.
+func isSafeLockKey(n string) bool {
+	if n == "" || n == "." || n == ".." {
+		return false
+	}
+	if strings.ContainsAny(n, `/\`) { // both separators, cross-OS
+		return false
+	}
+	if strings.Contains(n, "..") {
+		return false
+	}
+	if strings.Contains(n, ":") { // Windows volume / NTFS ADS
+		return false
+	}
+	return true
 }
 
 // enrichWithLock stamps skills.sh provenance onto a matched folder record. It
