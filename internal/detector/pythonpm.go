@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/step-security/dev-machine-guard/internal/execguard"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/progress"
@@ -61,6 +62,8 @@ func (d *PythonPMDetector) DetectManagers(ctx context.Context) []model.PkgManage
 		// layouts carry the version in the install path.
 		if v := versionmeta.FromBinary(ctx, d.exec, path); v != "" {
 			version = v
+		} else if !execguard.SafeToExec(ctx, d.exec, path) {
+			d.log.Warn("skipping %s version probe: quarantined and rejected by Gatekeeper", path)
 		} else {
 			d.log.Progress("exec fallback: running %s %s (no metadata version source)", pm.Binary, pm.VersionCmd)
 			stdout, _, _, err := d.exec.RunWithTimeout(ctx, 10*time.Second, pm.Binary, pm.VersionCmd)

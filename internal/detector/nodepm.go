@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/step-security/dev-machine-guard/internal/execguard"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/progress"
@@ -59,7 +60,9 @@ func (d *NodePMDetector) DetectManagers(ctx context.Context) []model.PkgManager 
 			// the version without launching anything.
 			version = versionmeta.FromBinary(ctx, d.exec, path)
 		}
-		if path != "" && version == "" {
+		if path != "" && version == "" && !execguard.SafeToExec(ctx, d.exec, path) {
+			d.log.Warn("skipping %s version probe: quarantined and rejected by Gatekeeper", path)
+		} else if path != "" && version == "" {
 			d.log.Progress("exec fallback: running %s %s (no metadata version source)", pm.Binary, pm.VersionCmd)
 			stdout, _, _, err := d.exec.RunWithTimeout(ctx, 10*time.Second, pm.Binary, pm.VersionCmd)
 			if err == nil {

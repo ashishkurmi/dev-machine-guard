@@ -410,3 +410,30 @@ func TestAICLIDetector_VersionExecFallback(t *testing.T) {
 	}
 	t.Fatal("aider not found")
 }
+
+// TestAICLIDetector_SkipsQuarantinedBinary pins the Gatekeeper pre-exec
+// guard: a quarantined, spctl-rejected binary with no metadata version must
+// NOT be executed for its version — executing it would pop the macOS "could
+// not verify" dialog. The `--version` stub answers 9.9.9, so a regression
+// that re-enables the exec would flip the asserted version off "unknown".
+func TestAICLIDetector_SkipsQuarantinedBinary(t *testing.T) {
+	binary := "/usr/local/bin/aider"
+	mock := executor.NewMock()
+	mock.SetPath("aider", binary)
+	mock.SetCommand("0083;65a1b2c3;Safari;", "", 0, "/usr/bin/xattr", "-p", "com.apple.quarantine", binary)
+	mock.SetCommand("", "rejected", 3, "/usr/sbin/spctl", "--assess", "--type", "execute", binary)
+	mock.SetCommand("aider 9.9.9\n", "", 0, binary, "--version")
+
+	det := NewAICLIDetector(mock)
+	results := det.Detect(context.Background())
+
+	for _, r := range results {
+		if r.Name == "aider" {
+			if r.Version != "unknown" {
+				t.Errorf("expected version unknown (exec skipped by Gatekeeper guard), got %s", r.Version)
+			}
+			return
+		}
+	}
+	t.Fatal("aider not found — the guard must skip the exec, not the tool")
+}

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/step-security/dev-machine-guard/internal/execguard"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/progress"
@@ -89,6 +90,10 @@ func (d *FrameworkDetector) getVersion(ctx context.Context, binaryPath string) s
 	// prepend to --version.
 	if v := versionmeta.FromBinary(ctx, d.exec, binaryPath); v != "" {
 		return v
+	}
+	if !execguard.SafeToExec(ctx, d.exec, binaryPath) {
+		d.log.Warn("skipping %s version probe: quarantined and rejected by Gatekeeper", binaryPath)
+		return "unknown"
 	}
 	d.log.Progress("exec fallback: running %s --version (no metadata version source)", binaryPath)
 	stdout, _, _, err := d.exec.RunWithTimeout(ctx, 10*time.Second, binaryPath, "--version")

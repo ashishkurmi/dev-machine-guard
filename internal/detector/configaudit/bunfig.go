@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/step-security/dev-machine-guard/internal/execguard"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/progress"
@@ -273,6 +274,10 @@ func (d *BunDetector) bunVersion(ctx context.Context) string {
 	if path, err := d.exec.LookPath("bun"); err == nil {
 		if v := versionmeta.FromBinary(ctx, d.exec, path); v != "" {
 			return v
+		}
+		if !execguard.SafeToExec(ctx, d.exec, path) {
+			d.log.Warn("skipping %s version probe: quarantined and rejected by Gatekeeper", path)
+			return "unknown"
 		}
 	}
 	d.log.Progress("exec fallback: running bun --version (no metadata version source)")

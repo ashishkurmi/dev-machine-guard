@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/step-security/dev-machine-guard/internal/execguard"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/progress"
@@ -47,6 +48,10 @@ var cliToolDefinitions = []cliToolSpec{
 		Binaries:   []string{"kiro-cli", "kiro", "q"},
 		ConfigDirs: []string{"~/.q", "~/.kiro", "~/.aws/q"},
 		VerifyFunc: func(ctx context.Context, exec executor.Executor, log *progress.Logger, binary string) bool {
+			if !execguard.SafeToExec(ctx, exec, binary) {
+				log.Warn("skipping %s: quarantined and rejected by Gatekeeper — cannot verify identity", binary)
+				return false
+			}
 			log.Progress("exec fallback: running %s --version (amazon-q identity check)", binary)
 			stdout, _, _, err := exec.RunWithTimeout(ctx, 10*time.Second, binary, "--version")
 			if err != nil {
@@ -69,6 +74,10 @@ var cliToolDefinitions = []cliToolSpec{
 			// identity from its manifest avoids exec'ing the binary at all.
 			if versionmeta.NPMPackageName(exec, binary) == "@github/copilot" {
 				return true
+			}
+			if !execguard.SafeToExec(ctx, exec, binary) {
+				log.Warn("skipping %s: quarantined and rejected by Gatekeeper — cannot verify identity", binary)
+				return false
 			}
 			log.Progress("exec fallback: running %s --version (copilot identity check)", binary)
 			stdout, _, exitCode, err := exec.RunWithTimeout(ctx, 10*time.Second, binary, "--version")
@@ -230,6 +239,10 @@ func (d *AICLIDetector) getVersion(ctx context.Context, spec cliToolSpec, binary
 	flag := "--version"
 	if spec.VersionFlag != "" {
 		flag = spec.VersionFlag
+	}
+	if !execguard.SafeToExec(ctx, d.exec, binaryPath) {
+		d.log.Warn("skipping %s version probe: quarantined and rejected by Gatekeeper", binaryPath)
+		return "unknown"
 	}
 	d.log.Progress("exec fallback: running %s %s (no metadata version source)", binaryPath, flag)
 	stdout, _, _, err := d.exec.RunWithTimeout(ctx, 10*time.Second, binaryPath, flag)
