@@ -9,6 +9,8 @@ import (
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
+	"github.com/step-security/dev-machine-guard/internal/progress"
+	"github.com/step-security/dev-machine-guard/internal/versionmeta"
 )
 
 // pmBinaryCandidateDirs returns an ordered list of directories where Node.js
@@ -126,7 +128,7 @@ func pmBinaryFilenames(exec executor.Executor, binary string) []string {
 // version, or — when no probed binary yields a version — the first one that
 // merely exists (so the caller can still report a path with version "unknown").
 // Both are "" when the binary is found in no candidate dir.
-func resolveNodePMFromDefaults(ctx context.Context, exec executor.Executor, binary, versionCmd string) (path, version string) {
+func resolveNodePMFromDefaults(ctx context.Context, exec executor.Executor, log *progress.Logger, binary, versionCmd string) (path, version string) {
 	dirs := pmBinaryCandidateDirs(exec)
 	filenames := pmBinaryFilenames(exec, binary)
 	for _, dir := range dirs {
@@ -138,7 +140,7 @@ func resolveNodePMFromDefaults(ctx context.Context, exec executor.Executor, bina
 			if path == "" {
 				path = candidate
 			}
-			if v := runPMVersion(ctx, exec, dirs, candidate, versionCmd); v != "" {
+			if v := runPMVersion(ctx, exec, log, dirs, candidate, versionCmd); v != "" {
 				return candidate, v
 			}
 		}
@@ -162,7 +164,13 @@ func resolveNodePMFromDefaults(ctx context.Context, exec executor.Executor, bina
 //
 // On Windows the .cmd shims locate node relative to themselves and there is no
 // launchd stripped-PATH problem, so the binary is invoked directly.
-func runPMVersion(ctx context.Context, exec executor.Executor, dirs []string, binPath, versionCmd string) string {
+func runPMVersion(ctx context.Context, exec executor.Executor, log *progress.Logger, dirs []string, binPath, versionCmd string) string {
+	// Static-first, exec-last (AGENTS.md §3.4) — metadata needs no PATH
+	// bridge at all, so it also sidesteps the sh -c wrapper below.
+	if v := versionmeta.FromBinary(ctx, exec, binPath); v != "" {
+		return v
+	}
+	log.Progress("exec fallback: running %s %s (no metadata version source)", binPath, versionCmd)
 	if exec.GOOS() == model.PlatformWindows {
 		stdout, _, _, err := exec.RunWithTimeout(ctx, 10*time.Second, binPath, versionCmd)
 		if err != nil {
