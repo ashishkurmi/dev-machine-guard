@@ -284,7 +284,7 @@ const (
 	// Bounds what retained request history may expand to across one file. The
 	// history is gzip over JSON, so a file within the read cap can inflate to far
 	// more than the cap admitted.
-	insomniaMaxExpanded = 1 << 20
+	insomniaMaxExpanded = 8 << 20
 	// The key under which an environment mirrors its secret-typed variables.
 	insomniaVaultKey = "__insomnia_vault"
 )

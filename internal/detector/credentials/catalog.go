@@ -43,6 +43,8 @@ const (
 	// Larger because a kubeconfig legitimately accumulates one cluster entry
 	// per environment, each with an embedded CA certificate.
 	capKubeconfig = 4 << 20 // 4 MiB
+	// Application databases include request bodies and retained revisions.
+	capInsomnia = 8 << 20 // 8 MiB
 )
 
 // Result-shape caps. Hitting either sets both `truncated` and
@@ -382,7 +384,7 @@ var sources = []source{
 		ID:        sourceInsomnia,
 		Category:  model.CredentialCategoryAPIClients,
 		Mode:      readFile,
-		MaxBytes:  capConfig,
+		MaxBytes:  capInsomnia,
 		Match:     matchAll,
 		Overrides: insomniaOverrides(),
 		Locations: insomniaLocations(),

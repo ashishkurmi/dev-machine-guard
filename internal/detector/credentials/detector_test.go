@@ -275,7 +275,7 @@ func runDetectCases(t *testing.T, cases []detectCase) {
 			// A guarded case names a location that was never created: a refusal
 			// reported for a path that is not there proves the decision came
 			// before any access, since probing first would have found silence.
-			if tc.guard {
+			if tc.guard && tc.noFinding {
 				for name, path := range env {
 					if _, err := os.Stat(path); !os.IsNotExist(err) {
 						t.Fatalf("%s names %s, which exists; the case proves nothing", name, path)
@@ -1119,7 +1119,7 @@ func TestDetect_InsomniaDatabases(t *testing.T) {
 		// says the count is a lower bound.
 		{
 			name: "a database past the byte cap", source: sourceInsomnia,
-			tree: map[string]string{insomniaRel("insomnia.Request.db"): insomniaBody + strings.Repeat("\n", capConfig)},
+			tree: map[string]string{insomniaRel("insomnia.Request.db"): insomniaBody + strings.Repeat("\n", capInsomnia)},
 			want: obsPlain(2), reason: model.CredentialReasonCapped, incomplete: true, truncated: true,
 		},
 		{
@@ -1138,4 +1138,99 @@ func TestDetect_InsomniaDatabases(t *testing.T) {
 			reason: model.CredentialReasonUnrecognizedFormat, noFinding: true, incomplete: true,
 		},
 	})
+}
+
+func TestDetect_InsomniaLibraryGuard(t *testing.T) {
+	if runtime.GOOS != model.PlatformDarwin {
+		t.Skip("macOS consent guard")
+	}
+	runDetectCases(t, []detectCase{
+		{name: "default database", guard: true, source: sourceInsomnia,
+			tree: map[string]string{insomniaRel("insomnia.Request.db"): insomniaBody}, want: obsPlain(2), noError: true},
+		{name: "override to default directory", guard: true, source: sourceInsomnia,
+			tree: map[string]string{insomniaRel("insomnia.Request.db"): insomniaBody},
+			env:  map[string]string{"INSOMNIA_DATA_PATH": "{home}/Library/Application Support/Insomnia"}, want: obsPlain(2), noError: true},
+		{name: "safe override", guard: true, source: sourceInsomnia,
+			tree: map[string]string{"custom/insomnia.Request.db": insomniaBody},
+			env:  map[string]string{"INSOMNIA_DATA_PATH": "{home}/custom"}, want: obsPlain(2), noError: true},
+		{name: "sibling override", guard: true, source: sourceInsomnia,
+			env:       map[string]string{"INSOMNIA_DATA_PATH": "{home}/Library/Application Support/Insomnia-backup"},
+			noFinding: true, reason: model.CredentialReasonRefusedTCC, incomplete: true},
+		{name: "nested override", guard: true, source: sourceInsomnia,
+			env:       map[string]string{"INSOMNIA_DATA_PATH": "{home}/Library/Application Support/Insomnia/backup"},
+			noFinding: true, reason: model.CredentialReasonRefusedTCC, incomplete: true},
+		{name: "protected override", guard: true, source: sourceInsomnia,
+			env:       map[string]string{"INSOMNIA_DATA_PATH": "{home}/Documents"},
+			noFinding: true, reason: model.CredentialReasonRefusedTCC, incomplete: true},
+		{name: "other source retains guard", guard: true, source: sourceAWSCredentials,
+			env:       map[string]string{"AWS_SHARED_CREDENTIALS_FILE": "{home}/Library/Application Support/Insomnia/insomnia.Request.db"},
+			noFinding: true, reason: model.CredentialReasonRefusedTCC, incomplete: true},
+	})
+	for _, tc := range []struct {
+		name, target string
+		directory    bool
+	}{
+		{"file to Mail", "Library/Mail/credential", false},
+		{"file to sibling", "Library/Application Support/Insomnia-backup/credential", false},
+		{"file to unlisted database", "Library/Application Support/Insomnia/insomnia.Settings.db", false},
+		{"directory to Documents", "Documents", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := testHome(t)
+			link := filepath.Join(home, insomniaRel("insomnia.Request.db"))
+			if tc.directory {
+				link = filepath.Dir(link)
+			}
+			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// The target is absent: a refusal proves the guard ran before its stat.
+			if err := os.Symlink(filepath.Join(home, tc.target), link); err != nil {
+				t.Fatal(err)
+			}
+			info := New(newMock(t, home)).withEnv(staticEnv(nil)).WithSkipper(tcc.New(home)).Detect(context.Background())
+			if len(info.Findings) != 0 || !hasScanError(info.Errors, sourceInsomnia, model.CredentialReasonRefusedTCC) || info.ScanComplete {
+				t.Fatalf("got %+v, want guarded refusal without findings", info)
+			}
+		})
+	}
+}
+
+func TestDetect_InsomniaLargerDatabases(t *testing.T) {
+	for _, tc := range []struct {
+		name, file       string
+		records, padding int
+		history          bool
+	}{
+		{"requests", "insomnia.Request.db", 2000, 2048, false},
+		{"environments", "insomnia.Environment.db", 2000, 2048, false},
+		{"history", "insomnia.RequestVersion.db", 1000, 4096, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body strings.Builder
+			padding := strings.Repeat("x", tc.padding)
+			packed := compressed(`{"type":"Request","body":{"text":"` + padding + `"}}`)
+			for i := range tc.records {
+				switch {
+				case tc.history:
+					fmt.Fprintf(&body, "{\"_id\":\"rev_%d\",\"type\":\"RequestVersion\",\"compressedRequest\":\"%s\"}\n", i, packed)
+				case tc.name == "environments":
+					fmt.Fprintf(&body, "{\"_id\":\"env_%d\",\"type\":\"Environment\",\"data\":{\"description\":\"%s\"}}\n", i, padding)
+				default:
+					fmt.Fprintf(&body, "{\"_id\":\"req_%d\",\"type\":\"Request\",\"body\":{\"text\":\"%s\"}}\n", i, padding)
+				}
+			}
+			// Material only at the tail: reading a prefix cannot pass this test.
+			if tc.history {
+				fmt.Fprintf(&body, "{\"_id\":\"last\",\"type\":\"RequestVersion\",\"compressedRequest\":\"%s\"}\n", compressed(insomniaBody))
+			} else if tc.name == "environments" {
+				fmt.Fprintf(&body, "{\"_id\":\"last\",\"type\":\"Environment\",\"data\":{\"token\":\"%s\",\"password\":\"%s\"}}\n", canary, canary)
+			} else {
+				body.WriteString(insomniaBody)
+			}
+			t.Logf("records=%d file_bytes=%d expanded_padding_bytes=%d", tc.records+1, body.Len(), tc.records*tc.padding)
+			runDetectCases(t, []detectCase{{name: "tail found", source: sourceInsomnia,
+				tree: map[string]string{insomniaRel(tc.file): body.String()}, want: obsPlain(2), noError: true}})
+		})
+	}
 }
