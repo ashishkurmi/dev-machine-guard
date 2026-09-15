@@ -221,7 +221,9 @@ func (d *Detector) collectCandidate(ctx context.Context, scan *scanState, s sour
 		// credential exists, so nothing is recorded.
 		return false
 	default:
-		scan.addError(s.ID, refusalReason(err))
+		// Once per source: a directory override relocating several files fails
+		// them all for the one reason.
+		scan.addErrorOnce(s.ID, refusalReason(err))
 		return false
 	}
 	if info.IsDir() != (s.Mode == readKeyDir) {
@@ -232,10 +234,11 @@ func (d *Detector) collectCandidate(ctx context.Context, scan *scanState, s sour
 	if s.Mode == readKeyDir {
 		return d.collectKeyDir(ctx, scan, s, path, resolver)
 	}
-	if truncated {
-		// The parse saw a prefix of a longer document, so its count is a lower
-		// bound. Recorded before the count is looked at: a document whose
-		// credentials sit past the cap would otherwise read as empty and complete.
+	if truncated || obs.Capped {
+		// The parse saw a prefix of a longer document, or stopped counting at a
+		// bound of its own, so its count is a lower bound. Recorded before the
+		// count is looked at: a document whose credentials sit past the cap would
+		// otherwise read as empty and complete.
 		scan.markCapped(s.ID)
 	}
 	if obs.Unrecognized {
