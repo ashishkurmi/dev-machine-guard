@@ -419,10 +419,14 @@ func parseInsomnia(data []byte) observation {
 		})
 		for _, id := range order {
 			u := records[id]
+			// Count is bounded, but protection includes every record already read.
+			if protectionRank[u.state] > protectionRank[f.state] {
+				f.state = u.state
+			}
 			for range u.count {
 				if f.count >= insomniaMaxCount {
 					f.capped = true
-					return true
+					break
 				}
 				f.add(u.state)
 			}

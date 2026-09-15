@@ -470,6 +470,19 @@ func TestParseInsomnia_CountBound(t *testing.T) {
 	}
 }
 
+func TestParseInsomnia_CountBoundPreservesProtection(t *testing.T) {
+	var protected strings.Builder
+	for i := range insomniaMaxCount {
+		protected.WriteString(`{"_id":"env_` + strconv.Itoa(i) + `","type":"Environment","data":{"__insomnia_vault":{"token":"` + envelope() + `"}}}` + "\n")
+	}
+	plain := `{"_id":"plain","type":"Environment","data":{"token":"value"}}` + "\n"
+	runParseCases(t, parseInsomnia, []parseCase{
+		{name: "exact bound stays complete", body: protected.String(), want: obsProt(insomniaMaxCount)},
+		{name: "plaintext after count bound", body: protected.String() + plain, want: alsoCapped(obsPlain(insomniaMaxCount))},
+		{name: "plaintext before count bound", body: plain + protected.String(), want: alsoCapped(obsPlain(insomniaMaxCount))},
+	})
+}
+
 // TestParseInsomnia_ObservationCarriesNoValue pins that what the parser returns is
 // counts and states only, whatever the file held.
 func TestParseInsomnia_ObservationCarriesNoValue(t *testing.T) {
