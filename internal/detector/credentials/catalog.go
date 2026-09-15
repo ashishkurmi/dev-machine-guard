@@ -194,6 +194,10 @@ var insomniaFiles = []string{
 	"insomnia.GrpcRequest.db",
 	"insomnia.ClientCertificate.db",
 	"insomnia.RequestVersion.db",
+	"insomnia.GitCredentials.db",
+	"insomnia.GitRepository.db",
+	"insomnia.CloudCredential.db",
+	"insomnia.UserSession.db",
 }
 
 // insomniaLocations spells the data directory per platform for every database

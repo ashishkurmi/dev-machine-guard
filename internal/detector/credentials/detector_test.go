@@ -1140,6 +1140,28 @@ func TestDetect_InsomniaDatabases(t *testing.T) {
 	})
 }
 
+func TestDetect_InsomniaAccountStores(t *testing.T) {
+	for _, tc := range []struct {
+		file, body string
+		want       observation
+	}{
+		{"insomnia.GitCredentials.db", `{"_id":"git_1","type":"GitCredentials","credentials":{"token":"` + canary + `"}}`, obsPlain(1)},
+		{"insomnia.GitRepository.db", `{"_id":"repo_1","type":"GitRepository","credentials":{"password":"` + canary + `"}}`, obsPlain(1)},
+		{"insomnia.CloudCredential.db", `{"_id":"cloud_1","type":"CloudCredential","provider":"aws","credentials":{"secretAccessKey":"` + canary + `"}}`, obsPlain(1)},
+		{"insomnia.UserSession.db", `{"_id":"usr_1","type":"UserSession","id":"` + canary + `","symmetricKey":{"kty":"oct","k":"` + canary + `"}}`, obsPlain(2)},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			runDetectCases(t, []detectCase{
+				{name: "default location", source: sourceInsomnia, guard: runtime.GOOS == model.PlatformDarwin,
+					tree: map[string]string{insomniaRel(tc.file): tc.body}, want: tc.want, location: insomniaLocation(tc.file), noError: true},
+				{name: "relocated data directory", source: sourceInsomnia,
+					tree: map[string]string{"elsewhere/" + tc.file: tc.body}, want: tc.want,
+					env: map[string]string{"INSOMNIA_DATA_PATH": "{home}/elsewhere"}, location: "$HOME/elsewhere/" + tc.file, noError: true},
+			})
+		})
+	}
+}
+
 func TestDetect_InsomniaLibraryGuard(t *testing.T) {
 	if runtime.GOOS != model.PlatformDarwin {
 		t.Skip("macOS consent guard")

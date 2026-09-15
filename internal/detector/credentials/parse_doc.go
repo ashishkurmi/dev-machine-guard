@@ -442,6 +442,41 @@ func insomniaRecord(doc map[string]json.RawMessage, budget *int) (u insomniaUnit
 		return u, malformed, false
 	}
 	switch kind {
+	case "GitCredentials", "GitRepository", "CloudCredential":
+		keys := []string{"token", "refreshToken", "password"}
+		var material, bad bool
+		if kind == "GitCredentials" {
+			material, bad = insomniaStoredMaterial(doc, "token", "refreshToken")
+		}
+		if raw := doc["credentials"]; len(raw) != 0 && string(raw) != "null" {
+			credentials, ok := decodeJSONObject(raw)
+			if !ok {
+				bad = true
+			} else {
+				if kind == "CloudCredential" && len(credentials) > 0 {
+					provider, _ := insomniaField(doc, "provider")
+					switch provider {
+					case "aws":
+						keys = []string{"secretAccessKey", "sessionToken"}
+					case "azure":
+						keys = []string{"accessToken"}
+					case "hashicorp":
+						keys = []string{"client_secret", "secret_id", "access_token"}
+					case "gcp":
+						keys = nil // The model stores only a key-file reference.
+					default:
+						return u, true, false
+					}
+				}
+				nested, badNested := insomniaStoredMaterial(credentials, keys...)
+				material, bad = material || nested, bad || badNested
+			}
+		}
+		// Legacy and current representations describe one credential set.
+		if material {
+			u.add(model.CredentialProtectionPlaintext)
+		}
+		return u, bad, false
 	case "RequestGroup":
 		// A folder carries the same authentication and headers a request does,
 		// and an environment of its own.
@@ -469,8 +504,70 @@ func insomniaRecord(doc map[string]json.RawMessage, budget *int) (u insomniaUnit
 		return u, malformed, false
 	case "RequestVersion":
 		return insomniaVersion(doc, budget)
+	case "UserSession":
+		u, malformed = insomniaSession(doc)
+		return u, malformed, false
 	}
 	return u, true, false
+}
+
+func insomniaSession(doc map[string]json.RawMessage) (u insomniaUnit, malformed bool) {
+	material, malformed := insomniaStoredMaterial(doc, "id")
+	if material {
+		u.add(model.CredentialProtectionPlaintext)
+	}
+	material, bad := insomniaSymmetricKey(doc["symmetricKey"])
+	malformed = malformed || bad
+	if material {
+		u.add(model.CredentialProtectionPlaintext)
+	}
+	if raw := doc["encPrivateKey"]; len(raw) != 0 && string(raw) != "null" {
+		key, ok := decodeJSONObject(raw)
+		switch {
+		case !ok:
+			malformed = true
+		case len(key) == 0:
+			// An uninitialized session has an empty key object.
+		case insomniaHex(key, "iv", 24, 24) && insomniaHex(key, "t", 32, 32) &&
+			insomniaHex(key, "ad", 0, -1) && insomniaHex(key, "d", 2, -1):
+			u.add(model.CredentialProtectionProtected)
+		default:
+			malformed = true
+		}
+	}
+	vault, bad := insomniaField(doc, "vaultKey")
+	malformed = malformed || bad
+	if vault != "" {
+		// Without safeStorage, Insomnia saves the base64 JWK in the clear.
+		// Opaque OS-encrypted blobs have no portable envelope; never guess or decrypt.
+		decoded, err := base64.StdEncoding.DecodeString(vault)
+		material, bad := insomniaSymmetricKey(decoded)
+		if err == nil && material && !bad {
+			u.add(model.CredentialProtectionPlaintext)
+		} else {
+			malformed = true
+		}
+	}
+	return u, malformed
+}
+
+func insomniaSymmetricKey(raw json.RawMessage) (material, malformed bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false, false
+	}
+	key, ok := decodeJSONObject(raw)
+	if !ok {
+		return false, true
+	}
+	if len(key) == 0 {
+		return false, false
+	}
+	kind, badKind := insomniaField(key, "kty")
+	value, badValue := insomniaField(key, "k")
+	if badKind || badValue || kind != "oct" || value == "" {
+		return false, true
+	}
+	return true, false
 }
 
 // insomniaRequestRecord reads the record kinds that carry request authentication,
@@ -747,6 +844,15 @@ func insomniaMaterial(obj map[string]json.RawMessage, keys ...string) (material,
 		literal, mixed := insomniaLiteral(value)
 		malformed = malformed || bad || mixed
 		material = material || literal
+	}
+	return material, malformed
+}
+
+// Account and provider stores do not render request templates or shell values.
+func insomniaStoredMaterial(obj map[string]json.RawMessage, keys ...string) (material, malformed bool) {
+	for _, key := range keys {
+		value, bad := insomniaField(obj, key)
+		material, malformed = material || value != "", malformed || bad
 	}
 	return material, malformed
 }

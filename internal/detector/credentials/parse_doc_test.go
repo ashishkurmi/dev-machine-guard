@@ -323,8 +323,66 @@ func TestParseInsomnia_OtherRecords(t *testing.T) {
 	})
 }
 
-// TestParseInsomnia_Database covers the store's own behaviour: appended revisions,
-// tombstones, index lines and the shapes a line can take that are not records.
+func TestParseInsomnia_StoredCredentials(t *testing.T) {
+	runParseCases(t, parseInsomnia, []parseCase{
+		{name: "legacy git tokens", body: `{"_id":"git_1","type":"GitCredentials","token":"value","refreshToken":"value"}`, want: obsPlain(1)},
+		{name: "stored tokens do not render templates", body: `{"_id":"git_1","type":"GitCredentials","token":"{{ literal }}"}`, want: obsPlain(1)},
+		{name: "git oauth tokens", body: `{"_id":"git_1","type":"GitCredentials","provider":"github","credentials":{"token":"value","refreshToken":"value"}}`, want: obsPlain(1)},
+		{name: "git personal access token", body: `{"_id":"git_1","type":"GitCredentials","provider":"custom","credentials":{"username":"user","password":"value"}}`, want: obsPlain(1)},
+		{name: "legacy and current git tokens count once", body: `{"_id":"git_1","type":"GitCredentials","token":"value","credentials":{"token":"value"}}`, want: obsPlain(1)},
+		{name: "native git has no stored credential", body: `{"_id":"git_1","type":"GitCredentials","provider":"native","author":{"name":"user"}}`, want: obsNone},
+		{name: "git username alone", body: `{"_id":"git_1","type":"GitCredentials","credentials":{"username":"user"}}`, want: obsNone},
+		{name: "legacy repository password", body: `{"_id":"repo_1","type":"GitRepository","credentials":{"username":"user","password":"value"}}`, want: obsPlain(1)},
+		{name: "legacy repository oauth", body: `{"_id":"repo_1","type":"GitRepository","credentials":{"token":"value","oauth2format":"github"}}`, want: obsPlain(1)},
+		{name: "repository reference only", body: `{"_id":"repo_1","type":"GitRepository","credentials":null,"credentialsId":"git_1","uri":"https://example.invalid/repo"}`, want: obsNone},
+		{name: "malformed nested git credentials", body: `{"_id":"git_1","type":"GitCredentials","credentials":[]}`, want: obsUnrec},
+		{name: "malformed token beside legacy material", body: `{"_id":"git_1","type":"GitCredentials","token":"value","credentials":{"token":3}}`, want: alsoUnrec(obsPlain(1))},
+	})
+}
+
+func TestParseInsomnia_CloudCredentials(t *testing.T) {
+	runParseCases(t, parseInsomnia, []parseCase{
+		{name: "aws temporary credentials", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"aws","credentials":{"type":"temporary","accessKeyId":"identifier","secretAccessKey":"value","sessionToken":"value"}}`, want: obsPlain(1)},
+		{name: "aws session token alone", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"aws","credentials":{"sessionToken":"value"}}`, want: obsPlain(1)},
+		{name: "aws identifier alone", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"aws","credentials":{"accessKeyId":"identifier"}}`, want: obsNone},
+		{name: "aws file reference", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"aws","credentials":{"type":"file","filePath":"/elsewhere/credentials","section":"default"}}`, want: obsNone},
+		{name: "aws sso reference", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"aws","credentials":{"type":"sso","configFilePath":"/elsewhere/config","section":"default"}}`, want: obsNone},
+		{name: "gcp file reference", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"gcp","credentials":{"serviceAccountKeyFilePath":"/elsewhere/key.json"}}`, want: obsNone},
+		{name: "azure token", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"azure","credentials":{"accessToken":"value","account":{"username":"user"}}}`, want: obsPlain(1)},
+		{name: "hashicorp client credentials", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"hashicorp","credentials":{"client_id":"identifier","client_secret":"value","access_token":"value"}}`, want: obsPlain(1)},
+		{name: "hashicorp approle", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"hashicorp","credentials":{"role_id":"identifier","secret_id":"value"}}`, want: obsPlain(1)},
+		{name: "hashicorp identifiers alone", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"hashicorp","credentials":{"role_id":"identifier","client_id":"identifier"}}`, want: obsNone},
+		{name: "empty cloud record", body: `{"_id":"cloud_1","type":"CloudCredential","credentials":null}`, want: obsNone},
+		{name: "unknown provider", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"future","credentials":{"token":"value"}}`, want: obsUnrec},
+		{name: "malformed credentials", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"aws","credentials":true}`, want: obsUnrec},
+		{name: "malformed secret beside token", body: `{"_id":"cloud_1","type":"CloudCredential","provider":"aws","credentials":{"secretAccessKey":3,"sessionToken":"value"}}`, want: alsoUnrec(obsPlain(1))},
+	})
+}
+
+func TestParseInsomnia_UserSession(t *testing.T) {
+	protected, err := base64.StdEncoding.DecodeString(envelope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := `{"kty":"oct","k":"c3ludGhldGljLWtleQ"}`
+	runParseCases(t, parseInsomnia, []parseCase{
+		{name: "session authentication id", body: `{"_id":"usr_1","type":"UserSession","id":"value"}`, want: obsPlain(1)},
+		{name: "public identity is not a credential", body: `{"_id":"usr_1","type":"UserSession","accountId":"account","email":"user@example.invalid","publicKey":{"kty":"RSA","n":"value","e":"AQAB"},"vaultSalt":"value"}`, want: obsNone},
+		{name: "initial empty session", body: `{"_id":"usr_1","type":"UserSession","id":"","symmetricKey":{},"encPrivateKey":{},"vaultKey":""}`, want: obsNone},
+		{name: "readable symmetric key", body: `{"_id":"usr_1","type":"UserSession","symmetricKey":` + key + `}`, want: obsPlain(1)},
+		{name: "encrypted private key", body: `{"_id":"usr_1","type":"UserSession","encPrivateKey":` + string(protected) + `}`, want: obsProt(1)},
+		{name: "session and both account keys", body: `{"_id":"usr_1","type":"UserSession","id":"value","symmetricKey":` + key + `,"encPrivateKey":` + string(protected) + `}`, want: obsPlain(3)},
+		{name: "vault key readable fallback", body: `{"_id":"usr_1","type":"UserSession","vaultKey":"` + base64.StdEncoding.EncodeToString([]byte(key)) + `"}`, want: obsPlain(1)},
+		{name: "opaque vault key is not assumed plaintext", body: `{"_id":"usr_1","type":"UserSession","vaultKey":"763130001122334455"}`, want: obsUnrec},
+		{name: "opaque vault does not hide session", body: `{"_id":"usr_1","type":"UserSession","id":"value","vaultKey":"opaque"}`, want: alsoUnrec(obsPlain(1))},
+		{name: "public key shape in symmetric slot", body: `{"_id":"usr_1","type":"UserSession","symmetricKey":{"kty":"RSA","n":"value"}}`, want: obsUnrec},
+		{name: "missing private ciphertext", body: `{"_id":"usr_1","type":"UserSession","encPrivateKey":{"iv":"00112233445566778899aabb","t":"00112233445566778899aabbccddeeff","ad":""}}`, want: obsUnrec},
+		{name: "wrong key type", body: `{"_id":"usr_1","type":"UserSession","symmetricKey":[]}`, want: obsUnrec},
+		{name: "wrong session id type", body: `{"_id":"usr_1","type":"UserSession","id":3}`, want: obsUnrec},
+	})
+}
+
+// TestParseInsomnia_Database covers appended revisions, tombstones and indexes.
 func TestParseInsomnia_Database(t *testing.T) {
 	bearer := request("req_1", `{"type":"bearer","token":"value"}`, "[]")
 	two := request("req_1", `{"type":"bearer","token":"value"}`, `[{"name":"Authorization","value":"value"}]`)
@@ -417,6 +475,10 @@ func TestParseInsomnia_CountBound(t *testing.T) {
 func TestParseInsomnia_ObservationCarriesNoValue(t *testing.T) {
 	marker := "MARKER-7c1e-DO-NOT-EMIT"
 	bodies := []string{
+		`{"_id":"git_1","type":"GitCredentials","credentials":{"token":"` + marker + `"}}`,
+		`{"_id":"repo_1","type":"GitRepository","credentials":{"password":"` + marker + `"}}`,
+		`{"_id":"cloud_1","type":"CloudCredential","provider":"hashicorp","credentials":{"client_secret":"` + marker + `"}}`,
+		`{"_id":"usr_1","type":"UserSession","id":"` + marker + `","symmetricKey":{"kty":"oct","k":"` + marker + `"}}`,
 		request("req_1", `{"type":"bearer","token":"`+marker+`"}`, `[{"name":"Authorization","value":"`+marker+`"}]`),
 		`{"_id":"env_1","type":"Environment","data":{"token":"` + marker + `"},"kvPairData":[{"name":"` + marker + `","value":"` + marker + `","type":"secret"}]}`,
 		`{"_id":"rv_1","type":"RequestVersion","compressedRequest":"` + compressed(request("req_1", `{"type":"bearer","token":"`+marker+`"}`, "[]")) + `"}`,
