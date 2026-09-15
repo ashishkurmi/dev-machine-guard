@@ -118,9 +118,8 @@ func candidatesFor(s source, paths userPaths, env map[string]string, platform st
 // order the tools themselves apply, and reports that one was. Overrides for other
 // variables are not consulted: where a tool reads one variable in preference to
 // another, so does this, and probing the lower-precedence target would report a
-// file the tool has stopped reading. Further overrides naming the same variable
-// are expanded too, for a tool that keeps several files under one relocated
-// directory.
+// file the tool has stopped reading. Later overrides on the same variable are
+// expanded with it, for a tool that keeps several files under one directory.
 //
 // Being set is what displaces the defaults, not naming somewhere real. A target
 // that does not exist is still the answer: the developer pointed the tool somewhere

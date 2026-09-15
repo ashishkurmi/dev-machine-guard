@@ -177,13 +177,10 @@ var (
 	linuxOnly   = []string{model.PlatformLinux}
 )
 
-// insomniaFiles are the database files under the API client's data directory
-// that can hold credential material: request and folder authentication and
-// headers, environment variables, OAuth tokens, certificate passphrases and the
-// retained history of earlier request revisions. The names are fixed by the
-// application, so each is an exact path and the directory is never listed. The
-// databases beside them hold cookies, responses and settings, which this source
-// does not read.
+// insomniaFiles are the API client's databases that can hold credential
+// material. The names are fixed by the application, so each is an exact path
+// and the directory is never listed; the databases beside them hold cookies,
+// responses and settings.
 var insomniaFiles = []string{
 	"insomnia.Request.db",
 	"insomnia.RequestGroup.db",
@@ -198,8 +195,7 @@ var insomniaFiles = []string{
 }
 
 // insomniaLocations spells the data directory per platform for every database
-// file. Generated rather than written out because the ten files share three
-// roots, and a table of thirty literals hides a typo in one of them.
+// file; ten files under three roots is too many literals to read for a typo.
 func insomniaLocations() []location {
 	out := make([]location, 0, 3*len(insomniaFiles))
 	for _, f := range insomniaFiles {
@@ -380,11 +376,9 @@ var sources = []source{
 		Locations: []location{{Root: rootHome, Rel: ".vault-token"}},
 	},
 	{
-		// One source, one finding per database file that exists: the application
-		// reads all of them and each has its own mode and git status. Every file
-		// is a line-oriented JSON database that keeps superseded and deleted
-		// records until it is compacted, so the parser reads whole files rather
-		// than only the current record of each identifier.
+		// One finding per database file that exists: each has its own mode and
+		// git status, and each keeps superseded and deleted records until the
+		// application compacts it.
 		ID:        sourceInsomnia,
 		Category:  model.CredentialCategoryAPIClients,
 		Mode:      readFile,

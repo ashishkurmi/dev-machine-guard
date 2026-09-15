@@ -273,13 +273,10 @@ func classifyEmbeddedKey(field string) (protection string, material, malformed b
 	return protection, material, malformed || !material
 }
 
-// The API client keeps each model in its own line-oriented JSON database: one
-// object per line, appended on every save, with an identifier that ties the
-// revisions of one record together. Superseded revisions and deleted records stay
-// in the file until the application compacts it, so a credential removed through
-// the interface is still readable on disk. The parser therefore reads every line
-// rather than only the last revision of each identifier, and a tombstone erases
-// nothing: the bytes it refers to are still there.
+// The API client keeps each model in a line-oriented JSON database: one object
+// per line, appended on every save. Superseded revisions and deleted records
+// stay in the file until it is compacted, so every line is read and a tombstone
+// erases nothing.
 const (
 	// The most credentials one finding reports. Past it the count is a lower
 	// bound and the finding says so.
@@ -293,10 +290,8 @@ const (
 )
 
 // insomniaAuthFields names, per authentication type, the fields that hold the
-// credential itself. Everything else an authentication object carries is left
-// out: a username, a key identifier, a token URL or a grant type is not material,
-// and a type with no material field, such as one that defers to a netrc file, maps
-// to nothing so that it is still a type this build knows.
+// credential itself. A username, key identifier, token URL or grant type is not
+// material; a type with no material field maps to nothing so it is still known.
 var insomniaAuthFields = map[string][]string{
 	"basic":       {"password"},
 	"digest":      {"password"},
@@ -370,12 +365,10 @@ func (u insomniaUnit) plus(o insomniaUnit) insomniaUnit {
 	return u
 }
 
-// parseInsomnia counts the credentials held across every revision in one of the
-// application's database files. The revisions of one record are folded together
-// as the largest count any of them held rather than summed: appending a record on
-// each save is how the store works, not how many credentials the developer has.
-// The kinds of record this build reads are dispatched on the type field every
-// record carries, so one parser serves all of the files.
+// parseInsomnia counts the credentials held across every revision in one
+// database file. The revisions of one record fold to the largest count any of
+// them held, not the sum: a save appends a revision, not a credential. Records
+// dispatch on their type field, so one parser serves every file.
 func parseInsomnia(data []byte) observation {
 	return observed(data, func(data []byte, f *fold) bool {
 		budget := insomniaMaxExpanded
@@ -510,10 +503,9 @@ func insomniaRequestRecord(kind string, doc map[string]json.RawMessage) (u insom
 }
 
 // insomniaAuth reads a record's authentication object. The empty object is the
-// application's default and holds nothing. A keyed object names its type, and the
-// type selects the material fields; an object with keys and no type, or a type
-// this build does not know, is one it cannot account for. Whether the
-// authentication is disabled changes nothing: the material is stored either way.
+// default and holds nothing; otherwise the type selects the material fields, and
+// a missing or unknown type cannot be accounted for. Disabled authentication
+// changes nothing: the material is stored either way.
 func insomniaAuth(doc map[string]json.RawMessage) (u insomniaUnit, malformed bool) {
 	raw, ok := doc["authentication"]
 	if !ok || string(raw) == "null" {
@@ -571,13 +563,10 @@ func insomniaHeaders(raw json.RawMessage) (u insomniaUnit, malformed bool) {
 	return u, malformed
 }
 
-// insomniaEnv counts the credentials in an environment, which the application
-// stores twice: as a data object, and as the list of pairs the editor shows. Both
-// are read and a name is counted once. Ordinary variables count when their name
-// is one the parser reads as a credential and the value is written into the
-// record. Variables the developer typed as secrets count whatever their name,
-// classified by how they are stored; the data object mirrors them under one
-// reserved key.
+// insomniaEnv counts the credentials in an environment, stored twice: as a data
+// object and as the pair list the editor shows. A name counts once. Ordinary
+// variables count by name; secret-typed variables count whatever their name,
+// classified by how they are stored, and are mirrored under one reserved key.
 func insomniaEnv(dataRaw, pairsRaw json.RawMessage) (u insomniaUnit, malformed bool) {
 	seen := map[string]bool{}
 	count := func(name, state string) {
@@ -661,12 +650,10 @@ func insomniaEnvName(name string) string {
 	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "-", "_")
 }
 
-// insomniaEnvelope classifies a value the application stores as a secret. With a
-// vault key available it writes an encrypted envelope: base64 over a JSON object
-// of hex fields for the nonce, the tag, the additional data and the ciphertext. A
-// value of that shape is protected. One that decodes to a JSON object of some
-// other shape is a record this build cannot account for. Anything else is the
-// value itself, written in the clear because no key was available.
+// insomniaEnvelope classifies a secret-typed value. With a vault key the
+// application writes base64 over a JSON object of hex fields: that shape is
+// protected, a JSON object of another shape cannot be accounted for, and
+// anything else is the value written in the clear because no key was available.
 func insomniaEnvelope(value string) (state string, malformed bool) {
 	literal, mixed := insomniaLiteral(value)
 	if mixed {
@@ -708,11 +695,10 @@ func insomniaHex(obj map[string]json.RawMessage, key string, minLen, maxLen int)
 	return err == nil
 }
 
-// insomniaVersion reads one retained request revision, which the application
-// stores as base64 over gzip over the request's JSON. The expansion is bounded
-// per file: past the bound the revision is reported capped and contributes no
-// count, since nothing about it was read. The inner document is read by the
-// request rules only, so history cannot nest history.
+// insomniaVersion reads one retained request revision, stored as base64 over
+// gzip over the request's JSON. Expansion is bounded per file: past the bound the
+// revision is capped and contributes nothing. Only request kinds are read inside,
+// so history cannot nest history.
 func insomniaVersion(doc map[string]json.RawMessage, budget *int) (u insomniaUnit, malformed, capped bool) {
 	value, bad := insomniaField(doc, "compressedRequest")
 	if bad {
@@ -780,11 +766,9 @@ func insomniaField(obj map[string]json.RawMessage, key string) (value string, ma
 }
 
 // insomniaLiteral reports whether a field holds a value written into the record,
-// and whether it mixes such a value with template tags. A field that is nothing
-// but tags refers to material resolved when the request runs and holds none here.
-// Text beside a tag could be anything from a prefix to the whole secret, so it
-// is not classified either way. Tags are matched, never evaluated. The client
-// has no shell-style expansion, so a dollar-prefixed value is stored as typed.
+// and whether it mixes one with template tags. Tags alone refer to material
+// resolved at run time; text beside a tag is not classified either way. Tags are
+// matched, never evaluated, and a dollar-prefixed value is stored as typed.
 func insomniaLiteral(value string) (literal, mixed bool) {
 	if value == "" {
 		return false, false

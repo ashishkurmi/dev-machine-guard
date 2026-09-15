@@ -24,8 +24,7 @@ const (
 	CredentialCategoryPackageReg     = "package_registry"
 	CredentialCategoryContainers     = "containers"
 	CredentialCategoryInfrastructure = "infrastructure"
-	// Desktop API clients that keep request credentials in their own databases.
-	CredentialCategoryAPIClients = "api_clients"
+	CredentialCategoryAPIClients     = "api_clients"
 )
 
 // Protection states, worst-case per source. Two values and no third: every
