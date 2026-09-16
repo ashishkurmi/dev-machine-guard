@@ -89,6 +89,24 @@ func TestScan_PrefixCoverage(t *testing.T) {
 	}
 }
 
+func TestScan_PrefixNonCleanRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "src/target.js", "example")
+	sep := string(filepath.Separator)
+	for _, suffix := range []string{sep, sep + ".", sep + sep} {
+		t.Run(suffix, func(t *testing.T) {
+			rs := prep(t, RuleSet{Rules: []Rule{{ID: "rule", FileGlobs: []string{"src/target.js"}}}})
+			got := newTestEngine(t, DefaultCaps()).Scan(context.Background(), rs, []string{root + suffix})
+			if !got.ScanComplete || len(got.Results) != 1 || len(got.Results[0].Files) != 1 {
+				t.Fatalf("scan = %+v, want one finding and complete scan", got)
+			}
+			if got.Results[0].Files[0].Path != filepath.Join(root, "src", "target.js") {
+				t.Fatalf("unexpected path: %q", got.Results[0].Files[0].Path)
+			}
+		})
+	}
+}
+
 func TestRelativeIndex_Pruning(t *testing.T) {
 	rs := prep(t, RuleSet{Rules: []Rule{{ID: "rule", FileGlobs: []string{"src/config/target.js"}}}})
 	state := &ruleState{rule: &rs.Rules[0]}

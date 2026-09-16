@@ -170,7 +170,8 @@ func (e *Engine) walkOneRoot(ctx context.Context, st *scanState, root string, id
 			if e.skipper.ShouldSkip(filePath, root) {
 				return filepath.SkipDir
 			}
-			if filePath != cleanRoot && !activeRule(idx.unrestricted) {
+			// The first visit preserves the supplied root spelling; children are cleaned by Join.
+			if filePath != root && filePath != cleanRoot && !activeRule(idx.unrestricted) {
 				rel, err := filepath.Rel(root, filePath)
 				if err == nil && !idx.canDescend(filepath.ToSlash(rel)) {
 					return filepath.SkipDir
