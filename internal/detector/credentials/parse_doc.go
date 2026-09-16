@@ -493,7 +493,7 @@ func insomniaRecord(doc map[string]json.RawMessage, budget *int) (u insomniaUnit
 		return u, malformed, false
 	case "OAuth2Token":
 		// One token record is one credential whichever of its tokens is filled.
-		material, malformed := insomniaMaterial(doc, "accessToken", "refreshToken", "identityToken")
+		material, malformed := insomniaStoredMaterial(doc, "accessToken", "refreshToken", "identityToken")
 		if material {
 			u.add(model.CredentialProtectionPlaintext)
 		}
@@ -501,7 +501,7 @@ func insomniaRecord(doc map[string]json.RawMessage, budget *int) (u insomniaUnit
 	case "ClientCertificate":
 		// The certificate and key fields are paths to files this source does not
 		// read; the passphrase is the material stored here.
-		material, malformed := insomniaMaterial(doc, "passphrase")
+		material, malformed := insomniaStoredMaterial(doc, "passphrase")
 		if material {
 			u.add(model.CredentialProtectionPlaintext)
 		}

@@ -311,6 +311,11 @@ func TestParseInsomnia_Environments(t *testing.T) {
 // certificate settings.
 func TestParseInsomnia_OtherRecords(t *testing.T) {
 	runParseCases(t, parseInsomnia, []parseCase{
+		{name: "stored token with template syntax is literal", body: `{"_id":"tok_1","type":"OAuth2Token","accessToken":"{{ _.access_token }}"}`, want: obsPlain(1)},
+		{name: "stored refresh token with tag syntax is literal", body: `{"_id":"tok_1","type":"OAuth2Token","refreshToken":"{% token %}"}`, want: obsPlain(1)},
+		{name: "stored identity token with mixed syntax is literal", body: `{"_id":"tok_1","type":"OAuth2Token","identityToken":"prefix{{ token }}"}`, want: obsPlain(1)},
+		{name: "certificate passphrase with template syntax is literal", body: `{"_id":"crt_1","type":"ClientCertificate","passphrase":"{{password}}"}`, want: obsPlain(1)},
+		{name: "certificate passphrase with mixed syntax is literal", body: `{"_id":"crt_1","type":"ClientCertificate","passphrase":"prefix{% password %}"}`, want: obsPlain(1)},
 		{name: "an access token", body: `{"_id":"tok_1","type":"OAuth2Token","accessToken":"value","refreshToken":"","identityToken":""}`, want: obsPlain(1)},
 		{name: "an identity token alone", body: `{"_id":"tok_1","type":"OAuth2Token","identityToken":"value"}`, want: obsPlain(1)},
 		{name: "all three tokens are one credential", body: `{"_id":"tok_1","type":"OAuth2Token","accessToken":"value","refreshToken":"value","identityToken":"value"}`, want: obsPlain(1)},
