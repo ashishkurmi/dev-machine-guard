@@ -223,7 +223,8 @@ func (e *Engine) walkOneRoot(ctx context.Context, st *scanState, root string, id
 // behavior, but only constructs paths for directories and candidate filenames.
 // ReadDir is sorted by the executor; unrelated files need no path allocation.
 func (e *Engine) walkCandidates(ctx context.Context, root string, idx *relativeIndex, visit fs.WalkDirFunc) error {
-	if _, err := e.exec.Readlink(root); err == nil {
+	// Strip trailing separators so Readlink can identify a symlink root.
+	if _, err := e.exec.Readlink(filepath.Clean(root)); err == nil {
 		return nil
 	}
 	info, err := e.exec.Stat(root)

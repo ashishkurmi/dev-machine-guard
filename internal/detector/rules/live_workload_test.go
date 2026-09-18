@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
@@ -91,9 +92,19 @@ func TestScanSymlinkRootIsNotFollowed(t *testing.T) {
 		t.Skip(err)
 	}
 	rs := prep(t, RuleSet{Rules: []Rule{{ID: "rule", FileGlobs: []string{"**/target.js"}}}})
-	got := newTestEngine(t, DefaultCaps()).Scan(context.Background(), rs, []string{link})
-	if !got.ScanComplete || len(got.Results) != 0 {
-		t.Fatalf("followed symlink root: %+v", got)
+	tests := []struct{ name, suffix string }{
+		{"plain", ""},
+		{"trailing separator", string(filepath.Separator)},
+		{"repeated separators", strings.Repeat(string(filepath.Separator), 2)},
+		{"trailing dot", string(filepath.Separator) + "."},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := newTestEngine(t, DefaultCaps()).Scan(context.Background(), rs, []string{link + tc.suffix})
+			if !got.ScanComplete || len(got.Results) != 0 {
+				t.Fatalf("followed symlink root: %+v", got)
+			}
+		})
 	}
 }
 
