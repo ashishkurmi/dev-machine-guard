@@ -211,7 +211,7 @@ func TestConfigFile_UseLegacyPackageScan_JSONRoundTrip(t *testing.T) {
 	}
 
 	// An explicit false must survive the round trip — it's how a config opts
-	// the delta protocol off for a fleet.
+	// the delta protocol on for a fleet.
 	enabled := false
 	data, err = json.Marshal(ConfigFile{UseLegacyPackageScan: &enabled})
 	if err != nil {

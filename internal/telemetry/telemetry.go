@@ -1141,7 +1141,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// (snap != nil), the payload below routes changed bodies to the legacy
 	// slots and unchanged/removed projects to the new ref slots.
 	snap := buildDeltaSnapshot(
-		scanState, scanStateFullSync,
+		scanState, scanStateFullSync, npmEnabled, pythonEnabled,
 		nodeProjects, nodeDiscovered, pythonProjects, pythonDiscovered,
 		globalPkgs, pythonGlobalPkgs,
 	)
