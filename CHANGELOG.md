@@ -11,6 +11,7 @@ See [VERSIONING.md](VERSIONING.md) for why the version starts at 1.8.1.
 
 ### Fixed
 
+- Suppress Windows scheduler-registration probe console flashes during heartbeat, telemetry initialization, and scheduler diagnostics; bound each probe to three seconds.
 - Reduce malicious-file scan CPU and allocations by checking mandatory conditions before optional evidence and constructing paths only for directories and candidate files. Retain filename indexes with wildcard rules, prune disjoint literal prefixes, reuse bounded file reads and metadata, and retire truncated rules. Detection coverage, rule ordering, and reported evidence are preserved.
 
 - **The scan no longer opens LM Studio's window on Linux.** `lm-studio` names the desktop application's launcher, not a CLI (LM Studio's CLI is a separate binary, `lms`), and a packaged Electron app does not implement `--version`, so the flag was ignored and the app booted. An Ubuntu 22.04 customer running the agent from a systemd timer had LM Studio appear on their desktop mid-scan, with the probe of `/usr/bin/lm-studio` sitting on the full 10s exec deadline before being killed. Framework specs now carry a per-tool `GUIApp` flag that suppresses the `--version` fallback, so a GUI entry point is reported as installed with whatever on-disk metadata yields and `unknown` otherwise. The flag is opt-in per entry: ollama, LocalAI and Text Generation WebUI are real CLIs and are still exec'd exactly as before.
