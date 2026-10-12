@@ -9,6 +9,10 @@ See [VERSIONING.md](VERSIONING.md) for why the version starts at 1.8.1.
 
 ## [Unreleased]
 
+### Added
+
+- GitHub Copilot plugin inventory for the CLI, standalone app and VS Code. Collects recorded installations and live directory-marketplace selections, supplied skills, custom agents, command/rule/hook/LSP declarations, and sanitized plugin/user/project MCP definitions. Collection is file-only; uncertain formats report incomplete coverage. Runtime activation is not inferred. No Copilot usage or credential collection is added.
+
 ### Fixed
 
 - **macOS hostname no longer flips with the network.** The agent reported `kern.hostname`, which macOS rewrites from DHCP or reverse DNS whenever `HostName` is unset, so a Mac on a VPN resolving through AWS showed up as `ip-…ec2.internal` on some scans and its real name on others. It now reports the configured `HostName` when set, else `LocalHostName`, read from the SystemConfiguration preferences plist with `scutil --get` as the fallback, and only then the kernel hostname. Existing Macs will show a new name once.
