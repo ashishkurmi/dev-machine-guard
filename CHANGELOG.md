@@ -13,6 +13,10 @@ See [VERSIONING.md](VERSIONING.md) for why the version starts at 1.8.1.
 
 - GitHub Copilot plugin inventory for the CLI, standalone app and VS Code. Collects recorded installations and live directory-marketplace selections, supplied skills, custom agents, command/rule/hook/LSP declarations, and sanitized plugin/user/project MCP definitions. Collection is file-only; uncertain formats report incomplete coverage. Runtime activation is not inferred. No Copilot usage or credential collection is added.
 
+### Fixed
+
+- **WSL distributions are scanned on installs that did not come from the MSI.** The WSL scan runs a Linux agent binary (`dmg-linux`) that must sit next to the Windows agent, and only the MSI put it there, so tenants who enabled WSL scanning got no WSL telemetry from PowerShell-loader or binary-only installs. When a running distribution is about to be scanned and no Linux agent is present, the Windows agent now downloads the `linux_<arch>` release asset for its own version from GitHub and installs it as `dmg-linux` only if its checksum carries a valid release signature (the same Ed25519 key and namespace the loaders verify). A copy installed by the MSI or a loader is used as is; a copy the agent installed is tracked by a `dmg-linux.fetched` marker and replaced when the agent version changes. The download is skipped when no distribution is running, is bounded to 90s inside the `wsl_scan` phase, and a failure only skips the WSL scan for that run. This adds `github.com` as an egress destination for the agent itself on WSL hosts.
+
 ## [1.17.0] - 2026-09-24
 
 ### Added
