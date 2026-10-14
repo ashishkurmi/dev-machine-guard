@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,13 +31,16 @@ var userIDFile = func() string {
 	return ""
 }
 
-type atomicWriter interface {
+type idWriter interface {
 	WriteFileAtomic(path string, data []byte, perm os.FileMode) error
+	CreateFileOnce(path string, data []byte, perm os.FileMode) error
 }
 
 // resolveID: privileged runs probe the hardware and refresh the shared file
 // (healing a stale or planted one); everyone else reads the file first and
-// only probes when it is absent. Unprivileged runs never write it.
+// only probes when it is absent. Unprivileged runs never write it. A probe
+// that only reached a per-install fallback doesn't displace a stored ID, so a
+// transient hardware-probe failure can't flip the identity.
 func resolveID(ctx context.Context, exec executor.Executor) string {
 	path := machineIDFile(exec.GOOS())
 	root := exec.IsRoot()
@@ -45,36 +49,54 @@ func resolveID(ctx context.Context, exec executor.Executor) string {
 			return stored
 		}
 	}
-	if id := probeSerial(ctx, exec); usableSerial(id) {
-		if root && readIDFile(exec, path) != id {
-			writeIDFile(exec, path, id)
-		}
-		return id
+	id, hardware := probeSerial(ctx, exec)
+	if !usableSerial(id) {
+		return generatedID(ctx, exec, root, path)
 	}
-	return generatedID(ctx, exec, root, path)
+	if root {
+		switch stored := readIDFile(exec, path); {
+		case stored == id:
+		case hardware || stored == "":
+			if w, ok := exec.(idWriter); ok {
+				_ = w.WriteFileAtomic(path, []byte(id+"\n"), 0o644) // best-effort
+			}
+		default:
+			return stored
+		}
+	}
+	return id
 }
 
 // generatedID is the last resort when no source yields an ID: a random UUID,
-// persisted so later runs reuse it. A probe cut short by the deadline isn't
-// proof there is no ID, so nothing is minted then.
+// accepted only once persisted so later runs (and racing processes) agree on
+// it. A probe cut short by the deadline isn't proof there is no ID, so nothing
+// is minted then.
 func generatedID(ctx context.Context, exec executor.Executor, root bool, machinePath string) string {
 	path := userIDFile()
 	if root {
 		path = machinePath
 	}
-	if path != "" {
-		if stored := readIDFile(exec, path); stored != "" {
-			return stored
-		}
+	w, ok := exec.(idWriter)
+	if path == "" || !ok {
+		return "unknown"
+	}
+	if stored := readIDFile(exec, path); stored != "" {
+		return stored
 	}
 	if ctx.Err() != nil {
 		return "unknown"
 	}
 	id := uuid.NewString()
-	if path != "" {
-		writeIDFile(exec, path, id)
+	err := w.CreateFileOnce(path, []byte(id+"\n"), 0o644)
+	if err == nil {
+		return id
 	}
-	return id
+	if errors.Is(err, os.ErrExist) {
+		if stored := readIDFile(exec, path); stored != "" {
+			return stored // another process won the race
+		}
+	}
+	return "unknown"
 }
 
 // readIDFile returns the trimmed ID at path, or "" if missing or unusable.
@@ -87,11 +109,4 @@ func readIDFile(exec executor.Executor, path string) string {
 		return id
 	}
 	return ""
-}
-
-// writeIDFile is best-effort: a failed write only means the next run probes.
-func writeIDFile(exec executor.Executor, path, id string) {
-	if w, ok := exec.(atomicWriter); ok {
-		_ = w.WriteFileAtomic(path, []byte(id+"\n"), 0o644)
-	}
 }

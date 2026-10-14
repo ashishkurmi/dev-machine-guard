@@ -69,9 +69,9 @@ var (
 
 // SerialNumber resolves the machine identity (the device_id absent a
 // configured override) once per process, so the run gate, scan, enforcers and
-// hooks can't disagree. It runs before any network beacon and never fails:
-// with no source it generates and persists an ID, and only an exhausted ctx
-// yields "unknown" (not cached, so a later caller with more budget retries).
+// hooks can't disagree. It runs before any network beacon. With no source it
+// generates and persists an ID; an exhausted ctx or an ID that can't be
+// persisted yields "unknown" (not cached, so a later caller retries).
 func SerialNumber(ctx context.Context, exec executor.Executor) string {
 	idMu.Lock()
 	defer idMu.Unlock()
@@ -92,12 +92,14 @@ func ResetIDCache() {
 	cachedID = ""
 }
 
-func probeSerial(ctx context.Context, exec executor.Executor) string {
+// probeSerial reports whether id came from the hardware rather than a
+// per-install fallback (MachineGuid, /etc/machine-id).
+func probeSerial(ctx context.Context, exec executor.Executor) (id string, hardware bool) {
 	switch exec.GOOS() {
 	case model.PlatformWindows:
 		return getSerialNumberWindows(ctx, exec)
 	case model.PlatformDarwin:
-		return getSerialNumber(ctx, exec)
+		return getSerialNumber(ctx, exec), true
 	default: // linux and other unix
 		return getSerialNumberLinux(ctx, exec)
 	}
@@ -200,13 +202,13 @@ func getOSVersion(ctx context.Context, exec executor.Executor) string {
 	return "unknown"
 }
 
-func getSerialNumberLinux(ctx context.Context, exec executor.Executor) string {
+func getSerialNumberLinux(ctx context.Context, exec executor.Executor) (string, bool) {
 	// /sys/class/dmi/id/product_serial is root-only (0400); user runs read the
 	// value root persisted machine-wide instead (see resolveID).
 	if data, err := exec.ReadFile("/sys/class/dmi/id/product_serial"); err == nil {
 		s := strings.TrimSpace(string(data))
 		if usableSerial(s) {
-			return s
+			return s, true
 		}
 	}
 
@@ -215,7 +217,7 @@ func getSerialNumberLinux(ctx context.Context, exec executor.Executor) string {
 	if err == nil {
 		s := strings.TrimSpace(stdout)
 		if usableSerial(s) {
-			return s
+			return s, true
 		}
 	}
 
@@ -223,11 +225,11 @@ func getSerialNumberLinux(ctx context.Context, exec executor.Executor) string {
 	if data, err := exec.ReadFile("/etc/machine-id"); err == nil {
 		s := strings.TrimSpace(string(data))
 		if usableSerial(s) {
-			return s
+			return s, false
 		}
 	}
 
-	return "unknown"
+	return "unknown", false
 }
 
 func getOSVersionLinux(ctx context.Context, exec executor.Executor) string {

@@ -45,8 +45,8 @@ func TestSerialProbesSkipPlaceholders(t *testing.T) {
 	linux.SetFile("/sys/class/dmi/id/product_serial", []byte("Default string\n"))
 	linux.SetCommand("Not Specified\n", "", 0, "dmidecode", "-s", "system-serial-number")
 	linux.SetFile("/etc/machine-id", []byte("a1b2c3d4e5f6\n"))
-	if got := getSerialNumberLinux(context.Background(), linux); got != "a1b2c3d4e5f6" {
-		t.Errorf("linux = %q, want machine-id", got)
+	if got, hw := getSerialNumberLinux(context.Background(), linux); got != "a1b2c3d4e5f6" || hw {
+		t.Errorf("linux = %q (hardware=%v), want machine-id fallback", got, hw)
 	}
 
 	darwin := executor.NewMock()

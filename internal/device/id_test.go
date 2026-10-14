@@ -2,6 +2,8 @@ package device
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -208,5 +210,74 @@ func TestNoGeneratedIDOnTimeout(t *testing.T) {
 	}
 	if id := ID(model.Device{SerialNumber: got}); id != "" {
 		t.Fatalf("ID = %q, want empty rather than a placeholder", id)
+	}
+}
+
+func TestRootKeepsStoredIDWhenProbeFallsBack(t *testing.T) {
+	for _, tc := range []struct{ name, file, want, wantFile string }{
+		{"keeps stored hardware ID", "HW-1\n", "HW-1", "HW-1\n"},
+		{"writes fallback when nothing stored", "", "mid-1", "mid-1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(ResetIDCache)
+			ResetIDCache()
+			mock := executor.NewMock()
+			mock.SetGOOS("linux")
+			mock.SetIsRoot(true)
+			mock.SetFile("/etc/machine-id", []byte("mid-1\n"))
+			if tc.file != "" {
+				mock.SetFile(linuxIDFile, []byte(tc.file))
+			}
+			if got := SerialNumber(context.Background(), mock); got != tc.want {
+				t.Fatalf("id = %q, want %q", got, tc.want)
+			}
+			if got, _ := mock.ReadFile(linuxIDFile); string(got) != tc.wantFile {
+				t.Fatalf("file = %q, want %q", got, tc.wantFile)
+			}
+		})
+	}
+}
+
+// racingExec simulates another process publishing an ID first, or a failed write.
+type racingExec struct {
+	*executor.Mock
+	winner string
+	err    error
+}
+
+func (r *racingExec) CreateFileOnce(path string, data []byte, perm os.FileMode) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.SetFile(path, []byte(r.winner))
+	return r.Mock.CreateFileOnce(path, data, perm)
+}
+
+func TestGeneratedIDRaceAndPersistFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		exec     *racingExec
+		userFile bool
+		want     string
+	}{
+		{"loser adopts winner", &racingExec{winner: "WINNER-ID\n"}, true, "WINNER-ID"},
+		{"write failure", &racingExec{err: errors.New("read-only")}, true, "unknown"},
+		{"no storage", &racingExec{}, false, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := ""
+			if tc.userFile {
+				path = filepath.Join(t.TempDir(), "device-id")
+			}
+			old := userIDFile
+			userIDFile = func() string { return path }
+			t.Cleanup(func() { userIDFile = old; ResetIDCache() })
+			ResetIDCache()
+			tc.exec.Mock = executor.NewMock()
+			tc.exec.SetGOOS("linux")
+			if got := SerialNumber(context.Background(), tc.exec); got != tc.want {
+				t.Fatalf("id = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
