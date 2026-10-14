@@ -553,4 +553,34 @@ func TestInvalidate_UndeletableFileIsNeutralized(t *testing.T) {
 	if err := Invalidate(path); err == nil {
 		t.Error("Invalidate on an unwritable, undeletable file = nil, want error")
 	}
+	got, err := Load(path, runningAgentVersion)
+	if err == nil || len(got.NPMProjects) != 0 {
+		t.Errorf("unwritable stale state loads: err=%v projects=%+v", err, got.NPMProjects)
+	}
+}
+
+// Windows sharing violations can leave the file in place with only the
+// marker written; Load must ignore the baseline until the next Save.
+func TestLoad_InvalidMarkerForcesFreshState(t *testing.T) {
+	path := tempStatePath(t)
+	s := New(runningAgentVersion)
+	s.NPMProjects["/p"] = ProjectEntry{}
+	if err := s.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(invalidMarker(path), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := Load(path, runningAgentVersion); len(got.NPMProjects) != 0 {
+		t.Fatalf("flagged state still loads: %+v", got.NPMProjects)
+	}
+	if err := s.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(invalidMarker(path)); !os.IsNotExist(err) {
+		t.Fatalf("marker survives Save: %v", err)
+	}
+	if got, err := Load(path, runningAgentVersion); err != nil || len(got.NPMProjects) != 1 {
+		t.Fatalf("Load after Save = %+v, %v", got.NPMProjects, err)
+	}
 }
