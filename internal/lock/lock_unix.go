@@ -46,9 +46,10 @@ func acquire() (func(), error) {
 
 // openLockFile opens the lock file read-only without following symlinks. An
 // existing file is opened without O_CREAT so Linux protected_regular doesn't
-// refuse root opening a user-created file in sticky /tmp.
+// refuse root opening a user-created file in sticky /tmp. O_NONBLOCK keeps a
+// planted FIFO from blocking the open.
 func openLockFile(path string) (*os.File, error) {
-	const flags = syscall.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+	const flags = syscall.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC | syscall.O_NONBLOCK
 	for range 2 {
 		fd, err := syscall.Open(path, flags, 0)
 		if errors.Is(err, syscall.ENOENT) {
@@ -59,6 +60,15 @@ func openLockFile(path string) (*os.File, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("opening lock file %s: %w", path, err)
+		}
+		var st syscall.Stat_t
+		if err := syscall.Fstat(fd, &st); err != nil {
+			_ = syscall.Close(fd)
+			return nil, fmt.Errorf("stat lock file %s: %w", path, err)
+		}
+		if st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+			_ = syscall.Close(fd)
+			return nil, fmt.Errorf("lock file %s is not a regular file", path)
 		}
 		// Undo umask, and widen a restrictive file we own. Fails harmlessly
 		// on another account's file.

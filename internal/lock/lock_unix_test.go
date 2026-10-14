@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func testLockTarget(t *testing.T) string {
@@ -100,5 +102,29 @@ func TestSymlinkRefused(t *testing.T) {
 		t.Fatal("Acquire followed a symlink")
 	} else if errors.Is(err, ErrHeld) {
 		t.Fatalf("symlink reported as contention: %v", err)
+	}
+}
+
+func TestFIFORefused(t *testing.T) {
+	target := testLockTarget(t)
+	if err := syscall.Mkfifo(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setLockTarget(target)
+	done := make(chan error, 1)
+	go func() {
+		lk, err := Acquire(nil)
+		if err == nil {
+			lk.Release()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || errors.Is(err, ErrHeld) {
+			t.Fatalf("Acquire on FIFO: err=%v, want non-contention error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Acquire blocked on a FIFO")
 	}
 }
