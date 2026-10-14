@@ -42,6 +42,9 @@ func setupKillgroupOnCancel(cmd *exec.Cmd) {
 	cmd.WaitDelay = 2 * time.Second
 }
 
+// runCommand runs cmd; the process-group kill is set up before Start.
+func runCommand(cmd *exec.Cmd) error { return cmd.Run() }
+
 func (r *Real) IsRoot() bool {
 	return os.Getuid() == 0
 }
