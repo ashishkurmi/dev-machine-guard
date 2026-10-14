@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -582,7 +583,14 @@ func save(cfg *ConfigFile) error {
 	configPath := filepath.Join(dir, "config.json")
 	prev, _ := os.Stat(configPath)
 	if err := atomicfile.Replace(configPath, data, atomicfile.PickMode(configPath, fileMode)); err != nil {
-		return err
+		// Windows refuses the rename while another process holds config.json
+		// open without delete sharing; fall back to the in-place write.
+		if runtime.GOOS != "windows" {
+			return err
+		}
+		if werr := os.WriteFile(configPath, data, fileMode); werr != nil {
+			return err
+		}
 	}
 	if prev != nil {
 		preserveOwner(configPath, prev)
