@@ -289,11 +289,13 @@ func onCalendarFor(hours int) string {
 // here: it is a per-user login policy change, and Persistent=true already
 // catches up missed runs at next login.
 //
-// RandomizedDelaySec spreads the fleet off the shared wall-clock boundary.
+// OnBootSec keeps the scan shortly after boot. RandomizedDelaySec spreads
+// the fleet off the shared wall-clock boundary.
 const timerTmpl = `[Unit]
 Description=StepSecurity Dev Machine Guard periodic scan
 
 [Timer]
+OnBootSec=5min
 OnCalendar={{.OnCalendar}}
 RandomizedDelaySec=15min
 Persistent=true

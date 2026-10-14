@@ -101,6 +101,7 @@ func TestTimerTemplate_Golden(t *testing.T) {
 Description=StepSecurity Dev Machine Guard periodic scan
 
 [Timer]
+OnBootSec=5min
 OnCalendar=*-*-* 00/4:00:00
 RandomizedDelaySec=15min
 Persistent=true
