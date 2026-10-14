@@ -592,3 +592,45 @@ func TestRequestUploadURL_StopsOnCanceledContext(t *testing.T) {
 		t.Errorf("calls = %d, want 0", n)
 	}
 }
+
+func TestNotifyUploaded_RetriesOnce(t *testing.T) {
+	ok := func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"processing"}`)) }
+	status := func(code int) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }
+	}
+	dropConn := func(w http.ResponseWriter, _ *http.Request) {
+		if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}
+	tests := []struct {
+		name      string
+		responses []http.HandlerFunc
+		wantErr   bool
+		wantCalls int32
+	}{
+		{"success first try", []http.HandlerFunc{ok}, false, 1},
+		{"5xx then success", []http.HandlerFunc{status(503), ok}, false, 2},
+		{"dropped connection then success", []http.HandlerFunc{dropConn, ok}, false, 2},
+		{"retries only once", []http.HandlerFunc{status(502), status(502), ok}, true, 2},
+		{"4xx is terminal", []http.HandlerFunc{status(400), ok}, true, 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withFastBackoff(t)
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tc.responses[calls.Add(1)-1](w, r)
+			}))
+			defer srv.Close()
+
+			_, _, err := notifyUploaded(context.Background(), progress.NewNoop(), srv.Client(), srv.URL, []byte(`{}`))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if n := calls.Load(); n != tc.wantCalls {
+				t.Errorf("calls = %d, want %d", n, tc.wantCalls)
+			}
+		})
+	}
+}
