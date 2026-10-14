@@ -166,3 +166,37 @@ func TestWaitForBootout_Bounded(t *testing.T) {
 		t.Errorf("waited %v, want <= 10s", total)
 	}
 }
+
+// hangExec blocks every Run until ctx is done, like a stalled launchctl.
+type hangExec struct {
+	*executor.Mock
+	calls int
+}
+
+func (h *hangExec) Run(ctx context.Context, _ string, _ ...string) (string, string, int, error) {
+	h.calls++
+	<-ctx.Done()
+	return "", "", -1, ctx.Err()
+}
+
+func TestWaitForBootout_DeadlineStopsHungPrint(t *testing.T) {
+	noSleep(t)
+	orig := bootoutPollTimeout
+	bootoutPollTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { bootoutPollTimeout = orig })
+
+	ex := &hangExec{Mock: executor.NewMock()}
+	done := make(chan struct{})
+	go func() {
+		waitForBootout(context.Background(), ex, progress.NewLogger(progress.LevelInfo), "system/"+label)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForBootout did not return after deadline")
+	}
+	if ex.calls != 1 {
+		t.Errorf("print calls = %d, want 1 (polling should stop at deadline)", ex.calls)
+	}
+}

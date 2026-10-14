@@ -257,15 +257,21 @@ const (
 	bootoutPollAttempts = 40 // ~10s
 )
 
+// bootoutPollTimeout bounds the whole polling phase, including a hung
+// `launchctl print`. Swapped out by tests.
+var bootoutPollTimeout = 15 * time.Second
+
 // bootstrapBackoff is the wait before each bootstrap retry.
 var bootstrapBackoff = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 2 * time.Second, 2 * time.Second}
 
 // waitForBootout polls until launchd no longer knows the service. bootout
 // returns before teardown finishes; bootstrapping during teardown fails.
 func waitForBootout(ctx context.Context, exec executor.Executor, log *progress.Logger, target string) {
-	for i := 0; i < bootoutPollAttempts; i++ {
+	ctx, cancel := context.WithTimeout(ctx, bootoutPollTimeout)
+	defer cancel()
+	for i := 0; i < bootoutPollAttempts && ctx.Err() == nil; i++ {
 		_, _, exitCode, err := exec.Run(ctx, "launchctl", "print", target)
-		if err == nil && exitCode != 0 {
+		if err == nil && exitCode != 0 && ctx.Err() == nil {
 			return
 		}
 		sleep(bootoutPollInterval)
