@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,14 @@ type UserAwareExecutor struct {
 	envOnce sync.Once
 	env     map[string]string
 	envErr  error
+
+	// pathMu guards the cached login-shell $PATH, fetched once so LookPath
+	// resolves natively instead of spawning a `which` login shell per tool.
+	// Empty after a completed fetch means it failed; LookPath then falls
+	// back to `which`.
+	pathMu      sync.Mutex
+	pathFetched bool
+	userPath    string
 }
 
 func (e *UserAwareExecutor) GuardedFiles(roots []string, guard func(string) string, maxReadBytes int64) Executor {
@@ -149,11 +158,51 @@ func (e *UserAwareExecutor) RunAsUser(ctx context.Context, username, command str
 	return e.inner.RunAsUser(ctx, username, command)
 }
 
+// loginShellPATH returns the user's login-shell $PATH, fetched once per
+// process. A fetch abandoned by the caller's ctx is retried on a later call
+// rather than pinning the fallback.
+func (e *UserAwareExecutor) loginShellPATH(ctx context.Context) string {
+	e.pathMu.Lock()
+	defer e.pathMu.Unlock()
+	if e.pathFetched {
+		return e.userPath
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := e.inner.RunAsUser(fetchCtx, e.username, `printf '%s' "$PATH"`)
+	if err != nil && ctx.Err() != nil {
+		return ""
+	}
+	if err == nil {
+		e.userPath = strings.TrimSpace(out)
+	}
+	e.pathFetched = true
+	return e.userPath
+}
+
+// LookPath resolves name against the user's login-shell $PATH natively (stat
+// + executable bit) instead of a `which` login shell per tool. Each of those
+// re-sourced the user's rc files, where zsh compinit can block on its
+// interactive "insecure directories" prompt. Aliases and shell functions are
+// deliberately not matched: the agent needs a real executable. Falls back to
+// `which` when the PATH fetch failed.
 func (e *UserAwareExecutor) LookPath(name string) (string, error) {
 	return e.lookPath(context.Background(), name)
 }
 
 func (e *UserAwareExecutor) lookPath(ctx context.Context, name string) (string, error) {
+	if p := e.loginShellPATH(ctx); p != "" {
+		for _, dir := range strings.Split(p, ":") {
+			if dir == "" {
+				continue
+			}
+			cand := filepath.Join(dir, name)
+			if fi, err := e.inner.Stat(cand); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+				return cand, nil
+			}
+		}
+		return "", fmt.Errorf("%s not found in user PATH", name)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	stdout, err := e.inner.RunAsUser(ctx, e.username, "which "+posixShellQuote(name))
