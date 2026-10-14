@@ -245,9 +245,11 @@ func (r *Real) ReadFile(path string) ([]byte, error) {
 func (r *Real) WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		// #nosec G301 -- the machine-wide device ID must be readable by user-context runs.
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
+		// #nosec G302 -- same: user-context runs must traverse it.
 		_ = os.Chmod(dir, 0o755) // undo a restrictive umask
 	}
 	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
