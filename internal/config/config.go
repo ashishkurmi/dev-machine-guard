@@ -595,8 +595,9 @@ func save(cfg *ConfigFile) error {
 	prev, _ := os.Stat(configPath)
 	if err := atomicfile.Replace(configPath, data, atomicfile.PickMode(configPath, fileMode)); err != nil {
 		// Windows refuses the rename while another process holds config.json
-		// open without delete sharing; fall back to the in-place write.
-		if runtime.GOOS != "windows" {
+		// open without delete sharing; fall back to the in-place write. Any
+		// earlier failure (e.g. disk full) must leave the original intact.
+		if runtime.GOOS != "windows" || !errors.Is(err, atomicfile.ErrRename) {
 			return err
 		}
 		if werr := os.WriteFile(configPath, data, fileMode); werr != nil {

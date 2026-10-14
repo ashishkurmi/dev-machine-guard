@@ -15,6 +15,7 @@
 package atomicfile
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,10 @@ const BackupStampLayout = "20060102T150405"
 // form count toward the same cap so the rotation gradually cleans up
 // files left from before the rename.
 const MaxBackups = 3
+
+// ErrRename marks a failure of the final rename: the target is untouched and
+// the new bytes were written successfully to the temp file.
+var ErrRename = errors.New("atomicfile: rename")
 
 // WriteResult reports every path WriteAtomic touched. The install handler
 // uses CreatedDirs + Path + BackupPath to chown new files under root.
@@ -185,7 +190,7 @@ func replace(path string, data []byte, mode os.FileMode) ([]string, error) {
 		return created, fmt.Errorf("atomicfile: chmod temp: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		return created, fmt.Errorf("atomicfile: rename: %w", err)
+		return created, fmt.Errorf("%w: %w", ErrRename, err)
 	}
 
 	return created, nil
