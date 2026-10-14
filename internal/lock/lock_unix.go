@@ -20,7 +20,7 @@ const lockFileMode = 0o644
 
 var lockFilePath = defaultLockFilePath
 
-func setLockTarget(p string) { lockFilePath = p }
+func setLockTarget(p string) (old string) { old, lockFilePath = lockFilePath, p; return old }
 
 func acquire() (func(), error) {
 	f, err := openLockFile(lockFilePath)

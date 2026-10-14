@@ -30,6 +30,13 @@ func Acquire(_ executor.Executor) (*Lock, error) {
 	return &Lock{release: release}, nil
 }
 
+// SetTargetForTest points the lock at another file (Unix) or mutex name
+// (Windows) and returns a func restoring the previous one. Tests only.
+func SetTargetForTest(target string) (restore func()) {
+	old := setLockTarget(target)
+	return func() { setLockTarget(old) }
+}
+
 // Release drops the lock. Safe to call more than once.
 func (l *Lock) Release() {
 	if l == nil || l.release == nil {

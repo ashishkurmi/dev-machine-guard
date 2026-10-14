@@ -2,9 +2,12 @@ package telemetry
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -36,19 +39,23 @@ func TestRun_LockHeldReportsDeviceID(t *testing.T) {
 	defer withEnterpriseConfig(t, srv.URL)()
 	t.Setenv(paths.HomeEnvVar, t.TempDir())
 
-	// Hold the instance lock. If a real agent already holds it, Run is
-	// refused all the same.
-	if lk, err := lock.Acquire(nil); err == nil {
-		defer lk.Release()
-	} else if !errors.Is(err, lock.ErrHeld) {
-		t.Skipf("cannot take instance lock here: %v", err)
+	// Hold a private instance lock so a real agent on this machine is unaffected.
+	target := filepath.Join(t.TempDir(), "test.flock")
+	if runtime.GOOS == "windows" {
+		target = fmt.Sprintf(`Local\dmg-lock-test-%d`, os.Getpid())
 	}
+	defer lock.SetTargetForTest(target)()
+	lk, err := lock.Acquire(nil)
+	if err != nil {
+		t.Fatalf("taking test lock: %v", err)
+	}
+	defer lk.Release()
 
 	mock := executor.NewMock()
 	mock.SetGOOS(model.PlatformLinux)
 	mock.SetFile("/sys/class/dmi/id/product_serial", []byte("SER-TEST-123\n"))
 
-	err := Run(mock, progress.NewLogger(progress.LevelInfo), &cli.Config{})
+	err = Run(mock, progress.NewLogger(progress.LevelInfo), &cli.Config{})
 	if err == nil {
 		t.Fatal("Run succeeded while the lock was held")
 	}
