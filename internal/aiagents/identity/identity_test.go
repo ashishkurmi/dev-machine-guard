@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/config"
+	"github.com/step-security/dev-machine-guard/internal/device"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 )
 
@@ -38,6 +39,7 @@ func (h *hangingExec) RunInDir(ctx context.Context, _ string, _ time.Duration, n
 
 func TestResolve_HappyPath_Darwin(t *testing.T) {
 	mock := executor.NewMock()
+	t.Cleanup(device.ResetIDCache)
 	mock.SetGOOS("darwin")
 	mock.SetCommand(`"IOPlatformSerialNumber" = "ABCXYZ123"`, "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	mock.SetCommand("14.5\n", "", 0, "sw_vers", "-productVersion")
@@ -61,6 +63,7 @@ func TestResolve_PassesUnknownThrough(t *testing.T) {
 	// returns errors for unstubbed commands, which device.Gather translates
 	// to its `"unknown"` sentinel. The shim must not rewrite that.
 	mock := executor.NewMock()
+	t.Cleanup(device.ResetIDCache)
 	mock.SetGOOS("darwin")
 	// Don't set USER_EMAIL etc. — and Mock.LoggedInUser falls back to
 	// CurrentUser which has username "testuser" by default. Override that
@@ -85,6 +88,7 @@ func TestResolve_PassesUnknownThrough(t *testing.T) {
 
 func TestResolve_HungExecutorTimesOutWithin1s(t *testing.T) {
 	mock := executor.NewMock()
+	t.Cleanup(device.ResetIDCache)
 	mock.SetGOOS("darwin")
 	hung := &hangingExec{Mock: mock}
 
@@ -125,6 +129,7 @@ func TestResolve_HappyPath_Linux(t *testing.T) {
 	// this mirrors it on Linux so a regression in Linux device probes
 	// (e.g., serial-number lookup) fails here, not in production.
 	mock := executor.NewMock()
+	t.Cleanup(device.ResetIDCache)
 	mock.SetGOOS("linux")
 	mock.SetUsername("svc-deploy")
 	mock.SetFile("/sys/class/dmi/id/product_serial", []byte("LINUX-SERIAL-456\n"))
@@ -148,6 +153,7 @@ func TestResolve_EmptyCustomerIDPassedThrough(t *testing.T) {
 	// identity.Resolve does NOT validate customerID — that's ingest.Snapshot's
 	// job. Pin the boundary: an empty customerID must reach Info untouched.
 	mock := executor.NewMock()
+	t.Cleanup(device.ResetIDCache)
 	mock.SetGOOS("darwin")
 
 	got := Resolve(context.Background(), mock, "")
@@ -162,6 +168,7 @@ func TestResolve_DoesNotCancelParentContext(t *testing.T) {
 	// parent ctx is the hook runtime's overall budget and other stages
 	// (enrich, policy, upload) need it to remain valid after Resolve.
 	mock := executor.NewMock()
+	t.Cleanup(device.ResetIDCache)
 	mock.SetGOOS("darwin")
 	hung := &hangingExec{Mock: mock}
 
@@ -185,6 +192,7 @@ func TestResolve_CustomDeviceIDWithUnknownSerial(t *testing.T) {
 	t.Cleanup(func() { config.DeviceID = old })
 	config.DeviceID = "custom-device-123"
 	mock := executor.NewMock()
+	t.Cleanup(device.ResetIDCache)
 	mock.SetGOOS("darwin")
 	got := Resolve(context.Background(), mock, "cust-42")
 	if got.DeviceID != "custom-device-123" {

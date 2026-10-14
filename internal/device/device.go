@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/config"
@@ -36,16 +37,14 @@ func Gather(ctx context.Context, exec executor.Executor) model.Device {
 	hostname := getHostname(ctx, exec, platform)
 	userIdentity := getDeveloperIdentity(exec)
 
-	var serial, osVersion string
+	serial := SerialNumber(ctx, exec)
+	var osVersion string
 	switch platform {
 	case model.PlatformWindows:
-		serial = getSerialNumberWindows(ctx, exec)
 		osVersion = getOSVersionWindows(ctx, exec)
 	case model.PlatformDarwin:
-		serial = getSerialNumber(ctx, exec)
 		osVersion = getOSVersion(ctx, exec)
 	default: // linux and other unix
-		serial = getSerialNumberLinux(ctx, exec)
 		osVersion = getOSVersionLinux(ctx, exec)
 	}
 
@@ -59,12 +58,37 @@ func Gather(ctx context.Context, exec executor.Executor) model.Device {
 	}
 }
 
-// SerialNumber resolves just the hardware serial, skipping the rest of Gather. The run gate calls this before
-// the device_info phase — and before any network beacon — so it must stay
-// self-contained and tolerate every failure by returning "unknown" (the same
-// contract as the per-OS getters). Callers cache the result on disk; only a
-// device's first gated invocation pays the probe (ioreg on macOS).
+var (
+	idMu     sync.Mutex
+	cachedID string
+)
+
+// SerialNumber resolves the machine identity (the device_id absent a
+// configured override) once per process, so the run gate, scan, enforcers and
+// hooks can't disagree. It runs before any network beacon and tolerates every
+// failure by returning "unknown"; failures aren't cached, so a later caller
+// with a longer budget retries.
 func SerialNumber(ctx context.Context, exec executor.Executor) string {
+	idMu.Lock()
+	defer idMu.Unlock()
+	if cachedID != "" {
+		return cachedID
+	}
+	id := probeSerial(ctx, exec)
+	if usableSerial(id) {
+		cachedID = id
+	}
+	return id
+}
+
+// ResetIDCache drops the process-wide identity. For tests.
+func ResetIDCache() {
+	idMu.Lock()
+	defer idMu.Unlock()
+	cachedID = ""
+}
+
+func probeSerial(ctx context.Context, exec executor.Executor) string {
 	switch exec.GOOS() {
 	case model.PlatformWindows:
 		return getSerialNumberWindows(ctx, exec)
