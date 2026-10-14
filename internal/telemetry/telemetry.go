@@ -827,7 +827,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		if config.UseLegacyPythonScan {
 			pythonGlobalPkgs = pyScanner.ScanGlobalPackages(phaseCtx)
 		} else {
-			pythonGlobalPkgs = pyScanner.ScanGlobalPackagesFromDisk(tccSkipper)
+			pythonGlobalPkgs = pyScanner.ScanGlobalPackagesFromDisk(phaseCtx, tccSkipper)
 		}
 		log.Progress("  Found %d Python global package source(s)", len(pythonGlobalPkgs))
 
@@ -844,7 +844,10 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 				knownPython[path] = entry.LastVerifiedAt
 			}
 		}
-		pythonProjects, pythonDiscovered = pyProjectDetector.ListProjects(searchDirs, knownPython)
+		pythonProjects, pythonDiscovered = pyProjectDetector.ListProjects(phaseCtx, searchDirs, knownPython)
+		if phaseCtx.Err() != nil && scanState != nil {
+			pythonDiscovered = withKnownPaths(pythonDiscovered, scanState.PythonProjects)
+		}
 		log.Progress("  Found %d Python projects", len(pythonProjects))
 		fmt.Fprintln(os.Stderr)
 		endPhase(phaseCtx, phaseCancel, tracker, log, "python_scan")
@@ -976,6 +979,9 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 			}
 		}
 		nodeProjects, nodeDiscovered = nodeScanner.ScanProjects(phaseCtx, searchDirs, knownNPM)
+		if phaseCtx.Err() != nil && scanState != nil {
+			nodeDiscovered = withKnownPaths(nodeDiscovered, scanState.NPMProjects)
+		}
 		nodeScanMs = time.Since(scanStart).Milliseconds()
 		log.Progress("  Found %d Node.js projects", len(nodeProjects))
 		log.Progress("  Scan duration: %dms", nodeScanMs)
