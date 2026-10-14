@@ -51,7 +51,7 @@ func TestSerialProbesSkipPlaceholders(t *testing.T) {
 
 	darwin := executor.NewMock()
 	darwin.SetGOOS("darwin")
-	darwin.SetCommand(`"IOPlatformSerialNumber" = "0"`, "", 0, "ioreg", "-l")
+	darwin.SetCommand(`"IOPlatformSerialNumber" = "0"`, "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	darwin.SetCommand("Serial Number (system): MAC123\n", "", 0, "system_profiler", "SPHardwareDataType")
 	if got := getSerialNumber(context.Background(), darwin); got != "MAC123" {
 		t.Errorf("darwin = %q, want system_profiler serial", got)

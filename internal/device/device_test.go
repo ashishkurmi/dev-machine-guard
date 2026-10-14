@@ -15,7 +15,7 @@ import (
 func TestGather_BasicFields(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetHostname("test-mac.local")
-	mock.SetCommand("SERIAL123\n    \"IOPlatformSerialNumber\" = \"SERIAL123\"\n", "", 0, "ioreg", "-l")
+	mock.SetCommand("SERIAL123\n    \"IOPlatformSerialNumber\" = \"SERIAL123\"\n", "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	mock.SetCommand("15.1\n", "", 0, "sw_vers", "-productVersion")
 	mock.SetUsername("devuser")
 
@@ -39,7 +39,7 @@ func TestGather_FallbackSerial(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetHostname("test")
 	// ioreg fails, system_profiler returns serial
-	mock.SetCommand("", "", 1, "ioreg", "-l")
+	mock.SetCommand("", "", 1, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	mock.SetCommand("Hardware:\n    Serial Number (system): FB123\n", "", 0, "system_profiler", "SPHardwareDataType")
 	mock.SetCommand("14.0\n", "", 0, "sw_vers", "-productVersion")
 
@@ -52,7 +52,7 @@ func TestGather_FallbackSerial(t *testing.T) {
 func TestGather_EmailIdentity(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetHostname("test")
-	mock.SetCommand("", "", 1, "ioreg", "-l")
+	mock.SetCommand("", "", 1, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	mock.SetCommand("", "", 1, "system_profiler", "SPHardwareDataType")
 	mock.SetCommand("", "", 1, "sw_vers", "-productVersion")
 	mock.SetEnv("USER_EMAIL", "dev@example.com")
@@ -177,7 +177,7 @@ func TestGather_NoConsoleUser_DoesNotLeakRoot(t *testing.T) {
 	mock.SetIsRoot(true)
 	mock.SetUsername("root") // process-owner identity, the trap
 	mock.SetHostname("mac")
-	mock.SetCommand("SERIAL\n    \"IOPlatformSerialNumber\" = \"SERIAL\"\n", "", 0, "ioreg", "-l")
+	mock.SetCommand("SERIAL\n    \"IOPlatformSerialNumber\" = \"SERIAL\"\n", "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	mock.SetCommand("15.1\n", "", 0, "sw_vers", "-productVersion")
 	mock.SetLoggedInUserError(errors.New("no GUI console user (owner=\"_windowserver\")"))
 
@@ -198,7 +198,7 @@ func TestGather_NoConsoleUser_EnvVarRescues(t *testing.T) {
 	mock.SetIsRoot(true)
 	mock.SetUsername("root")
 	mock.SetHostname("mac")
-	mock.SetCommand("SERIAL\n    \"IOPlatformSerialNumber\" = \"SERIAL\"\n", "", 0, "ioreg", "-l")
+	mock.SetCommand("SERIAL\n    \"IOPlatformSerialNumber\" = \"SERIAL\"\n", "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	mock.SetCommand("15.1\n", "", 0, "sw_vers", "-productVersion")
 	mock.SetLoggedInUserError(errors.New("no console user"))
 	mock.SetEnv("USER_EMAIL", "operator@example.com")
@@ -325,7 +325,7 @@ func TestID(t *testing.T) {
 	t.Cleanup(func() { config.DeviceID = old })
 	mock := executor.NewMock()
 	mock.SetGOOS("darwin")
-	mock.SetCommand(`"IOPlatformSerialNumber" = "SERIAL123"`, "", 0, "ioreg", "-l")
+	mock.SetCommand(`"IOPlatformSerialNumber" = "SERIAL123"`, "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	for _, tc := range []struct{ override, want string }{
 		{"custom-123", "custom-123"},
 		{" custom-123 ", "custom-123"},

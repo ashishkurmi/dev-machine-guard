@@ -125,8 +125,8 @@ func getHostname(ctx context.Context, exec executor.Executor, platform string) s
 // device_windows.go (native API) and device_other.go (stub).
 
 func getSerialNumber(ctx context.Context, exec executor.Executor) string {
-	// Try ioreg first
-	stdout, _, _, err := exec.Run(ctx, "ioreg", "-l")
+	// ioreg scoped to the platform device; "-l" dumps the whole registry (~MBs).
+	stdout, _, _, err := exec.Run(ctx, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	if err == nil {
 		for _, line := range strings.Split(stdout, "\n") {
 			if strings.Contains(line, "IOPlatformSerialNumber") {

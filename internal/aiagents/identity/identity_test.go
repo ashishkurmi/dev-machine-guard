@@ -39,7 +39,7 @@ func (h *hangingExec) RunInDir(ctx context.Context, _ string, _ time.Duration, n
 func TestResolve_HappyPath_Darwin(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetGOOS("darwin")
-	mock.SetCommand(`"IOPlatformSerialNumber" = "ABCXYZ123"`, "", 0, "ioreg", "-l")
+	mock.SetCommand(`"IOPlatformSerialNumber" = "ABCXYZ123"`, "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	mock.SetCommand("14.5\n", "", 0, "sw_vers", "-productVersion")
 	mock.SetEnv("USER_EMAIL", "subham@stepsecurity.io")
 

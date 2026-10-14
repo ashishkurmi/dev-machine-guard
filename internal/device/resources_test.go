@@ -228,7 +228,7 @@ func TestGather_DarwinResources(t *testing.T) {
 	mock.SetUsername("dev")
 	// device.Gather() also calls ioreg/system_profiler/sw_vers — stub them out
 	// minimally so the existing path completes without error.
-	mock.SetCommand(`    "IOPlatformSerialNumber" = "ABCD1234"`+"\n", "", 0, "ioreg", "-l")
+	mock.SetCommand(`    "IOPlatformSerialNumber" = "ABCD1234"`+"\n", "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	mock.SetCommand("15.1\n", "", 0, "sw_vers", "-productVersion")
 
 	// Resource sysctls
