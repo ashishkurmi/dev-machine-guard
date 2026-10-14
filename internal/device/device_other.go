@@ -17,7 +17,7 @@ func getSerialNumberWindows(ctx context.Context, exec executor.Executor) string 
 		lines := strings.Split(strings.TrimSpace(stdout), "\n")
 		if len(lines) >= 2 {
 			serial := strings.TrimSpace(lines[1])
-			if serial != "" && serial != "SerialNumber" {
+			if usableSerial(serial) {
 				return serial
 			}
 		}
@@ -26,7 +26,7 @@ func getSerialNumberWindows(ctx context.Context, exec executor.Executor) string 
 		"(Get-CimInstance -ClassName Win32_BIOS).SerialNumber")
 	if err == nil {
 		s := strings.TrimSpace(stdout)
-		if s != "" {
+		if usableSerial(s) {
 			return s
 		}
 	}

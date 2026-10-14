@@ -134,7 +134,7 @@ func getSerialNumber(ctx context.Context, exec executor.Executor) string {
 				if len(parts) >= 2 {
 					serial := strings.TrimSpace(parts[1])
 					serial = strings.Trim(serial, "\" ")
-					if serial != "" {
+					if usableSerial(serial) {
 						return serial
 					}
 				}
@@ -150,7 +150,7 @@ func getSerialNumber(ctx context.Context, exec executor.Executor) string {
 				parts := strings.Split(line, ":")
 				if len(parts) >= 2 {
 					serial := strings.TrimSpace(parts[1])
-					if serial != "" {
+					if usableSerial(serial) {
 						return serial
 					}
 				}
@@ -176,7 +176,7 @@ func getSerialNumberLinux(ctx context.Context, exec executor.Executor) string {
 	// Try /sys/class/dmi/id/product_serial (readable without root on most distros)
 	if data, err := exec.ReadFile("/sys/class/dmi/id/product_serial"); err == nil {
 		s := strings.TrimSpace(string(data))
-		if s != "" && s != "None" && s != "To Be Filled By O.E.M." {
+		if usableSerial(s) {
 			return s
 		}
 	}
@@ -185,7 +185,7 @@ func getSerialNumberLinux(ctx context.Context, exec executor.Executor) string {
 	stdout, _, _, err := exec.Run(ctx, "dmidecode", "-s", "system-serial-number")
 	if err == nil {
 		s := strings.TrimSpace(stdout)
-		if s != "" && s != "None" && s != "To Be Filled By O.E.M." {
+		if usableSerial(s) {
 			return s
 		}
 	}
@@ -193,7 +193,7 @@ func getSerialNumberLinux(ctx context.Context, exec executor.Executor) string {
 	// Fallback: machine-id (always available, unique per install)
 	if data, err := exec.ReadFile("/etc/machine-id"); err == nil {
 		s := strings.TrimSpace(string(data))
-		if s != "" {
+		if usableSerial(s) {
 			return s
 		}
 	}

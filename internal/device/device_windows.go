@@ -21,7 +21,7 @@ func getSerialNumberWindows(ctx context.Context, exec executor.Executor) string 
 	if err == nil {
 		serial, _, err := k.GetStringValue("SystemSerialNumber")
 		_ = k.Close()
-		if err == nil && serial != "" && serial != "System Serial Number" && serial != "To Be Filled By O.E.M." {
+		if err == nil && usableSerial(serial) {
 			return serial
 		}
 	}
@@ -32,7 +32,7 @@ func getSerialNumberWindows(ctx context.Context, exec executor.Executor) string 
 		"(Get-CimInstance -ClassName Win32_BIOS).SerialNumber")
 	if err == nil {
 		s := strings.TrimSpace(stdout)
-		if s != "" {
+		if usableSerial(s) {
 			return s
 		}
 	}
@@ -42,7 +42,7 @@ func getSerialNumberWindows(ctx context.Context, exec executor.Executor) string 
 	if err == nil {
 		guid, _, err := k.GetStringValue("MachineGuid")
 		_ = k.Close()
-		if err == nil && guid != "" {
+		if err == nil && usableSerial(guid) {
 			return guid
 		}
 	}
