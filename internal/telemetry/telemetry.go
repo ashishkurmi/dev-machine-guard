@@ -1287,10 +1287,11 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// A legacy upload may replace the backend inventory that old delta refs
 	// point at. Invalidate that baseline BEFORE uploading, including failed or
 	// ambiguous uploads; the next delta run must establish a fresh baseline.
-	// If invalidation fails, do not upload a snapshot that could leave stale refs.
+	// This run doesn't read the state (snap == nil), so an undeletable file
+	// only risks a later delta run — not worth withholding this upload.
 	if snap == nil {
 		if err := state.Invalidate(paths.ScanStateFile()); err != nil {
-			return fmt.Errorf("invalidating delta state before legacy upload: %w", err)
+			log.Warn("scan-state: could not invalidate before full upload (%v) — proceeding", err)
 		}
 	}
 

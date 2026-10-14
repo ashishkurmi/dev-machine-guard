@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -472,12 +473,28 @@ func (s *State) globalMap(ecosystem string) map[string]GlobalEntry {
 
 // Invalidate discards a delta baseline before a legacy upload can replace it.
 // Missing state is already invalid; the next delta run will start with a full sync.
+// When the file can't be removed (read-only parent, Windows sharing violation)
+// it is renamed aside or truncated instead; an error means it is still intact.
 func Invalidate(path string) error {
 	if path == "" {
 		return nil
 	}
-	if err := os.Remove(filepath.Clean(path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	p := filepath.Clean(path)
+	err := os.Remove(p)
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if fi, sErr := os.Lstat(p); sErr != nil || !fi.Mode().IsRegular() {
 		return err
 	}
-	return nil
+	aside := fmt.Sprintf("%s.stale-%d", p, time.Now().UnixNano())
+	if os.Rename(p, aside) == nil {
+		_ = os.Remove(aside)
+		return nil
+	}
+	// An empty file fails to parse, so Load treats it as no state.
+	if os.Truncate(p, 0) == nil {
+		return nil
+	}
+	return err
 }
