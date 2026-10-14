@@ -8,7 +8,8 @@
 //     thing that exhausts it.
 //
 //  2. Use the configured device ID when present, otherwise the machine
-//     ID; "" when the probe budget ran out (never the "unknown" sentinel).
+//     ID; "unknown" when the probe budget ran out, as before (the event
+//     ingest contract for an empty device_id is unverified).
 //
 //  3. Single Gather call per Resolve — no probing twice for the two
 //     fields we need.
@@ -43,16 +44,20 @@ type Info struct {
 // Resolve returns identity information for the current host, using the configured
 // device ID when present.
 //
-// On probe timeout, DeviceID is "" and other gathered fields fall back to
+// On probe timeout, DeviceID and other gathered fields fall back to
 // "unknown". A configured device ID still takes precedence.
 func Resolve(ctx context.Context, exec executor.Executor, customerID string) Info {
 	probeCtx, cancel := context.WithTimeout(ctx, ProbeTimeout)
 	defer cancel()
 
 	d := device.Gather(probeCtx, exec)
+	id := device.ID(d)
+	if id == "" {
+		id = "unknown"
+	}
 	return Info{
 		CustomerID:   customerID,
-		DeviceID:     device.ID(d),
+		DeviceID:     id,
 		UserIdentity: d.UserIdentity,
 	}
 }

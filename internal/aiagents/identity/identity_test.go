@@ -110,9 +110,9 @@ func TestResolve_HungExecutorTimesOutWithin1s(t *testing.T) {
 	}
 
 	// With every Run call hung-then-cancelled, no ID is minted from a
-	// timeout and the "unknown" sentinel is never sent.
-	if got.DeviceID != "" {
-		t.Errorf("DeviceID under hung exec = %q, want empty", got.DeviceID)
+	// timeout; the hook keeps the "unknown" sentinel.
+	if got.DeviceID != "unknown" {
+		t.Errorf("DeviceID under hung exec = %q, want unknown", got.DeviceID)
 	}
 	if got.CustomerID != "cust-42" {
 		t.Errorf("CustomerID = %q, want passthrough cust-42", got.CustomerID)
