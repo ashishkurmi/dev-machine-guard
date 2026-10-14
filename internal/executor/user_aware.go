@@ -191,17 +191,17 @@ func (e *UserAwareExecutor) LookPath(name string) (string, error) {
 }
 
 func (e *UserAwareExecutor) lookPath(ctx context.Context, name string) (string, error) {
+	if strings.Contains(name, "/") {
+		return e.firstExecutable(ctx, name, []string{name})
+	}
 	if p := e.loginShellPATH(ctx); p != "" {
+		var cands []string
 		for _, dir := range strings.Split(p, ":") {
-			if dir == "" {
-				continue
-			}
-			cand := filepath.Join(dir, name)
-			if fi, err := e.inner.Stat(cand); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
-				return cand, nil
+			if dir != "" {
+				cands = append(cands, filepath.Join(dir, name))
 			}
 		}
-		return "", fmt.Errorf("%s not found in user PATH", name)
+		return e.firstExecutable(ctx, name, cands)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -214,6 +214,36 @@ func (e *UserAwareExecutor) lookPath(ctx context.Context, name string) (string, 
 		return "", fmt.Errorf("%s not found in user PATH", name)
 	}
 	return path, nil
+}
+
+// firstExecutable returns the first executable candidate. The stats run off
+// the caller's goroutine so a hung network mount on PATH can't block past ctx
+// or the probe deadline; an abandoned probe finishes in the background.
+func (e *UserAwareExecutor) firstExecutable(ctx context.Context, name string, cands []string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	found := make(chan string, 1)
+	go func() {
+		for _, cand := range cands {
+			if ctx.Err() != nil {
+				break
+			}
+			if fi, err := e.inner.Stat(cand); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+				found <- cand
+				return
+			}
+		}
+		found <- ""
+	}()
+	select {
+	case p := <-found:
+		if p != "" {
+			return p, nil
+		}
+		return "", fmt.Errorf("%s not found in user PATH", name)
+	case <-ctx.Done():
+		return "", fmt.Errorf("%s lookup in user PATH: %w", name, ctx.Err())
+	}
 }
 
 // LookPathWithContext resolves name without outliving the caller's deadline.

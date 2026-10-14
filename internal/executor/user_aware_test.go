@@ -386,6 +386,54 @@ func TestUserAwareExecutor_PATHFetchRetriedAfterCallerCancel(t *testing.T) {
 	}
 }
 
+// Path-containing names (e.g. app-bundle binaries) are checked as-is, not
+// joined onto PATH entries.
+func TestUserAwareExecutor_LookPathAbsoluteName(t *testing.T) {
+	skipOnWindowsHost(t)
+	mock := NewMock()
+	mock.SetCommand("/fake/bin", "", 0, "bash", "-c", `printf '%s' "$PATH"`)
+	mock.SetExecutable("/opt/homebrew/opt/ampcode/bin/amp")
+	e := NewUserAwareExecutor(mock, "someuser")
+
+	got, err := e.LookPath("/opt/homebrew/opt/ampcode/bin/amp")
+	if err != nil || got != "/opt/homebrew/opt/ampcode/bin/amp" {
+		t.Errorf("LookPath(abs) = %q, %v; want /opt/homebrew/opt/ampcode/bin/amp", got, err)
+	}
+	if _, err := e.LookPath("/opt/missing/amp"); err == nil {
+		t.Error("LookPath(missing abs) = nil error, want not-found")
+	}
+}
+
+type blockingStatExecutor struct {
+	*Mock
+	release chan struct{}
+}
+
+func (e *blockingStatExecutor) Stat(path string) (os.FileInfo, error) {
+	<-e.release
+	return e.Mock.Stat(path)
+}
+
+// A PATH entry on a hung mount must not hold LookPath past the caller's ctx.
+func TestUserAwareExecutor_LookPathStatBoundedByContext(t *testing.T) {
+	skipOnWindowsHost(t)
+	mock := NewMock()
+	mock.SetCommand("/nfs/bin", "", 0, "bash", "-c", `printf '%s' "$PATH"`)
+	inner := &blockingStatExecutor{Mock: mock, release: make(chan struct{})}
+	defer close(inner.release)
+	e := NewUserAwareExecutor(inner, "someuser")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := LookPathWithContext(ctx, e, "uv"); err == nil {
+		t.Fatal("LookPathWithContext() error = nil, want deadline")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("LookPathWithContext took %s with a hung Stat", elapsed)
+	}
+}
+
 var errMockPathFetch = fmt.Errorf("mock: PATH fetch failed")
 
 // The user-aware PATH lookup only exists for Unix targets (on Windows
