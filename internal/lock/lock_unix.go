@@ -63,6 +63,7 @@ func openLockFile(path string) (*os.File, error) {
 		// Undo umask, and widen a restrictive file we own. Fails harmlessly
 		// on another account's file.
 		_ = syscall.Fchmod(fd, lockFileMode)
+		// #nosec G115 -- fd is a valid, non-negative descriptor from Open.
 		return os.NewFile(uintptr(fd), path), nil
 	}
 	return nil, fmt.Errorf("opening lock file %s: repeatedly created and removed", path)
