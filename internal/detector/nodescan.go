@@ -60,6 +60,8 @@ type NodeScanner struct {
 	// The cache, ordering, size cap, and concurrency around the scan are
 	// unchanged — only the per-project package source differs.
 	dist *NodeDistDetector
+	// scanOverride replaces scanProject in tests.
+	scanOverride func(ctx context.Context, projectDir, pm string) (model.NodeScanResult, bool)
 }
 
 func NewNodeScanner(exec executor.Executor, log *progress.Logger, loggedInUser string) *NodeScanner {
@@ -567,7 +569,7 @@ func (s *NodeScanner) scanProjectsConcurrent(ctx context.Context, projects []pro
 					p := projects[idx]
 					pm := slots[idx].pm
 					s.log.Progress("  Scanning: %s (%s)", p.dir, pm)
-					r, ok := s.scanProject(ctx, p.dir, pm)
+					r, ok := s.scanProjectSafe(ctx, p.dir, pm)
 					if !ok {
 						continue
 					}
@@ -761,6 +763,29 @@ func (s *NodeScanner) scanProject(ctx context.Context, projectDir, pm string) (m
 		ExitCode:         exitCode,
 		ScanDurationMs:   duration,
 	}, true
+}
+
+// scanProjectSafe turns a panic in one project's scan (e.g. a malformed
+// lockfile tripping a parser) into a failed result for that project, so a
+// worker goroutine can't crash the run.
+func (s *NodeScanner) scanProjectSafe(ctx context.Context, projectDir, pm string) (r model.NodeScanResult, ok bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.log.Warn("node scan panicked on %s: %v", projectDir, p)
+			r = model.NodeScanResult{
+				ProjectPath:      projectDir,
+				PackageManager:   pm,
+				WorkingDirectory: projectDir,
+				Error:            fmt.Sprintf("scan panicked: %v", p),
+				ExitCode:         1,
+			}
+			ok = true
+		}
+	}()
+	if s.scanOverride != nil {
+		return s.scanOverride(ctx, projectDir, pm)
+	}
+	return s.scanProject(ctx, projectDir, pm)
 }
 
 // scanProjectFromDisk produces a project's NodeScanResult by parsing on-disk
