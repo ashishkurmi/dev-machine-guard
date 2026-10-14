@@ -14,12 +14,16 @@ import (
 )
 
 // ID returns the configured device identity, falling back to the machine
-// serial. Keep SerialNumber separate so telemetry retains the hardware identity.
+// serial, or "" when neither is usable (never a placeholder like "unknown").
+// Keep SerialNumber separate so telemetry retains the hardware identity.
 func ID(dev model.Device) string {
 	if id := strings.TrimSpace(config.DeviceID); id != "" {
 		return id
 	}
-	return dev.SerialNumber
+	if usableSerial(dev.SerialNumber) {
+		return dev.SerialNumber
+	}
+	return ""
 }
 
 // IDForGuest gives the host/distro identity precedence over an inherited host
@@ -65,9 +69,9 @@ var (
 
 // SerialNumber resolves the machine identity (the device_id absent a
 // configured override) once per process, so the run gate, scan, enforcers and
-// hooks can't disagree. It runs before any network beacon and tolerates every
-// failure by returning "unknown"; failures aren't cached, so a later caller
-// with a longer budget retries.
+// hooks can't disagree. It runs before any network beacon and never fails:
+// with no source it generates and persists an ID, and only an exhausted ctx
+// yields "unknown" (not cached, so a later caller with more budget retries).
 func SerialNumber(ctx context.Context, exec executor.Executor) string {
 	idMu.Lock()
 	defer idMu.Unlock()

@@ -58,10 +58,10 @@ func TestResolve_HappyPath_Darwin(t *testing.T) {
 	}
 }
 
-func TestResolve_PassesUnknownThrough(t *testing.T) {
+func TestResolve_NeverSendsUnknownDeviceID(t *testing.T) {
 	// No stubs registered for ioreg / sw_vers / system_profiler — Mock.Run
-	// returns errors for unstubbed commands, which device.Gather translates
-	// to its `"unknown"` sentinel. The shim must not rewrite that.
+	// returns errors for unstubbed commands, so the device falls back to a
+	// generated ID rather than the "unknown" sentinel.
 	mock := executor.NewMock()
 	t.Cleanup(device.ResetIDCache)
 	mock.SetGOOS("darwin")
@@ -72,8 +72,8 @@ func TestResolve_PassesUnknownThrough(t *testing.T) {
 
 	got := Resolve(context.Background(), mock, "cust-42")
 
-	if got.DeviceID != "unknown" {
-		t.Errorf("DeviceID = %q, want %q", got.DeviceID, "unknown")
+	if got.DeviceID == "" || got.DeviceID == "unknown" {
+		t.Errorf("DeviceID = %q, want a generated ID", got.DeviceID)
 	}
 	// UserIdentity falls back through env vars then LoggedInUser; with
 	// empty env and empty username, expect "unknown" or "" — accept either,
@@ -109,10 +109,10 @@ func TestResolve_HungExecutorTimesOutWithin1s(t *testing.T) {
 		t.Errorf("Resolve took %s, expected ~1s (probe timeout)", elapsed)
 	}
 
-	// With every Run call hung-then-cancelled, device.Gather returns its
-	// "unknown" sentinel — confirm the shim passes it through.
-	if got.DeviceID != "unknown" {
-		t.Errorf("DeviceID under hung exec = %q, want %q", got.DeviceID, "unknown")
+	// With every Run call hung-then-cancelled, no ID is minted from a
+	// timeout and the "unknown" sentinel is never sent.
+	if got.DeviceID != "" {
+		t.Errorf("DeviceID under hung exec = %q, want empty", got.DeviceID)
 	}
 	if got.CustomerID != "cust-42" {
 		t.Errorf("CustomerID = %q, want passthrough cust-42", got.CustomerID)

@@ -3,10 +3,13 @@ package device
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
+	"github.com/step-security/dev-machine-guard/internal/paths"
 )
 
 // machineIDFile is the machine-wide identity: written by privileged runs,
@@ -19,6 +22,14 @@ func machineIDFile(goos string) string {
 	return "/etc/stepsecurity/device-id"
 }
 
+// userIDFile holds a generated ID for unprivileged runs; "" disables it.
+var userIDFile = func() string {
+	if home := paths.Home(); home != "" {
+		return filepath.Join(home, "device-id")
+	}
+	return ""
+}
+
 type atomicWriter interface {
 	WriteFileAtomic(path string, data []byte, perm os.FileMode) error
 }
@@ -28,23 +39,42 @@ type atomicWriter interface {
 // only probes when it is absent. Unprivileged runs never write it.
 func resolveID(ctx context.Context, exec executor.Executor) string {
 	path := machineIDFile(exec.GOOS())
-	if exec.IsRoot() {
-		id := probeSerial(ctx, exec)
-		if !usableSerial(id) {
-			if stored := readIDFile(exec, path); stored != "" {
-				return stored
-			}
-			return id
+	root := exec.IsRoot()
+	if !root {
+		if stored := readIDFile(exec, path); stored != "" {
+			return stored
 		}
-		if readIDFile(exec, path) != id {
+	}
+	if id := probeSerial(ctx, exec); usableSerial(id) {
+		if root && readIDFile(exec, path) != id {
 			writeIDFile(exec, path, id)
 		}
 		return id
 	}
-	if stored := readIDFile(exec, path); stored != "" {
-		return stored
+	return generatedID(ctx, exec, root, path)
+}
+
+// generatedID is the last resort when no source yields an ID: a random UUID,
+// persisted so later runs reuse it. A probe cut short by the deadline isn't
+// proof there is no ID, so nothing is minted then.
+func generatedID(ctx context.Context, exec executor.Executor, root bool, machinePath string) string {
+	path := userIDFile()
+	if root {
+		path = machinePath
 	}
-	return probeSerial(ctx, exec)
+	if path != "" {
+		if stored := readIDFile(exec, path); stored != "" {
+			return stored
+		}
+	}
+	if ctx.Err() != nil {
+		return "unknown"
+	}
+	id := uuid.NewString()
+	if path != "" {
+		writeIDFile(exec, path, id)
+	}
+	return id
 }
 
 // readIDFile returns the trimmed ID at path, or "" if missing or unusable.

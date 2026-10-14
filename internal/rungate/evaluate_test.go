@@ -216,8 +216,11 @@ func TestEvaluateNoDeviceIDScans(t *testing.T) {
 			withTempState(t)
 			hits := gateServer(t, 0, `{`+fullDirective+`,"scanners":{"credentials":{"enabled":false}}}`)
 
-			// The mock executor answers no serial probe, so the device id is unusable.
-			res := evaluate(t, tt.forceFlag)
+			// No serial probe answers and the budget is already spent, so no
+			// ID is generated either.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			res := Evaluate(ctx, executor.NewMock(), progress.NewNoop(), tt.forceFlag, "")
 			if res.Skip || res.Reason != tt.wantReason || res.CredentialScanningDisabled {
 				t.Fatalf("result = %+v, want fail-open with reason %s and credentials enabled", res, tt.wantReason)
 			}

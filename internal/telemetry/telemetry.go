@@ -479,6 +479,15 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	if wslGuest != nil {
 		deviceID = device.IDForGuest(dev, wslGuest.HostDeviceID, wslGuest.DistroID)
 	}
+	if deviceID == "" {
+		// The device_info budget ran out before any source answered; retry on
+		// the run's deadline rather than upload without an identity.
+		dev.SerialNumber = device.SerialNumber(ctx, exec)
+		if deviceID = device.ID(dev); deviceID == "" {
+			phaseCancel()
+			return fmt.Errorf("device identity could not be determined")
+		}
+	}
 	// Single source of truth for "is this a real developer or a daemon
 	// context?" — same predicate the payload uses below, so the warning,
 	// the Developer: line, and the telemetry field always agree.
@@ -494,9 +503,6 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		log.Progress("Developer: %s", dev.UserIdentity)
 	}
 	log.Debug("device gathered: hostname=%q platform=%q serial=%q user_identity=%q no_user=%v", dev.Hostname, dev.Platform, dev.SerialNumber, dev.UserIdentity, noUserLoggedIn)
-	if deviceID == "" {
-		log.Warn("device identity could not be determined — telemetry will upload with empty device_id")
-	}
 	if noUserLoggedIn {
 		log.Warn("no real developer identity (UserIdentity=%q, root=%v) — telemetry will be marked no_user_logged_in", dev.UserIdentity, exec.IsRoot())
 	}

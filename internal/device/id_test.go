@@ -2,11 +2,15 @@ package device
 
 import (
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/step-security/dev-machine-guard/internal/config"
 	"github.com/step-security/dev-machine-guard/internal/executor"
+	"github.com/step-security/dev-machine-guard/internal/model"
 )
 
 // countingExec counts hardware probes (Linux DMI reads).
@@ -46,7 +50,9 @@ func TestSerialNumberDoesNotCacheFailure(t *testing.T) {
 	ResetIDCache()
 	mock := executor.NewMock()
 	mock.SetGOOS("linux")
-	if got := SerialNumber(context.Background(), mock); got != "unknown" {
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := SerialNumber(expired, mock); got != "unknown" {
 		t.Fatalf("first = %q", got)
 	}
 	mock.SetFile("/etc/machine-id", []byte("mid-1\n"))
@@ -151,5 +157,56 @@ func TestConfiguredIDBeatsMachineWideFile(t *testing.T) {
 	}
 	if dev.SerialNumber != "PERSISTED" {
 		t.Fatalf("serial = %q, want machine-wide ID", dev.SerialNumber)
+	}
+}
+
+func TestGeneratedIDWhenAllSourcesFail(t *testing.T) {
+	for _, root := range []bool{false, true} {
+		userFile := filepath.Join(t.TempDir(), "device-id")
+		old := userIDFile
+		userIDFile = func() string { return userFile }
+		t.Cleanup(func() { userIDFile = old; ResetIDCache() })
+
+		mock := executor.NewMock()
+		mock.SetGOOS("linux")
+		mock.SetIsRoot(root)
+		var ids [2]string
+		for run := range ids {
+			ResetIDCache()
+			ids[run] = SerialNumber(context.Background(), mock)
+		}
+		if _, err := uuid.Parse(ids[0]); err != nil || ids[1] != ids[0] {
+			t.Fatalf("root=%v ids = %q, want one stable UUID", root, ids)
+		}
+		wantFile, otherFile := userFile, linuxIDFile
+		if root {
+			wantFile, otherFile = linuxIDFile, userFile
+		}
+		if got, _ := mock.ReadFile(wantFile); string(got) != ids[0]+"\n" {
+			t.Fatalf("root=%v %s = %q", root, wantFile, got)
+		}
+		if _, err := mock.ReadFile(otherFile); err == nil {
+			t.Fatalf("root=%v unexpectedly wrote %s", root, otherFile)
+		}
+	}
+}
+
+func TestNoGeneratedIDOnTimeout(t *testing.T) {
+	t.Cleanup(ResetIDCache)
+	ResetIDCache()
+	userFile := filepath.Join(t.TempDir(), "device-id")
+	old := userIDFile
+	userIDFile = func() string { return userFile }
+	t.Cleanup(func() { userIDFile = old })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mock := executor.NewMock()
+	mock.SetGOOS("linux")
+	got := SerialNumber(ctx, mock)
+	if _, err := mock.ReadFile(userFile); err == nil {
+		t.Fatal("persisted an ID minted after the budget ran out")
+	}
+	if id := ID(model.Device{SerialNumber: got}); id != "" {
+		t.Fatalf("ID = %q, want empty rather than a placeholder", id)
 	}
 }
