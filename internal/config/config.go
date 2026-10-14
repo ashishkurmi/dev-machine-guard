@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/atomicfile"
@@ -184,17 +185,26 @@ func LegacyDir() string {
 // ErrConfigInvalid marks a config.json that exists but can't be read or parsed.
 var ErrConfigInvalid = errors.New("config file unreadable or corrupt")
 
-var loadErr error
+var (
+	loadErrMu sync.Mutex
+	loadErr   error
+)
 
 // LoadError returns why the last Load ignored an existing config file, if it did.
 // Load runs before the logger exists, so main reports it.
-func LoadError() error { return loadErr }
+func LoadError() error {
+	loadErrMu.Lock()
+	defer loadErrMu.Unlock()
+	return loadErr
+}
 
 // Load reads the config file and applies values to the package-level variables.
 // Values already set (not placeholders) are not overridden — build-time values take precedence.
 func Load() {
 	cfgPtr, err := readExisting()
+	loadErrMu.Lock()
 	loadErr = err
+	loadErrMu.Unlock()
 	if err != nil {
 		return
 	}
@@ -509,6 +519,7 @@ func promptValue(reader *bufio.Reader, label, current string) string {
 // ErrConfigInvalid when it exists but can't be read or parsed.
 func readExisting() (*ConfigFile, error) {
 	path := ConfigFilePath()
+	// #nosec G304 -- path is the agent's own config location, not user input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
