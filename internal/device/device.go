@@ -74,7 +74,7 @@ func SerialNumber(ctx context.Context, exec executor.Executor) string {
 	if cachedID != "" {
 		return cachedID
 	}
-	id := probeSerial(ctx, exec)
+	id := resolveID(ctx, exec)
 	if usableSerial(id) {
 		cachedID = id
 	}
@@ -197,7 +197,8 @@ func getOSVersion(ctx context.Context, exec executor.Executor) string {
 }
 
 func getSerialNumberLinux(ctx context.Context, exec executor.Executor) string {
-	// Try /sys/class/dmi/id/product_serial (readable without root on most distros)
+	// /sys/class/dmi/id/product_serial is root-only (0400); user runs read the
+	// value root persisted machine-wide instead (see resolveID).
 	if data, err := exec.ReadFile("/sys/class/dmi/id/product_serial"); err == nil {
 		s := strings.TrimSpace(string(data))
 		if usableSerial(s) {

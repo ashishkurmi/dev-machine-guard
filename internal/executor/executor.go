@@ -239,6 +239,39 @@ func (r *Real) ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// WriteFileAtomic replaces path via a synced temp file and rename, so readers
+// never see a partial file. A missing parent is created world-traversable.
+// Not part of Executor; callers type-assert for it.
+func (r *Real) WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		_ = os.Chmod(dir, 0o755) // undo a restrictive umask
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // no-op once renamed
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(perm)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 func (r *Real) ReadDir(path string) ([]os.DirEntry, error) {
 	return os.ReadDir(path)
 }
