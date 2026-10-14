@@ -365,8 +365,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		case sig := <-sigCh:
 			fmt.Fprintf(os.Stderr, "\n[cancel] received %s, reporting failure before exit\n", sig)
 			reportFailedOnce(fmt.Sprintf("%s: %s", runStatusCancelled, sig))
-			// Best-effort lock cleanup. A new run can recover from a stale
-			// lock file on its own via lock.Acquire; this is just polite.
+			// The OS drops the instance lock on exit.
 			os.Exit(130) // conventional exit code for SIGINT
 		case <-sigHandlerDone:
 			return
