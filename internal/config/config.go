@@ -3,10 +3,14 @@ package config
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/step-security/dev-machine-guard/internal/atomicfile"
 )
 
 // Default placeholders (replaced by backend for enterprise installation scripts).
@@ -176,18 +180,24 @@ func LegacyDir() string {
 	return userConfigDir()
 }
 
+// ErrConfigInvalid marks a config.json that exists but can't be read or parsed.
+var ErrConfigInvalid = errors.New("config file unreadable or corrupt")
+
+var loadErr error
+
+// LoadError returns why the last Load ignored an existing config file, if it did.
+// Load runs before the logger exists, so main reports it.
+func LoadError() error { return loadErr }
+
 // Load reads the config file and applies values to the package-level variables.
 // Values already set (not placeholders) are not overridden — build-time values take precedence.
 func Load() {
-	data, err := os.ReadFile(ConfigFilePath())
+	cfgPtr, err := readExisting()
+	loadErr = err
 	if err != nil {
-		return // no config file, use defaults
-	}
-
-	var cfg ConfigFile
-	if err := json.Unmarshal(data, &cfg); err != nil {
 		return
 	}
+	cfg := *cfgPtr
 
 	if cfg.CustomerID != "" && isPlaceholder(CustomerID) {
 		CustomerID = cfg.CustomerID
@@ -256,7 +266,7 @@ func RunConfigure() error {
 	reader := bufio.NewReader(os.Stdin)
 
 	// Load existing config to show current values
-	existing := loadExisting()
+	existing := loadForConfigure()
 
 	fmt.Println("StepSecurity Dev Machine Guard — Configuration")
 	fmt.Println()
@@ -494,16 +504,41 @@ func promptValue(reader *bufio.Reader, label, current string) string {
 	return line
 }
 
-func loadExisting() *ConfigFile {
-	data, err := os.ReadFile(ConfigFilePath())
+// readExisting returns an empty config when the file is absent, and
+// ErrConfigInvalid when it exists but can't be read or parsed.
+func readExisting() (*ConfigFile, error) {
+	path := ConfigFilePath()
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return &ConfigFile{}
+		if os.IsNotExist(err) {
+			return &ConfigFile{}, nil
+		}
+		return &ConfigFile{}, fmt.Errorf("%w: %s: %v", ErrConfigInvalid, path, err)
 	}
 	var cfg ConfigFile
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return &ConfigFile{}
+		return &ConfigFile{}, fmt.Errorf("%w: %s: %v", ErrConfigInvalid, path, err)
 	}
-	return &cfg
+	return &cfg, nil
+}
+
+func loadExisting() *ConfigFile {
+	cfg, _ := readExisting()
+	return cfg
+}
+
+// loadForConfigure is readExisting for explicit `configure` runs: the operator
+// is supplying fresh values, so a corrupt file is backed up and replaced
+// rather than blocking recovery.
+func loadForConfigure() *ConfigFile {
+	cfg, err := readExisting()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: ignoring existing config (%v)\n", err)
+		if bak, bErr := atomicfile.TakeBackup(ConfigFilePath(), time.Now()); bErr == nil && bak != "" {
+			fmt.Fprintf(os.Stderr, "Warning: previous config saved to %s\n", bak)
+		}
+	}
+	return cfg
 }
 
 // NormalizeAPIEndpoint strips trailing slashes and surrounding whitespace
@@ -545,8 +580,12 @@ func save(cfg *ConfigFile) error {
 	}
 
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, data, fileMode); err != nil {
+	prev, _ := os.Stat(configPath)
+	if err := atomicfile.Replace(configPath, data, atomicfile.PickMode(configPath, fileMode)); err != nil {
 		return err
+	}
+	if prev != nil {
+		preserveOwner(configPath, prev)
 	}
 
 	if machineWide {
@@ -564,7 +603,10 @@ func save(cfg *ConfigFile) error {
 
 // ShowConfigure prints the current configuration to stdout.
 func ShowConfigure() {
-	cfg := loadExisting()
+	cfg, err := readExisting()
+	if err != nil {
+		fmt.Printf("Warning: %v\n\n", err)
+	}
 
 	fmt.Printf("Configuration (%s):\n\n", ConfigFilePath())
 	fmt.Printf("  %-24s %s\n", "Customer ID:", displayValue(cfg.CustomerID))
@@ -737,7 +779,7 @@ func (o NonInteractiveOptions) HasAny() bool {
 // C:\ProgramData\StepSecurity where the scheduled task (running as the
 // logged-in user) can read it.
 func RunConfigureNonInteractive(opts NonInteractiveOptions) error {
-	existing := loadExisting()
+	existing := loadForConfigure()
 
 	// --from-file: replace base. Inline flags still override individual
 	// fields below, so customers can ship a base config via the file and
@@ -799,12 +841,16 @@ func RunConfigureNonInteractive(opts NonInteractiveOptions) error {
 // it lets telemetry.ExecutionDeadline pick it up on every scheduled run.
 // Read-modify-write so the loader-written customer_id/api_key/etc. survive.
 // No-op when value is empty (a direct binary install with no loader-configured
-// value keeps the built-in default).
+// value keeps the built-in default). Refuses (ErrConfigInvalid) rather than
+// overwrite a config file it can't parse.
 func PersistMaxExecutionDuration(value string) error {
 	if value == "" {
 		return nil
 	}
-	existing := loadExisting()
+	existing, err := readExisting()
+	if err != nil {
+		return err
+	}
 	if existing.MaxExecutionDuration == value {
 		return nil
 	}
