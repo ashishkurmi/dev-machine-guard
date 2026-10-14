@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/windows"
 )
 
 // A .cmd whose grandchild (ping) inherits stdout. Without a tree kill and
@@ -33,12 +31,4 @@ func TestRunWithTimeout_KillsGrandchildHoldingStdout(t *testing.T) {
 	if elapsed > timeout+3*time.Second {
 		t.Fatalf("RunWithTimeout took %s, want < %s", elapsed, timeout+3*time.Second)
 	}
-}
-
-func TestNewKillOnCloseJob(t *testing.T) {
-	job, err := newKillOnCloseJob()
-	if err != nil {
-		t.Fatalf("newKillOnCloseJob: %v", err)
-	}
-	_ = windows.CloseHandle(job)
 }

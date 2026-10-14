@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -20,12 +19,13 @@ func setupKillgroupOnCancel(cmd *exec.Cmd) {
 	cmd.WaitDelay = 2 * time.Second
 }
 
-// runCommand runs cmd inside its own kill-on-close job so cancel (and
-// completion) take down grandchildren too, mirroring the Unix process-group
-// kill. Nested jobs need Windows 8+; if the job can't be created or assigned,
+// runCommand runs cmd inside its own job so cancel takes down grandchildren
+// too, mirroring the Unix process-group kill. Only cancel terminates the job;
+// helpers a command leaves behind on normal exit keep running, as on Unix.
+// Nested jobs need Windows 8+; if the job can't be created or assigned,
 // cancel falls back to killing the direct child and WaitDelay bounds Wait.
 func runCommand(cmd *exec.Cmd) error {
-	job, err := newKillOnCloseJob()
+	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return cmd.Run()
 	}
@@ -45,24 +45,6 @@ func runCommand(cmd *exec.Cmd) error {
 		assigned.Store(true)
 	}
 	return cmd.Wait()
-}
-
-func newKillOnCloseJob() (windows.Handle, error) {
-	job, err := windows.CreateJobObject(nil, nil)
-	if err != nil {
-		return 0, err
-	}
-	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
-		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
-			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-		},
-	}
-	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
-		_ = windows.CloseHandle(job)
-		return 0, err
-	}
-	return job, nil
 }
 
 // assignToJob opens pid and adds it to job. The started cmd holds its own
