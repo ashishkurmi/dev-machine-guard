@@ -42,7 +42,7 @@ func TestRun_LockHeldReportsDeviceID(t *testing.T) {
 	// Hold a private instance lock so a real agent on this machine is unaffected.
 	target := filepath.Join(t.TempDir(), "test.flock")
 	if runtime.GOOS == "windows" {
-		target = fmt.Sprintf(`Local\dmg-lock-test-%d`, os.Getpid())
+		target = fmt.Sprintf("dmg-lock-test-%d", os.Getpid())
 	}
 	defer lock.SetTargetForTest(target)()
 	lk, err := lock.Acquire(nil)

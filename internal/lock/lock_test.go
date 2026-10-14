@@ -18,10 +18,12 @@ const helperEnv = "DMG_LOCK_TEST_HOLDER"
 func TestMain(m *testing.M) {
 	if target := os.Getenv(helperEnv); target != "" {
 		setLockTarget(target)
-		if _, err := Acquire(nil); err != nil {
+		lk, err := Acquire(nil)
+		if err != nil {
 			fmt.Println("acquire failed:", err)
 			os.Exit(1)
 		}
+		defer lk.Release() // keeps the lock reachable; never runs on kill
 		fmt.Println("ready")
 		time.Sleep(time.Hour)
 		os.Exit(0)
