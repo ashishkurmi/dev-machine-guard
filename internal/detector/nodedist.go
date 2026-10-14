@@ -81,6 +81,9 @@ func (d *NodeDistDetector) WithLogger(log *progress.Logger) *NodeDistDetector {
 // node_modules. The result is de-duplicated by (name, version) and sorted by
 // name then version for stable output.
 func (d *NodeDistDetector) ScanProject(ctx context.Context, projectDir, pm string) []model.NodePackage {
+	if ctx.Err() != nil {
+		return nil
+	}
 	var pkgs []model.NodePackage
 
 	switch pm {

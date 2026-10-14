@@ -214,6 +214,17 @@ func TestScanProject_LockfileDispatch(t *testing.T) {
 	assertPkgs(t, got, "lodash@4.17.21+direct", "dep@1.0.0")
 }
 
+// A cancelled scan must not start reading the project's lockfiles.
+func TestScanProject_CancelledSkipsParsing(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "package-lock.json"), `{"lockfileVersion":3,"packages":{"node_modules/dep":{"version":"1.0.0"}}}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := newDistDetector().ScanProject(ctx, dir, "npm"); len(got) != 0 {
+		t.Errorf("ScanProject(cancelled) = %v, want none", got)
+	}
+}
+
 // With no parseable lockfile, ScanProject falls back to node_modules.
 func TestScanProject_NodeModulesFallback(t *testing.T) {
 	dir := t.TempDir()
