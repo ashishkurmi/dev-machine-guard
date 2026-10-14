@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -127,5 +128,40 @@ func TestWriteTelemetryFileAgentPlugins(t *testing.T) {
 		if _, exists := empty[key]; exists {
 			t.Errorf("unrun section %s was emitted", key)
 		}
+	}
+}
+
+// The shared goldens must fit Payload; phases that never ran emit no keys.
+func TestPayloadPackageInventorySections(t *testing.T) {
+	for _, ecosystem := range []string{"go", "cargo"} {
+		t.Run(ecosystem, func(t *testing.T) {
+			raw, err := os.ReadFile("../model/testdata/" + ecosystem + "_inventory_v1_golden.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload Payload
+			dec := json.NewDecoder(bytes.NewReader(raw))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if ecosystem == "go" && (payload.GoInventory == nil || payload.GoConfigAudit == nil) ||
+				ecosystem == "cargo" && (payload.CargoInventory == nil || payload.CargoConfigAudit == nil) {
+				t.Fatal("inventory and audit sections not decoded into Payload")
+			}
+			data, err := json.Marshal(&Payload{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var empty map[string]json.RawMessage
+			if err := json.Unmarshal(data, &empty); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{ecosystem + "_inventory", ecosystem + "_config_audit"} {
+				if _, exists := empty[key]; exists {
+					t.Errorf("unrun section %s was emitted", key)
+				}
+			}
+		})
 	}
 }
