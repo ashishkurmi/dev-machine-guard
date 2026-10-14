@@ -249,6 +249,8 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 			reportRunStatus(context.Background(), log, executionID, deviceID, runStatusFailed, errMsg, invocationMethod)
 		}
 	}
+	fatalReporter.Store(&reportFailedOnce)
+	defer fatalReporter.CompareAndSwap(&reportFailedOnce, nil)
 
 	// Phase-boundary progress posts run on a dedicated worker so the scan
 	// never blocks on HTTP at a call site. Buffer=1 + drop-oldest send
