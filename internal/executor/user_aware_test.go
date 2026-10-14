@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -310,6 +311,7 @@ func TestUserAwareExecutor_CopilotRootsUseScannedUser(t *testing.T) {
 // candidate walks, not a `which` login shell per tool: each of those
 // re-sourced rc files where zsh compinit's "insecure directories" prompt hung.
 func TestUserAwareExecutor_LookPathNativePATH(t *testing.T) {
+	skipOnWindowsHost(t)
 	mock := NewMock()
 	mock.SetCommand("/fake/bin:/other/bin", "", 0, "bash", "-c", `printf '%s' "$PATH"`)
 	mock.SetExecutable("/other/bin/claude")
@@ -329,6 +331,7 @@ func TestUserAwareExecutor_LookPathNativePATH(t *testing.T) {
 
 // A non-executable file on PATH must not resolve (exec.LookPath semantics).
 func TestUserAwareExecutor_LookPathSkipsNonExecutable(t *testing.T) {
+	skipOnWindowsHost(t)
 	mock := NewMock()
 	mock.SetCommand("/fake/bin", "", 0, "bash", "-c", `printf '%s' "$PATH"`)
 	mock.SetFileMtime("/fake/bin/readme", 100) // exists, default mode 0644
@@ -341,6 +344,7 @@ func TestUserAwareExecutor_LookPathSkipsNonExecutable(t *testing.T) {
 
 // A failed $PATH fetch degrades to the per-tool `which` probe.
 func TestUserAwareExecutor_LookPathFallsBackToWhich(t *testing.T) {
+	skipOnWindowsHost(t)
 	mock := NewMock()
 	mock.SetCommandError(errMockPathFetch, "bash", "-c", `printf '%s' "$PATH"`)
 	mock.SetCommand("/usr/local/bin/claude\n", "", 0, "bash", "-c", "which 'claude'")
@@ -357,6 +361,7 @@ func TestUserAwareExecutor_LookPathFallsBackToWhich(t *testing.T) {
 
 // A caller that gives up mid-fetch must not pin the fallback for the process.
 func TestUserAwareExecutor_PATHFetchRetriedAfterCallerCancel(t *testing.T) {
+	skipOnWindowsHost(t)
 	service := NewMock()
 	service.SetExecutable("/fake/bin/uv")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -382,3 +387,12 @@ func TestUserAwareExecutor_PATHFetchRetriedAfterCallerCancel(t *testing.T) {
 }
 
 var errMockPathFetch = fmt.Errorf("mock: PATH fetch failed")
+
+// The user-aware PATH lookup only exists for Unix targets (on Windows
+// NewUserAwareExecutor returns the inner executor) and uses host path rules.
+func skipOnWindowsHost(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("user-aware PATH lookup is Unix-only")
+	}
+}
