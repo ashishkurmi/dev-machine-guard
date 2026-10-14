@@ -45,6 +45,11 @@ import (
 // can shrink it; production code never mutates it.
 var s3UploadBackoffUnit = 2 * time.Second
 
+// s3PutAttemptTimeout bounds one S3 PUT. Kept well under the 10m
+// telemetry_upload phase budget so a stalled attempt leaves room to retry.
+// The presigned URL lives 35m, so retries can reuse it.
+var s3PutAttemptTimeout = 3 * time.Minute
+
 // CurrentPayloadSchemaVersion is bumped when the delta-protocol wire shape
 // changes in a way the backend cares about. 0 = legacy agent.
 const CurrentPayloadSchemaVersion = 1
@@ -1635,7 +1640,7 @@ func uploadToS3(ctx context.Context, log *progress.Logger, payload *Payload, exe
 		}
 	}
 
-	s3Client := &http.Client{Timeout: 10 * time.Minute}
+	s3Client := &http.Client{Timeout: s3PutAttemptTimeout}
 	const maxRetries = 3
 	backoffUnit := s3UploadBackoffUnit
 	uploaded := false

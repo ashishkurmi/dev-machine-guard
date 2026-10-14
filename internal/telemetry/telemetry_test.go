@@ -634,3 +634,53 @@ func TestNotifyUploaded_RetriesOnce(t *testing.T) {
 		})
 	}
 }
+
+// A stalled PUT must time out per attempt, leaving the phase budget room to
+// retry instead of burning it all on the first attempt.
+func TestUploadToS3_StalledPutIsRetried(t *testing.T) {
+	withFastBackoff(t)
+	orig := s3PutAttemptTimeout
+	s3PutAttemptTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { s3PutAttemptTimeout = orig })
+
+	var putAttempt atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if putAttempt.Add(1) == 1 {
+			// Drain first: the server only watches for client disconnect once
+			// the body is consumed.
+			_, _ = io.Copy(io.Discard, r.Body)
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+			return
+		}
+		w.Header().Set("x-amz-request-id", "TESTREQID000000")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/telemetry/upload-url"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"upload_url": upstream.URL + "/put", "s3_key": "k.json.gz"})
+		case strings.HasSuffix(r.URL.Path, "/telemetry/process-uploaded"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer backendServer.Close()
+	withTestConfig(t, backendServer.URL)
+
+	// Stands in for the 10m telemetry_upload phase budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := uploadToS3(ctx, progress.NewNoop(), &Payload{CustomerID: "test-customer", DeviceID: "dev-1"},
+		"11111111-2222-4333-8444-555555555555", nil, nil); err != nil {
+		t.Fatalf("uploadToS3: %v", err)
+	}
+	if n := putAttempt.Load(); n != 2 {
+		t.Errorf("PUT attempts = %d, want 2", n)
+	}
+}
