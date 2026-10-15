@@ -57,6 +57,7 @@ type ComposerConfigSnapshot struct {
 	env                     map[string]string
 	process                 *model.ComposerConfigFile
 	credentials             map[string]bool
+	pluginAllowAll          map[string]bool
 	bytes                   int
 	limited                 bool
 }
@@ -72,7 +73,7 @@ func emptyComposerAudit() model.ComposerConfigAudit {
 }
 
 func (d *ComposerConfigDetector) Detect(ctx context.Context, scope ComposerConfigScope) *ComposerConfigSnapshot {
-	a := &ComposerConfigSnapshot{exec: d.exec, ctx: ctx, scope: scope, audit: emptyComposerAudit(), files: map[string]*model.ComposerConfigFile{}, paths: map[string]map[string]string{}, env: map[string]string{}, credentials: map[string]bool{}}
+	a := &ComposerConfigSnapshot{exec: d.exec, ctx: ctx, scope: scope, audit: emptyComposerAudit(), files: map[string]*model.ComposerConfigFile{}, paths: map[string]map[string]string{}, env: map[string]string{}, credentials: map[string]bool{}, pluginAllowAll: map[string]bool{}}
 	if scope.Username == "" || scope.Home == "" {
 		a.degrade("user_unresolved")
 		return a
@@ -533,7 +534,7 @@ func (a *ComposerConfigSnapshot) Finish() model.ComposerConfigAudit {
 		// Repository indices preserve declared order independently of key sorting.
 		slices.SortFunc(f.Settings, func(x, y model.CargoConfigSetting) int { return strings.Compare(x.Key, y.Key) })
 		a.audit.Files = append(a.audit.Files, *f)
-		a.audit.Findings = append(a.audit.Findings, composerFindings(*f)...)
+		a.audit.Findings = append(a.audit.Findings, composerFindings(*f, a.pluginAllowAll[f.SourceID])...)
 		for _, r := range f.Reasons {
 			a.degrade(r)
 		}
@@ -695,6 +696,9 @@ func (a *ComposerConfigSnapshot) parse(f *model.ComposerConfigFile, data []byte)
 			if json.Unmarshal(raw, &entries) != nil {
 				a.fileReason(f, "invalid", "parse_error")
 				continue
+			}
+			if key == "allow-plugins" {
+				a.pluginAllowAll[f.SourceID] = composerWildcardAllowsAll(raw)
 			}
 			for i, k := range slices.Sorted(maps.Keys(entries)) {
 				if i >= composerPatternLimit {
@@ -880,7 +884,29 @@ func (a *ComposerConfigSnapshot) repositories(f *model.ComposerConfigFile, raw j
 		}
 	}
 }
-func composerFindings(f model.ComposerConfigFile) []model.CargoConfigFinding {
+
+// A deny before the wildcard prevents a definite all-plugin finding.
+func composerWildcardAllowsAll(raw []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+		return false
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		var allowed bool
+		if err != nil || dec.Decode(&allowed) != nil {
+			return false
+		}
+		if key == "*" {
+			return allowed
+		}
+		if !allowed {
+			return false
+		}
+	}
+	return false
+}
+func composerFindings(f model.ComposerConfigFile, wildcardAll bool) []model.CargoConfigFinding {
 	var out []model.CargoConfigFinding
 	for _, s := range f.Settings {
 		code, severity, detail := "", "MEDIUM", ""
@@ -891,7 +917,7 @@ func composerFindings(f model.ComposerConfigFile) []model.CargoConfigFinding {
 			code, detail = "composer-002", "Composer permits insecure HTTP connections."
 		case strings.HasPrefix(s.Key, "repositories.") && strings.HasSuffix(s.Key, ".url") && strings.HasPrefix(strings.ToLower(s.Display), "http://"):
 			code, detail = "composer-003", "Composer repository uses plaintext HTTP."
-		case s.Key == "allow-plugins" && s.Display == "true":
+		case (s.Key == "allow-plugins" || (s.Key == "allow-plugins.*" && wildcardAll)) && s.Display == "true":
 			code, severity, detail = "composer-004", "LOW", "Composer allows all plugins."
 		}
 		if code != "" {

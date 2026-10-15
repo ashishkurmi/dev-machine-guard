@@ -500,6 +500,58 @@ func TestComposerScanOutputLimit(t *testing.T) {
 	composerAssertRefs(t, inv, audit)
 }
 
+func TestComposerScanOutputBudgetStopsCollection(t *testing.T) {
+	for _, declarations := range []bool{false, true} {
+		t.Run(fmt.Sprint(declarations), func(t *testing.T) {
+			home := goTestHome(t)
+			root := filepath.Join(home, "code")
+			requirements := map[string]string{}
+			entries := []map[string]any{}
+			for i := 0; i < 120; i++ {
+				name := fmt.Sprintf("example/library-%03d", i)
+				requirements[name] = "^1.2"
+				entries = append(entries, map[string]any{"name": name, "version": "1.2.3", "source": map[string]string{"type": "git", "url": "https://code.example.invalid/" + name + ".git", "reference": strings.Repeat("a", 40)}})
+			}
+			manifest := `{"name":"example/app"}`
+			if declarations {
+				data, _ := json.Marshal(map[string]any{"name": "example/app", "require": requirements})
+				manifest = string(data)
+			}
+			lock, _ := json.Marshal(map[string]any{"packages": entries, "packages-dev": []any{}})
+			for i := 0; i < 20; i++ {
+				dir := filepath.Join(root, fmt.Sprintf("project-%02d", i))
+				goWrite(t, filepath.Join(dir, "composer.json"), manifest, 0o600)
+				goWrite(t, filepath.Join(dir, "composer.lock"), string(lock), 0o600)
+			}
+			scanner, x := composerTestScanner(t, home)
+			old := maxComposerOutputBytes
+			maxComposerOutputBytes = 512 << 10
+			t.Cleanup(func() { maxComposerOutputBytes = old })
+			inv, audit := scanner.Scan(context.Background(), goTestTarget(home), []string{root}, nil)
+			if len(inv.Packages) == 0 || !slices.Contains(inv.Reasons, "output_size_limit") || goJSONSize(inv)+goJSONSize(audit) > maxComposerOutputBytes {
+				t.Fatal("output budget discarded bounded facts or exceeded the limit")
+			}
+			composerAssertRefs(t, inv, audit)
+			if composerSource(t, inv, root).Status != "partial" {
+				t.Fatal("limited discovery root remained complete")
+			}
+			reads := 0
+			filename := "composer.lock"
+			if declarations {
+				filename = "composer.json"
+			}
+			for path, n := range x.reads {
+				if filepath.Base(path) == filename {
+					reads += n
+				}
+			}
+			if reads >= 20 {
+				t.Fatal("continued reading files after the output budget was exhausted")
+			}
+		})
+	}
+}
+
 func TestComposerScanPrunesConfiguredCacheBeforeAnyProject(t *testing.T) {
 	home := goTestHome(t)
 	cache := filepath.Join(home, "a-cache")
@@ -548,7 +600,7 @@ func TestComposerScanLateVendorAndCacheSelection(t *testing.T) {
 			composerWriteProject(t, filepath.Join(copied, "example", "dependency"))
 			body, _ := json.Marshal(map[string]any{"require": map[string]string{"example/root": "^1"}, "config": map[string]string{kind: copied}})
 			goWrite(t, filepath.Join(app, "composer.json"), string(body), 0o600)
-			scanner, _ := composerTestScanner(t, home)
+			scanner, x := composerTestScanner(t, home)
 			inv, audit := scanner.Scan(context.Background(), goTestTarget(home), []string{copied, app}, nil)
 			composerAssertRefs(t, inv, audit)
 			if len(inv.Projects) != 1 || len(inv.Packages) != 1 || inv.Packages[0].PackageName != "example/root" {
@@ -557,6 +609,22 @@ func TestComposerScanLateVendorAndCacheSelection(t *testing.T) {
 			for _, f := range audit.Files {
 				if f.Scope == "project" && f.Path != filepath.Join(app, "composer.json") {
 					t.Fatal("nested dependency config survived")
+				}
+			}
+			old := maxComposerRecords
+			t.Cleanup(func() { maxComposerRecords = old })
+			for budget := 1; budget <= 32; budget++ {
+				maxComposerRecords = budget
+				clear(x.reads)
+				inv, audit = scanner.Scan(context.Background(), goTestTarget(home), []string{copied, app}, nil)
+				composerAssertRefs(t, inv, audit)
+				if x.reads[filepath.Join(app, "composer.json")] == 0 {
+					continue
+				}
+				for _, p := range inv.Packages {
+					if p.ProjectPath != app {
+						t.Fatalf("budget %d retained dependency as root: %+v", budget, p)
+					}
 				}
 			}
 		})

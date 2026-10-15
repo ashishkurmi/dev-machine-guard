@@ -44,6 +44,12 @@ func TestComposerMetadataEvidence(t *testing.T) {
 	}
 }
 func TestComposerMetadataMalformedNeighborsAndBounds(t *testing.T) {
+	for _, bad := range []string{`null`, `{}`, `"invalid"`} {
+		entries, partial, err := parseComposerPackages([]byte(`{"packages":[{"name":"example/library","version":"1.2.3"}],"packages-dev":`+bad+`}`), false)
+		if err != nil || !partial || len(entries) != 1 || entries[0].pkg.PackageName != "example/library" {
+			t.Fatalf("optional group %s: entries=%+v partial=%v err=%v", bad, entries, partial, err)
+		}
+	}
 	for _, body := range []string{`null`, `{}`, `{"packages":null}`, `{"packages":{}}`, `{"packages":[`, `false`} {
 		if _, _, err := parseComposerPackages([]byte(body), true); err == nil {
 			t.Errorf("accepted %s", body)

@@ -64,6 +64,8 @@ type composerScan struct {
 	vendors              map[string]bool
 	caches               map[string]bool
 	remaining            int
+	bytes                int
+	limited              bool
 }
 
 func emptyComposerInventory() model.ComposerInventory {
@@ -80,8 +82,9 @@ func (s *ComposerScanner) Scan(ctx context.Context, target *user.User, searchDir
 		return &inv, &audit
 	}
 	guard, volume := s.protection(target.HomeDir, includeNetworkVolumes)
+	// Reserve the audit's separate 256 KiB allowance before collecting inventory.
 	c := &composerScan{ctx: ctx, exec: s.exec, home: filepath.Clean(target.HomeDir), identity: target.Username, goos: s.exec.GOOS(), guard: guard, volume: volume, inv: inv,
-		byID: map[string]*model.ComposerSource{}, manifests: map[string]*composerProjectState{}, receipts: map[string]string{}, vendors: map[string]bool{}, caches: map[string]bool{}, remaining: maxComposerRecords}
+		byID: map[string]*model.ComposerSource{}, manifests: map[string]*composerProjectState{}, receipts: map[string]string{}, vendors: map[string]bool{}, caches: map[string]bool{}, remaining: maxComposerRecords, bytes: goJSONSize(&inv) + (256 << 10)}
 	c.roots = []string{c.home}
 	dirs := []string{}
 	for _, dir := range searchDirs {
@@ -175,17 +178,29 @@ func (c *composerScan) degrade(src *model.ComposerSource, reason string) {
 		}
 	}
 }
-func (c *composerScan) charge(src *model.ComposerSource) bool {
+func (c *composerScan) charge(src *model.ComposerSource, record any) bool {
 	if c.remaining <= 0 {
 		c.degrade(src, "record_limit")
 		return false
 	}
+	// Reserve later coverage reasons, child IDs and separators per record.
+	size := goJSONSize(record) + 128
+	if c.limited || c.bytes+size > maxComposerOutputBytes {
+		c.limited = true
+		c.degrade(src, "output_size_limit")
+		return false
+	}
 	c.remaining--
+	c.bytes += size
 	return true
 }
 func (c *composerScan) stopped(src *model.ComposerSource) bool {
 	if c.ctx.Err() != nil {
 		c.degrade(src, "deadline_exceeded")
+		return true
+	}
+	if c.limited {
+		c.degrade(src, "output_size_limit")
 		return true
 	}
 	if c.remaining <= 0 {
@@ -204,13 +219,13 @@ func (c *composerScan) source(kind, path, parent string) *model.ComposerSource {
 		return src
 	}
 	owner := c.byID[parent]
-	if !c.charge(owner) {
-		return nil
-	}
 	if owner == nil {
 		parent = ""
 	}
 	src := &model.ComposerSource{SourceID: id, Kind: kind, Path: path, ParentSourceID: parent, Status: "complete", Presence: "present", Reasons: []string{}, DiscoveredSources: []string{}}
+	if !c.charge(owner, src) {
+		return nil
+	}
 	c.byID[id] = src
 	c.sources = append(c.sources, src)
 	return src
@@ -261,6 +276,7 @@ func (c *composerScan) read(src *model.ComposerSource, targeted bool) ([]byte, b
 	return data, true
 }
 func (c *composerScan) receipt(path, parent string) {
+	c.vendors[c.key(filepath.Dir(filepath.Dir(path)))] = true
 	key := c.key(path)
 	if _, ok := c.receipts[key]; ok {
 		return
@@ -269,7 +285,6 @@ func (c *composerScan) receipt(path, parent string) {
 		return
 	}
 	c.receipts[key] = path
-	c.vendors[c.key(filepath.Dir(filepath.Dir(path)))] = true
 }
 func (c *composerScan) manifest(path, parent, scope, home string, targeted bool) {
 	key := c.key(path)
@@ -287,6 +302,7 @@ func (c *composerScan) manifest(path, parent, scope, home string, targeted bool)
 	c.manifests[key] = m
 	data, ok := c.read(src, targeted)
 	status := "present"
+	var manifest *composerManifest
 	if !ok {
 		status = "unreadable"
 		if src.Presence == "absent" {
@@ -297,11 +313,11 @@ func (c *composerScan) manifest(path, parent, scope, home string, targeted bool)
 		}
 	} else {
 		var err error
-		m.manifest, err = parseComposerManifest(data)
+		manifest, err = parseComposerManifest(data)
 		if err != nil {
 			c.degrade(src, "parse_error")
 			status = "invalid"
-		} else if m.manifest.partial {
+		} else if manifest.partial {
 			c.degrade(src, "parse_error")
 		}
 	}
@@ -324,8 +340,21 @@ func (c *composerScan) manifest(path, parent, scope, home string, targeted bool)
 	if paths.Partial {
 		m.project.SelectionStatus = "partial"
 	}
-	if m.manifest != nil {
-		m.project.PackageName, m.project.PackageVersion = m.manifest.name, m.manifest.version
+	if manifest != nil {
+		m.project.PackageName, m.project.PackageVersion = manifest.name, manifest.version
+		if !c.charge(src, m.project) {
+			return
+		}
+		packages := manifest.packages
+		manifest.packages = nil
+		m.manifest = manifest
+		for _, p := range packages {
+			p = composerObservation(src, p, "declared_requirement", m.project.ProjectPath, m.project.Scope)
+			if !c.charge(src, p) {
+				break
+			}
+			manifest.packages = append(manifest.packages, p)
+		}
 	}
 }
 func (c *composerScan) inVendor(path string) bool {
@@ -487,17 +516,13 @@ func (c *composerScan) emit() {
 			delete(c.byID, m.src.SourceID)
 			continue
 		}
+		// A later limit must not discard facts admitted during discovery.
+		if m.manifest != nil {
+			c.inv.Projects = append(c.inv.Projects, m.project)
+			c.inv.Packages = append(c.inv.Packages, m.manifest.packages...)
+		}
 		if c.stopped(m.src) {
 			continue
-		}
-		if m.manifest != nil {
-			if !c.charge(m.src) {
-				continue
-			}
-			c.inv.Projects = append(c.inv.Projects, m.project)
-			for _, p := range m.manifest.packages {
-				c.add(m.src, p, "declared_requirement", m.project.ProjectPath, m.project.Scope)
-			}
 		}
 		// The filename establishes the adjacent lock path even when the
 		// manifest cannot be read or parsed. Its evidence is independent.
@@ -584,9 +609,12 @@ func (c *composerScan) packages(src *model.ComposerSource, installed bool, proje
 }
 func composerPackageKey(p model.ComposerPackage) string { b, _ := json.Marshal(p); return string(b) }
 func (c *composerScan) add(src *model.ComposerSource, p model.ComposerPackage, evidence, project, scope string) {
-	if !c.charge(src) {
-		return
+	p = composerObservation(src, p, evidence, project, scope)
+	if c.charge(src, p) {
+		c.inv.Packages = append(c.inv.Packages, p)
 	}
+}
+func composerObservation(src *model.ComposerSource, p model.ComposerPackage, evidence, project, scope string) model.ComposerPackage {
 	p.SourceID, p.SourcePath, p.Evidence, p.ProjectPath, p.Scope = src.SourceID, src.Path, evidence, project, scope
 	for i := range p.RecordedChecksums {
 		h := &p.RecordedChecksums[i]
@@ -594,7 +622,7 @@ func (c *composerScan) add(src *model.ComposerSource, p model.ComposerPackage, e
 	}
 	slices.Sort(p.Reasons)
 	p.Reasons = slices.Compact(p.Reasons)
-	c.inv.Packages = append(c.inv.Packages, p)
+	return p
 }
 func (c *composerScan) origin(p *model.ComposerPackage, project string) model.ComposerOrigin {
 	for _, d := range []struct {

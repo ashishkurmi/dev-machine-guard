@@ -193,7 +193,11 @@ func parseComposerPackages(data []byte, installed bool) ([]composerEntry, bool, 
 		var entries []json.RawMessage
 		raw := bytes.TrimSpace(group.raw)
 		if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &entries) != nil {
-			return nil, false, errComposerUnsupportedFormat
+			if group.kind != "require_dev" {
+				return nil, false, errComposerUnsupportedFormat
+			}
+			partial = true
+			continue
 		}
 		for _, entry := range entries {
 			e, valid, incomplete := parseComposerEntry(entry, group.kind)

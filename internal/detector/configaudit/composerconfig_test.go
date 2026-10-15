@@ -91,13 +91,28 @@ func TestComposerConfigAllowlistRedactionAndFindings(t *testing.T) {
 		t.Fatalf("process %+v", process)
 	}
 }
-func TestComposerConfigSafeControlsNoFindings(t *testing.T) {
-	m, scope := composerConfigTest(t)
-	a := NewComposerConfigDetector(m).Detect(context.Background(), scope)
-	a.Project(filepath.Join(scope.Home, "app", "composer.json"), []byte(`{"config":{"allow-plugins":{"*":true},"secure-http":true,"disable-tls":false,"policy":false},"repositories":[{"type":"composer","url":"https://private.example.invalid","canonical":false}]}`), "present", nil, "")
-	audit := a.Finish()
-	if len(audit.Findings) != 0 || audit.Status != "complete" {
-		t.Fatalf("safe controls %+v", audit)
+func TestComposerConfigPluginFindings(t *testing.T) {
+	for _, tc := range []struct {
+		name, plugins string
+		findings      int
+	}{
+		{"scalar true", `true`, 1},
+		{"scalar false", `false`, 0},
+		{"empty", `{}`, 0},
+		{"wildcard", `{"*":true}`, 1},
+		{"scoped", `{"example/*":true}`, 0},
+		{"deny before wildcard", `{"example/untrusted":false,"*":true}`, 0},
+		{"deny after wildcard", `{"*":true,"example/untrusted":false}`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, scope := composerConfigTest(t)
+			a := NewComposerConfigDetector(m).Detect(context.Background(), scope)
+			a.Project(filepath.Join(scope.Home, "app", "composer.json"), []byte(`{"config":{"allow-plugins":`+tc.plugins+`,"secure-http":true,"disable-tls":false,"policy":false},"repositories":[{"type":"composer","url":"https://private.example.invalid","canonical":false}]}`), "present", nil, "")
+			audit := a.Finish()
+			if len(audit.Findings) != tc.findings || audit.Status != "complete" {
+				t.Fatalf("findings=%+v status=%s, want %d findings and complete", audit.Findings, audit.Status, tc.findings)
+			}
+		})
 	}
 }
 func TestComposerConfigHomeAndVendorSelection(t *testing.T) {
