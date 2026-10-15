@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -669,12 +670,70 @@ func TestNuGetScanLimitsDeadlineAndGuards(t *testing.T) {
 		t.Errorf("receipt with an unreadable archive = %+v", src)
 	}
 
+	// Every output budget keeps admitted records and leaves only fully
+	// collected sources complete.
 	oldOut := maxNuGetOutputBytes
-	maxNuGetOutputBytes = 1024
 	t.Cleanup(func() { maxNuGetOutputBytes = oldOut })
-	inv, _ = scanner.Scan(context.Background(), goTestTarget(home), []string{root}, nil)
-	if len(inv.Sources) != 0 || !slices.Contains(inv.Reasons, "output_size_limit") {
-		t.Error("oversize inventory published")
+	empty := emptyNuGetInventory()
+	base, step := goJSONSize(&empty)+(256<<10), goJSONSize(full)/40
+	for limit := base; ; limit += step {
+		if limit > base+4*goJSONSize(full) {
+			t.Fatal("output budget never admitted the full inventory")
+		}
+		maxNuGetOutputBytes = limit
+		inv, audit = scanner.Scan(context.Background(), goTestTarget(home), []string{root}, nil)
+		if !slices.Contains(inv.Reasons, "output_size_limit") {
+			break
+		}
+		if inv.Status != "partial" || goJSONSize(inv)+goJSONSize(audit) > limit {
+			t.Fatalf("limit %d: status %s size %d", limit, inv.Status, goJSONSize(inv)+goJSONSize(audit))
+		}
+		nugetAssertComplete(t, limit, owned, inv)
+		nugetAssertRefs(t, inv, audit)
+	}
+}
+
+// A large tree stops reading once the output budget is spent, without
+// discarding the records admitted before it.
+func TestNuGetScanOutputBudgetStopsCollection(t *testing.T) {
+	home := goTestHome(t)
+	root := filepath.Join(home, "code")
+	deps := map[string]any{}
+	for i := range 120 {
+		deps[fmt.Sprintf("Example.Library%03d", i)] = map[string]string{"type": "Direct", "requested": "[1.2.3, )", "resolved": "1.2.3", "contentHash": nugetHashA}
+	}
+	lock, _ := json.Marshal(map[string]any{"version": 1, "dependencies": map[string]any{"net8.0": deps}})
+	for i := range 20 {
+		dir := filepath.Join(root, fmt.Sprintf("project%02d", i))
+		goWrite(t, filepath.Join(dir, "App.csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`, 0o600)
+		goWrite(t, filepath.Join(dir, "packages.lock.json"), string(lock), 0o600)
+	}
+	scanner, x := nugetTestScanner(t, home)
+	full, _ := scanner.Scan(context.Background(), goTestTarget(home), []string{root}, nil)
+	if len(nugetPackages(full, "locked_package", "")) != 20*120 {
+		t.Fatalf("unbounded scan = %d packages", len(full.Packages))
+	}
+	old := maxNuGetOutputBytes
+	maxNuGetOutputBytes = 512 << 10
+	t.Cleanup(func() { maxNuGetOutputBytes = old })
+	x.reads = map[string]int{}
+	inv, audit := scanner.Scan(context.Background(), goTestTarget(home), []string{root}, nil)
+	nugetAssertRefs(t, inv, audit)
+	if len(inv.Packages) == 0 || !slices.Contains(inv.Reasons, "output_size_limit") || goJSONSize(inv)+goJSONSize(audit) > maxNuGetOutputBytes {
+		t.Fatalf("output budget discarded bounded facts or exceeded the limit: %d packages, reasons %v", len(inv.Packages), inv.Reasons)
+	}
+	if src := nugetSource(t, inv, "project_search_root", root); src.Status != "partial" || !slices.Contains(src.Reasons, "output_size_limit") {
+		t.Fatalf("limited discovery root = %+v", src)
+	}
+	nugetAssertComplete(t, maxNuGetOutputBytes, nugetOwned(full), inv)
+	reads := 0
+	for path, n := range x.reads {
+		if filepath.Base(path) == "packages.lock.json" {
+			reads += n
+		}
+	}
+	if reads >= 20 {
+		t.Fatal("continued reading lockfiles after the output budget was exhausted")
 	}
 }
 

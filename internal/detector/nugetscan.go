@@ -113,6 +113,8 @@ type nugetScan struct {
 	index                map[string]nugetCached
 	resolver             map[string][]nugetResolverEntry
 	remaining            int
+	bytes                int
+	limited              bool
 }
 
 func emptyNuGetInventory() model.NuGetInventory {
@@ -129,9 +131,10 @@ func (s *NuGetScanner) Scan(ctx context.Context, target *user.User, searchDirs [
 		return &inv, &audit
 	}
 	guard, volume := s.protection(target.HomeDir, includeNetworkVolumes)
+	// Reserve the audit's separate 256 KiB allowance before collecting inventory.
 	c := &nugetScan{ctx: ctx, exec: s.exec, home: filepath.Clean(target.HomeDir), identity: target.Username, goos: s.exec.GOOS(), guard: guard, volume: volume, inv: inv,
 		byID: map[string]*model.NuGetSource{}, projects: map[string]*nugetProjectState{}, projectDirs: map[string]string{}, importPaths: map[string]string{}, imports: map[string]*nugetImportState{},
-		stores: map[string]string{}, caches: map[string]bool{}, cacheScope: map[string]string{}, cacheDone: map[string]bool{}, index: map[string]nugetCached{}, resolver: map[string][]nugetResolverEntry{}, remaining: maxNuGetRecords}
+		stores: map[string]string{}, caches: map[string]bool{}, cacheScope: map[string]string{}, cacheDone: map[string]bool{}, index: map[string]nugetCached{}, resolver: map[string][]nugetResolverEntry{}, remaining: maxNuGetRecords, bytes: goJSONSize(&inv) + (256 << 10)}
 	c.roots = []string{c.home}
 	dirs := []string{}
 	for _, dir := range searchDirs {
@@ -213,18 +216,28 @@ func (c *nugetScan) degrade(src *model.NuGetSource, reason string) {
 		}
 	}
 }
-func (c *nugetScan) charge(src *model.NuGetSource) bool {
+func (c *nugetScan) charge(src *model.NuGetSource, record any) bool {
 	if c.remaining <= 0 {
 		c.degrade(src, "record_limit")
 		return false
 	}
+	// Reserve later coverage reasons, child IDs and separators per record.
+	size := goJSONSize(record) + 128
+	if c.limited || c.bytes+size > maxNuGetOutputBytes {
+		c.limited = true
+		c.degrade(src, "output_size_limit")
+		return false
+	}
 	c.remaining--
+	c.bytes += size
 	return true
 }
 func (c *nugetScan) stopReason() string {
 	switch {
 	case c.ctx.Err() != nil:
 		return "deadline_exceeded"
+	case c.limited:
+		return "output_size_limit"
 	case c.remaining <= 0:
 		return "record_limit"
 	}
@@ -247,13 +260,13 @@ func (c *nugetScan) source(kind, path, parent string) *model.NuGetSource {
 		return src
 	}
 	owner := c.byID[parent]
-	if !c.charge(owner) {
-		return nil
-	}
 	if owner == nil {
 		parent = ""
 	}
 	src := &model.NuGetSource{SourceID: id, Kind: kind, Path: path, ParentSourceID: parent, Status: "complete", Presence: "present", Reasons: []string{}, DiscoveredSources: []string{}}
+	if !c.charge(owner, src) {
+		return nil
+	}
 	c.byID[id] = src
 	c.sources = append(c.sources, src)
 	return src
@@ -895,7 +908,7 @@ func (c *nugetScan) emitProjects() {
 			c.frameworks(st, effective)
 		}
 		c.lock(st, effective.properties["NuGetLockFilePath"])
-		if !c.charge(st.src) {
+		if !c.charge(st.src, st.project) {
 			c.degradeImports(imports, []string{c.stopReason()})
 			continue
 		}
@@ -1106,7 +1119,7 @@ func (c *nugetScan) emitLegacy(f nugetFound) {
 			}
 		}
 	}
-	if !c.charge(src) {
+	if !c.charge(src, project) {
 		return
 	}
 	c.inv.Projects = append(c.inv.Projects, project)
@@ -1403,10 +1416,11 @@ func (c *nugetScan) emitToolManifest(f nugetFound) {
 	if filepath.Base(dir) == ".config" {
 		dir = filepath.Dir(dir)
 	}
-	if !c.charge(src) {
+	project := model.NuGetProject{ManifestSourceID: src.SourceID, ManifestPath: f.path, ProjectPath: dir, ProjectKind: "tool_manifest", TargetFrameworks: []string{}, SelectionStatus: "resolved"}
+	if !c.charge(src, project) {
 		return
 	}
-	c.inv.Projects = append(c.inv.Projects, model.NuGetProject{ManifestSourceID: src.SourceID, ManifestPath: f.path, ProjectPath: dir, ProjectKind: "tool_manifest", TargetFrameworks: []string{}, SelectionStatus: "resolved"})
+	c.inv.Projects = append(c.inv.Projects, project)
 	c.config.Ambient(dir)
 	for _, e := range entries {
 		if c.stopped(src) {
@@ -1584,11 +1598,15 @@ func (c *nugetScan) emitScript(f nugetFound) {
 		return
 	}
 	src := c.source("script_manifest", f.path, f.root)
-	if src == nil || !c.charge(src) {
+	if src == nil {
 		return
 	}
 	dir := filepath.Dir(f.path)
-	c.inv.Projects = append(c.inv.Projects, model.NuGetProject{ManifestSourceID: src.SourceID, ManifestPath: f.path, ProjectPath: dir, ProjectKind: kind, TargetFrameworks: []string{}, SelectionStatus: "resolved"})
+	project := model.NuGetProject{ManifestSourceID: src.SourceID, ManifestPath: f.path, ProjectPath: dir, ProjectKind: kind, TargetFrameworks: []string{}, SelectionStatus: "resolved"}
+	if !c.charge(src, project) {
+		return
+	}
+	c.inv.Projects = append(c.inv.Projects, project)
 	c.config.Ambient(dir)
 	for _, d := range directives {
 		item := nugetItem{kind: "PackageReference", id: d.id, version: d.version}
@@ -1601,9 +1619,6 @@ func (c *nugetScan) emitScript(f nugetFound) {
 
 func nugetPackageKey(p model.NuGetPackage) string { b, _ := json.Marshal(p); return string(b) }
 func (c *nugetScan) add(src *model.NuGetSource, p model.NuGetPackage, evidence, project, scope string) {
-	if !c.charge(src) {
-		return
-	}
 	p.SourceID, p.SourcePath, p.Evidence, p.ProjectPath, p.Scope = src.SourceID, src.Path, evidence, project, scope
 	for i := range p.RecordedChecksums {
 		h := &p.RecordedChecksums[i]
@@ -1611,7 +1626,9 @@ func (c *nugetScan) add(src *model.NuGetSource, p model.NuGetPackage, evidence, 
 	}
 	slices.Sort(p.Reasons)
 	p.Reasons = slices.Compact(p.Reasons)
-	c.inv.Packages = append(c.inv.Packages, p)
+	if c.charge(src, p) {
+		c.inv.Packages = append(c.inv.Packages, p)
+	}
 }
 func (c *nugetScan) finish() {
 	for _, src := range c.sources {
