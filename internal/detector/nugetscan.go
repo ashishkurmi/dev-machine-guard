@@ -1133,6 +1133,9 @@ func (c *nugetScan) emitLegacy(f nugetFound) {
 		}
 		p.TargetFramework, p.AllowedVersions, p.DevelopmentDependency = e.targetFramework, e.allowedVersions, e.developmentDependency
 		c.add(src, p, "declared_requirement", dir, "project")
+		if c.stopped(src) {
+			return
+		}
 		if project.PackagesPath == "" || p.Version == "" {
 			continue
 		}

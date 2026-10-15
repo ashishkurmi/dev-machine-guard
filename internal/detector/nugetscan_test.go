@@ -735,6 +735,32 @@ func TestNuGetScanOutputBudgetStopsCollection(t *testing.T) {
 	if reads >= 20 {
 		t.Fatal("continued reading lockfiles after the output budget was exhausted")
 	}
+
+	// A legacy declaration that spends the budget must not lead to reading its
+	// installed package.
+	legacy := filepath.Join(home, "legacy")
+	goWrite(t, filepath.Join(legacy, "packages.config"), `<?xml version="1.0"?><packages><package id="Newtonsoft.Json" version="13.0.1" /></packages>`, 0o600)
+	nuspec := filepath.Join(legacy, "packages", "Newtonsoft.Json.13.0.1", "Newtonsoft.Json.13.0.1.nuspec")
+	goWrite(t, nuspec, nugetNuspec("Newtonsoft.Json", "13.0.1"), 0o600)
+	maxNuGetOutputBytes = old
+	x.reads = map[string]int{}
+	full, _ = scanner.Scan(context.Background(), goTestTarget(home), []string{legacy}, nil)
+	if x.reads[nuspec] == 0 || len(nugetPackages(full, "restored_package", "newtonsoft.json")) != 1 {
+		t.Fatalf("unbounded legacy scan = %+v", full.Packages)
+	}
+	empty := emptyNuGetInventory()
+	for limit := goJSONSize(&empty) + (256 << 10); ; limit += 16 {
+		maxNuGetOutputBytes = limit
+		x.reads = map[string]int{}
+		inv, audit = scanner.Scan(context.Background(), goTestTarget(home), []string{legacy}, nil)
+		nugetAssertRefs(t, inv, audit)
+		if !slices.Contains(inv.Reasons, "output_size_limit") {
+			break
+		}
+		if x.reads[nuspec] > 0 && len(nugetPackages(inv, "declared_requirement", "newtonsoft.json")) == 0 {
+			t.Fatalf("limit %d: nuspec read after the declaration exhausted the budget", limit)
+		}
+	}
 }
 
 func nugetOwned(inv *model.NuGetInventory) map[string]int {
