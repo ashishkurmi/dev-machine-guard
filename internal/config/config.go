@@ -191,8 +191,8 @@ func Load() {
 		return
 	}
 
-	if DeviceID == "" {
-		DeviceID = strings.TrimSpace(cfg.DeviceID)
+	if id := strings.TrimSpace(cfg.DeviceID); id != "" && DeviceID == "" {
+		DeviceID = id
 	}
 	if cfg.CustomerID != "" && isPlaceholder(CustomerID) {
 		CustomerID = cfg.CustomerID
