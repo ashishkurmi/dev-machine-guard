@@ -84,7 +84,6 @@ func TestRunConfigureNonInteractive_Inline(t *testing.T) {
 func TestRunConfigureNonInteractive_FromFile(t *testing.T) {
 	withHome(t)
 	src := &ConfigFile{
-		DeviceID:           "custom-from-file",
 		CustomerID:         "from-file-cust",
 		APIEndpoint:        "https://from-file.example.com",
 		APIKey:             "sk-from-file",
@@ -103,9 +102,6 @@ func TestRunConfigureNonInteractive_FromFile(t *testing.T) {
 	}
 
 	cfg := loadExisting()
-	if cfg.DeviceID != "custom-from-file" {
-		t.Fatalf("DeviceID = %q", cfg.DeviceID)
-	}
 	if cfg.CustomerID != "from-file-cust" || cfg.APIKey != "sk-from-file" {
 		t.Errorf("from-file values not applied: %+v", cfg)
 	}

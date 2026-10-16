@@ -68,23 +68,15 @@ func Evaluate(ctx context.Context, exec executor.Executor, log *progress.Logger,
 		log.Progress("Run gate: bypassed (--force-scan)")
 	}
 
-	// Device id: the guest identity, then the configured ID, then the machine
+	// Device id: the guest identity, otherwise the machine
 	// ID from a bounded resolve. Without a real id the backend
 	// can't be asked anything meaningful — fail open rather than gate on a
 	// bogus one.
 	st, stOK := readState()
-	previousID, previousConfiguredID := st.DeviceID, st.ConfiguredDeviceID
-	// Overrides added, changed, or removed must not reuse another identity's cadence.
-	configuredID := strings.TrimSpace(config.DeviceID)
-	if st.ConfiguredDeviceID != configuredID {
-		st = heartbeat.RunGate{}
-		stOK = false
-	}
+	previousID := st.DeviceID
 	deviceID := strings.TrimSpace(guestDeviceID)
 	if deviceID != "" {
 		log.Debug("run-gate: gating as WSL guest %s", deviceID)
-	} else if configuredID != "" {
-		deviceID = configuredID
 	} else {
 		// Always the process-wide resolver, never the cached ID: a stale one
 		// would gate as one device while telemetry uploads as another.
@@ -107,7 +99,7 @@ func Evaluate(ctx context.Context, exec executor.Executor, log *progress.Logger,
 	}
 
 	// Persist the reset before any network result or force/kill-switch exit.
-	if previousID != deviceID || previousConfiguredID != configuredID {
+	if previousID != deviceID {
 		if err := persistIdentity(deviceID); err != nil {
 			log.Debug("run-gate: could not persist device identity: %v", err)
 		}

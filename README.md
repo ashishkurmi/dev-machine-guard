@@ -217,7 +217,6 @@ This interactively prompts for all configurable settings:
 
 | Setting            | Description                                 | Default         |
 | ------------------ | ------------------------------------------- | --------------- |
-| Device ID          | Optional custom identifier for this device  | Machine serial  |
 | Customer ID        | Your StepSecurity customer identifier       | _(not set)_     |
 | API Endpoint       | StepSecurity backend URL                    | _(not set)_     |
 | API Key            | Authentication key for telemetry uploads    | _(not set)_     |
@@ -255,15 +254,10 @@ Configuration (~/.stepsecurity/config.json):
 
 Configuration is saved to `~/.stepsecurity/config.json` with `0600` permissions (owner read/write only).
 
-To use a custom device ID, add `"device_id": "my-device-123"` to the existing
-config JSON, or set **Device ID** through `configure`. The override is also
-supported in JSON supplied to `configure --from-file`. An omitted, empty, or
-whitespace-only value uses the machine serial as before. The agent continues
-reporting the actual machine serial in `serial_number`. WSL guest scans derive
-separate IDs from the host ID and distro ID.
-
-Choose an ID unique within your customer and keep it stable: changing the ID
-registers a separate device in the backend; it does not migrate existing history.
+Device display IDs are managed by tenant administrators through the console.
+The agent always uses its machine-derived internal identity for telemetry,
+cadence, and policies. A legacy `device_id` config key is ignored; changing a
+console ID does not create a new registration or reset local scan state.
 
 **CLI flags always override config file values** — this matches the shell script behavior. For example, if your config has `output_format: json`, running `./stepsecurity-dev-machine-guard --pretty` uses pretty output. To clear a value during configuration, enter a single dash (`-`).
 
