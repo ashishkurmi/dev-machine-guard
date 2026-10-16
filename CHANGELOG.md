@@ -21,7 +21,7 @@ See [VERSIONING.md](VERSIONING.md) for why the version starts at 1.8.1.
 
 ### Added
 
-- Device identities are resolved consistently across root and user runs; admin-managed display IDs remain separate from the internal registration key.
+- Optional `device_id` in config.json for a stable custom device identity across telemetry, run cadence, hooks, and managed policies. The hardware serial remains separate, and changing identity resets cached cadence and incremental inventory. WSL guests continue deriving separate IDs from the host and distro.
 
 ## [1.17.0] - 2026-09-24
 

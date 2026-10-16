@@ -6,16 +6,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/step-security/dev-machine-guard/internal/config"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/wslguest"
 	"howett.net/plist"
 )
 
-// ID returns the resolved machine identity, or "" when it is unusable.
-// Admin-managed display IDs never change this internal registration key.
+// ID returns the configured device identity, falling back to the machine
+// serial, or "" when neither is usable (never a placeholder like "unknown").
 // Keep SerialNumber separate so telemetry retains the hardware identity.
 func ID(dev model.Device) string {
+	if id := strings.TrimSpace(config.DeviceID); id != "" {
+		return id
+	}
 	if usableSerial(dev.SerialNumber) {
 		return dev.SerialNumber
 	}
@@ -23,7 +27,7 @@ func ID(dev model.Device) string {
 }
 
 // IDForGuest gives the host/distro identity precedence over an inherited host
-// identity. Partial guest metadata falls back to the ordinary device identity.
+// config. Partial guest metadata falls back to the ordinary device identity.
 func IDForGuest(dev model.Device, hostDeviceID, distroID string) string {
 	if id := wslguest.DeviceID(hostDeviceID, distroID); id != "" {
 		return id
@@ -63,8 +67,8 @@ var (
 	cachedID string
 )
 
-// SerialNumber resolves the machine identity once per process, so the
-// run gate, scan, enforcers and
+// SerialNumber resolves the machine identity (the device_id absent a
+// configured override) once per process, so the run gate, scan, enforcers and
 // hooks can't disagree. It runs before any network beacon. With no source it
 // generates and persists an ID; an exhausted ctx or an ID that can't be
 // persisted yields "unknown" (not cached, so a later caller retries).

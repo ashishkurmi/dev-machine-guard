@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/step-security/dev-machine-guard/internal/config"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 )
@@ -143,15 +144,18 @@ func TestMachineIDFilePerOS(t *testing.T) {
 	}
 }
 
-func TestIDUsesMachineWideFile(t *testing.T) {
+func TestConfiguredIDBeatsMachineWideFile(t *testing.T) {
 	t.Cleanup(ResetIDCache)
 	ResetIDCache()
+	old := config.DeviceID
+	t.Cleanup(func() { config.DeviceID = old })
+	config.DeviceID = "custom-1"
 	mock := executor.NewMock()
 	mock.SetGOOS("linux")
 	mock.SetFile(linuxIDFile, []byte("PERSISTED\n"))
 	dev := Gather(context.Background(), mock)
-	if got := ID(dev); got != "PERSISTED" {
-		t.Fatalf("ID = %q, want machine-wide identity", got)
+	if got := ID(dev); got != "custom-1" {
+		t.Fatalf("ID = %q, want override", got)
 	}
 	if dev.SerialNumber != "PERSISTED" {
 		t.Fatalf("serial = %q, want machine-wide ID", dev.SerialNumber)

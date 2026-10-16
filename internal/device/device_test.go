@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/step-security/dev-machine-guard/internal/config"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/wslguest"
@@ -332,20 +333,41 @@ func TestGetHostname_SCPrefsPlist(t *testing.T) {
 func ptr(s string) *string { return &s }
 
 func TestID(t *testing.T) {
-	for _, tc := range []struct{ serial, want string }{{"SERIAL123", "SERIAL123"}, {"unknown", ""}, {"Default string", ""}} {
-		if got := ID(model.Device{SerialNumber: tc.serial}); got != tc.want {
-			t.Errorf("ID(%q) = %q, want %q", tc.serial, got, tc.want)
+	old := config.DeviceID
+	t.Cleanup(func() { config.DeviceID = old })
+	mock := executor.NewMock()
+	t.Cleanup(ResetIDCache)
+	mock.SetGOOS("darwin")
+	mock.SetCommand(`"IOPlatformSerialNumber" = "SERIAL123"`, "", 0, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
+	for _, tc := range []struct{ override, want string }{
+		{"custom-123", "custom-123"},
+		{" custom-123 ", "custom-123"},
+		{"", "SERIAL123"},
+		{" \t ", "SERIAL123"},
+	} {
+		config.DeviceID = tc.override
+		dev := Gather(context.Background(), mock)
+		if got := ID(dev); got != tc.want {
+			t.Errorf("ID with %q = %q, want %q", tc.override, got, tc.want)
+		}
+		if dev.SerialNumber != "SERIAL123" {
+			t.Fatalf("hardware serial overwritten: %q", dev.SerialNumber)
 		}
 	}
 }
 
 func TestIDForGuestPrecedence(t *testing.T) {
-	for _, tc := range []struct{ name, host, distro, want string }{
-		{"guest", "host-serial", "distro-1", wslguest.DeviceID("host-serial", "distro-1")},
-		{"partial guest", "host-serial", "", "SER123"},
-		{"host", "", "", "SER123"},
+	old := config.DeviceID
+	t.Cleanup(func() { config.DeviceID = old })
+	for _, tc := range []struct{ name, override, host, distro, want string }{
+		{"guest with inherited override", "host-custom", "host-custom", "distro-1", wslguest.DeviceID("host-custom", "distro-1")},
+		{"guest without override", "", "host-serial", "distro-1", wslguest.DeviceID("host-serial", "distro-1")},
+		{"partial guest", "host-custom", "host-custom", "", "host-custom"},
+		{"custom host", "host-custom", "", "", "host-custom"},
+		{"hardware host", "", "", "", "SER123"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			config.DeviceID = tc.override
 			if got := IDForGuest(model.Device{SerialNumber: "SER123"}, tc.host, tc.distro); got != tc.want {
 				t.Fatalf("IDForGuest = %q, want %q", got, tc.want)
 			}
