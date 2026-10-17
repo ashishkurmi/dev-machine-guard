@@ -56,8 +56,13 @@ func resolveID(ctx context.Context, exec executor.Executor) string {
 	}
 	if root {
 		stored := readIDFile(exec, path)
-		if stored == "" && hardware && exec.GOOS() == model.PlatformLinux {
-			id = keepReportedLinuxID(exec, id)
+		if hardware && exec.GOOS() == model.PlatformLinux {
+			switch mid := linuxMachineID(exec); {
+			case stored == "":
+				id = keepReportedLinuxID(exec, id, mid)
+			case stored == mid:
+				id = stored // persisted by a root run; not stale
+			}
 		}
 		switch {
 		case stored == id:
@@ -77,20 +82,28 @@ func resolveID(ctx context.Context, exec executor.Executor) string {
 // machine's identity if root reported it before (its own run-gate cache).
 // Otherwise use /etc/machine-id, which user-context runs have been reporting
 // all along: persisting the serial would give the device a second identity.
-func keepReportedLinuxID(exec executor.Executor, serial string) string {
+func keepReportedLinuxID(exec executor.Executor, serial, machineID string) string {
 	for _, f := range rootRunGateCaches() {
 		if reportedDeviceID(exec, f) == serial {
 			return serial
 		}
 	}
-	data, err := exec.ReadFile("/etc/machine-id")
-	if err != nil {
-		return serial
-	}
-	if machineID := strings.TrimSpace(string(data)); usableSerial(machineID) {
+	if machineID != "" {
 		return machineID
 	}
 	return serial
+}
+
+// linuxMachineID returns /etc/machine-id when usable, else "".
+func linuxMachineID(exec executor.Executor) string {
+	data, err := exec.ReadFile("/etc/machine-id")
+	if err != nil {
+		return ""
+	}
+	if id := strings.TrimSpace(string(data)); usableSerial(id) {
+		return id
+	}
+	return ""
 }
 
 // rootRunGateCaches lists the last-run.json files a root run would have

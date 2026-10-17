@@ -334,6 +334,14 @@ func TestFirstRootRunKeepsReportedLinuxID(t *testing.T) {
 			if got := SerialNumber(ctx, u); got != tc.want {
 				t.Fatalf("user after root = %q, want %q", got, tc.want)
 			}
+			// The next root run keeps it rather than "healing" it to the serial.
+			ResetIDCache()
+			if got := SerialNumber(ctx, m); got != tc.want {
+				t.Fatalf("second root run = %q, want %q", got, tc.want)
+			}
+			if again, _ := m.ReadFile(linuxIDFile); string(again) != tc.want+"\n" {
+				t.Fatalf("second root run rewrote the file to %q", again)
+			}
 		})
 	}
 }
