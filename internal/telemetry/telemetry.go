@@ -45,6 +45,11 @@ import (
 // can shrink it; production code never mutates it.
 var s3UploadBackoffUnit = 2 * time.Second
 
+// s3PutAttemptTimeout bounds one S3 PUT. Kept well under the 10m
+// telemetry_upload phase budget so a stalled attempt leaves room to retry.
+// The presigned URL lives 35m, so retries can reuse it.
+var s3PutAttemptTimeout = 3 * time.Minute
+
 // CurrentPayloadSchemaVersion is bumped when the delta-protocol wire shape
 // changes in a way the backend cares about. 0 = legacy agent.
 const CurrentPayloadSchemaVersion = 1
@@ -1317,10 +1322,11 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// A legacy upload may replace the backend inventory that old delta refs
 	// point at. Invalidate that baseline BEFORE uploading, including failed or
 	// ambiguous uploads; the next delta run must establish a fresh baseline.
-	// If invalidation fails, do not upload a snapshot that could leave stale refs.
+	// A file Invalidate can't touch is unwritable, and state.Load refuses
+	// those, so this upload need not be withheld.
 	if snap == nil {
 		if err := state.Invalidate(paths.ScanStateFile()); err != nil {
-			return fmt.Errorf("invalidating delta state before legacy upload: %w", err)
+			log.Warn("scan-state: could not invalidate before full upload (%v) — proceeding", err)
 		}
 	}
 
@@ -1664,7 +1670,7 @@ func uploadToS3(ctx context.Context, log *progress.Logger, payload *Payload, exe
 		}
 	}
 
-	s3Client := &http.Client{Timeout: 10 * time.Minute}
+	s3Client := &http.Client{Timeout: s3PutAttemptTimeout}
 	const maxRetries = 3
 	backoffUnit := s3UploadBackoffUnit
 	uploaded := false
@@ -1764,29 +1770,59 @@ func uploadToS3(ctx context.Context, log *progress.Logger, payload *Payload, exe
 	notifyEndpoint := fmt.Sprintf("%s/v1/%s/developer-mdm-agent/telemetry/process-uploaded",
 		config.APIEndpoint, config.CustomerID)
 
-	notifyReq, err := http.NewRequestWithContext(ctx, http.MethodPost, notifyEndpoint, bytes.NewReader(notifyBody))
+	notifyStatus, notifyBodyBytes, err := notifyUploaded(ctx, log, client, notifyEndpoint, notifyBody)
 	if err != nil {
-		return ingestUnknown, fmt.Errorf("creating notify request: %w", err)
-	}
-	notifyReq.Header.Set("Content-Type", "application/json")
-	notifyReq.Header.Set("Authorization", "Bearer "+config.APIKey)
-	notifyReq.Header.Set("X-Agent-Version", buildinfo.Version)
-
-	notifyResp, err := client.Do(notifyReq)
-	if err != nil {
-		return ingestUnknown, fmt.Errorf("notifying backend: %w", err)
-	}
-	defer func() { _ = notifyResp.Body.Close() }()
-	notifyBodyBytes, _ := io.ReadAll(io.LimitReader(notifyResp.Body, maxNotifyResponseBytes))
-	log.Debug("notify backend: status=%d s3_key=%q body=%q", notifyResp.StatusCode, urlResp.S3Key, notifyBodyBytes)
-
-	if notifyResp.StatusCode != http.StatusOK && notifyResp.StatusCode != http.StatusCreated {
-		return ingestUnknown, fmt.Errorf("backend notification failed with status %d", notifyResp.StatusCode)
+		return ingestUnknown, err
 	}
 	status := parseIngestStatus(notifyBodyBytes)
-	log.Progress("Backend processing initiated (HTTP %d)", notifyResp.StatusCode)
+	log.Progress("Backend processing initiated (HTTP %d)", notifyStatus)
 
 	return status, nil
+}
+
+// notifyAttempts bounds the process-uploaded call: one retry on transport
+// error or 5xx so a blip after a successful PUT doesn't discard the scan.
+const notifyAttempts = 2
+
+// notifyUploaded tells the backend the payload is in S3 and returns the
+// response status and body.
+func notifyUploaded(ctx context.Context, log *progress.Logger, client *http.Client, endpoint string, body []byte) (int, []byte, error) {
+	for attempt := 1; ; attempt++ {
+		code, respBody, retryable, err := notifyUploadedOnce(ctx, log, client, endpoint, body)
+		if err == nil || !retryable || attempt == notifyAttempts {
+			return code, respBody, err
+		}
+		backoff := time.Duration(attempt) * s3UploadBackoffUnit
+		log.Warn("notify attempt %d/%d failed (%v); retrying in %s...", attempt, notifyAttempts, err, backoff)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return 0, nil, ctx.Err()
+		}
+	}
+}
+
+func notifyUploadedOnce(ctx context.Context, log *progress.Logger, client *http.Client, endpoint string, body []byte) (int, []byte, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, false, fmt.Errorf("creating notify request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("X-Agent-Version", buildinfo.Version)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, ctx.Err() == nil, fmt.Errorf("notifying backend: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxNotifyResponseBytes))
+	log.Debug("notify backend: status=%d body=%q", resp.StatusCode, respBody)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return resp.StatusCode, nil, resp.StatusCode >= 500, fmt.Errorf("backend notification failed with status %d", resp.StatusCode)
+	}
+	return resp.StatusCode, respBody, false, nil
 }
 
 // uploadCheckResult is the four-valued answer the agent gets back when it
