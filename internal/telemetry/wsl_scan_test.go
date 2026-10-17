@@ -10,6 +10,7 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/progress"
+	"github.com/step-security/dev-machine-guard/internal/wslagent"
 )
 
 var errFakeSpawn = errors.New("simulated spawn failure")
@@ -246,4 +247,27 @@ func TestTriggerWSLScans_ResolvesBinaryOnlyWhenNeeded(t *testing.T) {
 			t.Errorf("want clean skip, got %v / %v", res, m.DetachedCalls)
 		}
 	})
+}
+
+// The download asks for the host's native arch, not the agent's build arch.
+func TestWSLLinuxBinaryPath_UsesNativeArch(t *testing.T) {
+	t.Setenv(wslLinuxBinaryEnv, "")
+	prevArch, prevEnsure := wslagent.NativeArch, wslLinuxAgentEnsure
+	t.Cleanup(func() { wslagent.NativeArch, wslLinuxAgentEnsure = prevArch, prevEnsure })
+
+	wslagent.NativeArch = func() string { return "arm64" }
+	var gotArch string
+	wslLinuxAgentEnsure = func(_ context.Context, dir, _ string, arch string) (string, bool, error) {
+		gotArch = arch
+		return dir + `\dmg-linux`, true, nil
+	}
+
+	m := executor.NewMock()
+	m.SetGOOS(model.PlatformWindows)
+	if p := wslLinuxBinaryPath(context.Background(), m, progress.NewNoop()); p == "" {
+		t.Fatal("want a path")
+	}
+	if gotArch != "arm64" {
+		t.Errorf("Ensure asked for %q, want the native arm64", gotArch)
+	}
 }

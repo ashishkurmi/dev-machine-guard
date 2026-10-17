@@ -38,6 +38,12 @@ const BinaryName = "dmg-linux"
 // someone else.
 const markerSuffix = ".fetched"
 
+// pendingSuffix names the claim written before a new binary is moved into
+// place and renamed to the marker after it. If a run stops between the two,
+// the next run finds the claim and settles it (recoverPending) instead of
+// mistaking our copy for an installer's.
+const pendingSuffix = ".fetched.pending"
+
 // DefaultReleaseBase is where release assets are downloaded from.
 const DefaultReleaseBase = "https://github.com/step-security/dev-machine-guard/releases/download"
 
@@ -95,6 +101,7 @@ func (f *Fetcher) Ensure(ctx context.Context, dir, version, arch string) (path s
 
 	path = filepath.Join(dir, BinaryName)
 	marker := path + markerSuffix
+	recoverPending(path)
 
 	if current, err := fileSHA256(path); err == nil {
 		mVersion, mSum, ok := readMarker(marker)
@@ -158,15 +165,59 @@ func (f *Fetcher) install(ctx context.Context, path, version, arch string) error
 	if err := os.Chmod(tmpPath, 0o755); err != nil {
 		return fmt.Errorf("chmod: %w", err)
 	}
+	// Claim first, publish second. The claim survives an interruption at any
+	// later step, and recoverPending settles it on the next run.
+	pending := path + pendingSuffix
+	if err := writeFileAtomic(pending, []byte(version+" "+sum+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write marker: %w", err)
+	}
 	if err := os.Rename(tmpPath, path); err != nil {
+		// The old copy and its marker are untouched; drop the claim.
+		_ = os.Remove(pending)
 		return fmt.Errorf("install %s: %w", path, err)
 	}
-	// Written after the binary: a missing marker only makes the next run
-	// treat the copy as someone else's, which is safe.
-	if err := os.WriteFile(path+markerSuffix, []byte(version+" "+sum+"\n"), 0o600); err != nil {
+	if err := os.Rename(pending, path+markerSuffix); err != nil {
 		return fmt.Errorf("write marker: %w", err)
 	}
 	return nil
+}
+
+// recoverPending settles an install that stopped after writing its claim.
+// A claim whose checksum matches the binary on disk was published, so it
+// becomes the marker. Any other claim (binary never moved, or a truncated
+// claim) is dropped, which leaves the previous state as it was.
+func recoverPending(path string) {
+	pending := path + pendingSuffix
+	_, sum, ok := readMarker(pending)
+	if ok {
+		if current, err := fileSHA256(path); err == nil && current == sum {
+			_ = os.Rename(pending, path+markerSuffix)
+			return
+		}
+	}
+	_ = os.Remove(pending)
+}
+
+// writeFileAtomic writes data to a temp file beside path and renames it into
+// place, so a reader sees the old content or the new, never a partial file.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // download streams url into w and returns the hex SHA-256 of what it wrote.

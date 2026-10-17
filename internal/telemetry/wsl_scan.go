@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/step-security/dev-machine-guard/internal/buildinfo"
@@ -38,6 +37,12 @@ const wslLinuxBinaryAltName = "stepsecurity-dev-machine-guard-linux"
 // wslLinuxBinaryResolver finds, or installs, the Linux agent binary. A
 // variable so tests can keep the download out of unit runs.
 var wslLinuxBinaryResolver = wslLinuxBinaryPath
+
+// wslLinuxAgentEnsure downloads the Linux agent when no installer provided
+// one. A variable so tests can check what is asked for without the network.
+var wslLinuxAgentEnsure = func(ctx context.Context, dir, version, arch string) (string, bool, error) {
+	return wslagent.New().Ensure(ctx, dir, version, arch)
+}
 
 // wslScanResult is one distro's trigger outcome.
 type wslScanResult struct {
@@ -171,7 +176,7 @@ func wslLinuxBinaryPath(ctx context.Context, exec executor.Executor, log *progre
 		}
 	}
 
-	path, downloaded, err := wslagent.New().Ensure(ctx, dir, buildinfo.Version, runtime.GOARCH)
+	path, downloaded, err := wslLinuxAgentEnsure(ctx, dir, buildinfo.Version, wslagent.NativeArch())
 	switch {
 	case err != nil && path != "":
 		log.Warn("WSL scan: could not update the Linux agent (%v); using the existing copy", err)

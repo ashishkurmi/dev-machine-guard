@@ -211,3 +211,114 @@ func TestAssetName(t *testing.T) {
 		t.Errorf("AssetName = %q", got)
 	}
 }
+
+// A run that stopped after moving the new binary into place, before its
+// marker, leaves only the claim. The next run must keep ownership: finish the
+// marker, not download again, and still manage the next version change.
+func TestEnsure_RecoversClaimAfterInterruptedPublish(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, BinaryName)
+	newBody := []byte("ELF v1.18.0")
+	_ = os.WriteFile(path, newBody, 0o755)
+	_ = os.WriteFile(path+pendingSuffix, []byte("1.18.0 "+sha(newBody)+"\n"), 0o600)
+
+	r := &release{version: "1.18.0", arch: "amd64", body: newBody, sigOK: true}
+	_, downloaded, err := newFetcher(t, r).Ensure(context.Background(), dir, "1.18.0", "amd64")
+	if err != nil || downloaded {
+		t.Fatalf("downloaded=%v err=%v, want the claim finished without a download", downloaded, err)
+	}
+	if m, _ := os.ReadFile(path + markerSuffix); strings.TrimSpace(string(m)) != "1.18.0 "+sha(newBody) {
+		t.Errorf("marker = %q", m)
+	}
+	if _, err := os.Stat(path + pendingSuffix); !os.IsNotExist(err) {
+		t.Error("claim should be gone")
+	}
+
+	next := &release{version: "1.19.0", arch: "amd64", body: []byte("ELF v1.19.0"), sigOK: true}
+	if _, downloaded, err := newFetcher(t, next).Ensure(context.Background(), dir, "1.19.0", "amd64"); err != nil || !downloaded {
+		t.Fatalf("version change: downloaded=%v err=%v, want our copy replaced", downloaded, err)
+	}
+}
+
+// A run that stopped before moving the binary leaves a claim that does not
+// match the file on disk. The claim is dropped and the previous state stands.
+func TestEnsure_DropsClaimWhenBinaryNeverMoved(t *testing.T) {
+	t.Run("own older copy is still updated", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, BinaryName)
+		old := []byte("ELF v1.17.0")
+		_ = os.WriteFile(path, old, 0o755)
+		_ = os.WriteFile(path+markerSuffix, []byte("1.17.0 "+sha(old)+"\n"), 0o600)
+		_ = os.WriteFile(path+pendingSuffix, []byte("1.18.0 "+sha([]byte("ELF v1.18.0"))+"\n"), 0o600)
+
+		r := &release{version: "1.18.0", arch: "amd64", body: []byte("ELF v1.18.0"), sigOK: true}
+		if _, downloaded, err := newFetcher(t, r).Ensure(context.Background(), dir, "1.18.0", "amd64"); err != nil || !downloaded {
+			t.Fatalf("downloaded=%v err=%v, want our copy updated", downloaded, err)
+		}
+		if b, _ := os.ReadFile(path); string(b) != "ELF v1.18.0" {
+			t.Errorf("binary = %q", b)
+		}
+	})
+
+	t.Run("truncated claim beside an installer copy", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, BinaryName)
+		_ = os.WriteFile(path, []byte("from msi"), 0o755)
+		_ = os.WriteFile(path+pendingSuffix, []byte("1.18"), 0o600)
+
+		r := &release{version: "1.18.0", arch: "amd64", body: []byte("ELF"), sigOK: true}
+		if _, downloaded, err := newFetcher(t, r).Ensure(context.Background(), dir, "1.18.0", "amd64"); err != nil || downloaded {
+			t.Fatalf("downloaded=%v err=%v, want installer copy left alone", downloaded, err)
+		}
+		if _, err := os.Stat(path + pendingSuffix); !os.IsNotExist(err) {
+			t.Error("truncated claim should be removed")
+		}
+	})
+}
+
+// If the marker cannot be written after the binary moved, the run reports the
+// error and the next run finishes the marker from the claim.
+func TestEnsure_MarkerFailureRetriesNextRun(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, BinaryName)
+	// A directory where the marker goes makes the claim-to-marker rename fail.
+	if err := os.MkdirAll(filepath.Join(path+markerSuffix, "block"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := &release{version: "1.18.0", arch: "amd64", body: []byte("ELF v1.18.0"), sigOK: true}
+	f := newFetcher(t, r)
+	if _, _, err := f.Ensure(context.Background(), dir, "1.18.0", "amd64"); err == nil {
+		t.Fatal("want a marker error")
+	}
+	if _, err := os.Stat(path + pendingSuffix); err != nil {
+		t.Fatalf("claim must survive the failure: %v", err)
+	}
+
+	_ = os.RemoveAll(path + markerSuffix)
+	if _, downloaded, err := f.Ensure(context.Background(), dir, "1.18.0", "amd64"); err != nil || downloaded {
+		t.Fatalf("retry: downloaded=%v err=%v, want the marker finished", downloaded, err)
+	}
+	if m, _ := os.ReadFile(path + markerSuffix); !strings.HasPrefix(string(m), "1.18.0 ") {
+		t.Errorf("marker = %q", m)
+	}
+	if r.hits.Load() != 1 {
+		t.Errorf("binary fetched %d times, want 1", r.hits.Load())
+	}
+}
+
+// A successful install leaves the marker and no claim behind.
+func TestEnsure_NoClaimLeftAfterInstall(t *testing.T) {
+	dir := t.TempDir()
+	r := &release{version: "1.18.0", arch: "amd64", body: []byte("ELF"), sigOK: true}
+	if _, _, err := newFetcher(t, r).Ensure(context.Background(), dir, "1.18.0", "amd64"); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, ",") != BinaryName+","+BinaryName+markerSuffix {
+		t.Errorf("dir = %v", names)
+	}
+}
