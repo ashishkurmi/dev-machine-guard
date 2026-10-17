@@ -176,7 +176,7 @@ func (r *Real) Run(ctx context.Context, name string, args ...string) (string, st
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCommand(cmd)
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -208,7 +208,7 @@ func (r *Real) RunInDir(ctx context.Context, dir string, timeout time.Duration, 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCommand(cmd)
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
