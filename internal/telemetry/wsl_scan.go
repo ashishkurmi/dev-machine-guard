@@ -9,6 +9,7 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/buildinfo"
 	"github.com/step-security/dev-machine-guard/internal/cli"
 	"github.com/step-security/dev-machine-guard/internal/config"
+	"github.com/step-security/dev-machine-guard/internal/device"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 	"github.com/step-security/dev-machine-guard/internal/progress"
@@ -70,10 +71,11 @@ func triggerWSLScans(ctx context.Context, exec executor.Executor, log *progress.
 	if dev == nil || dev.WSL == nil || dev.WSL.Presence != model.WSLPresenceYes || len(dev.WSL.Distros) == 0 {
 		return nil
 	}
-	if dev.SerialNumber == "" || dev.SerialNumber == "unknown" {
+	hostID := device.ID(*dev)
+	if hostID == "" || hostID == "unknown" {
 		// Without a host id the guest cannot be paired to anything, so a scan
 		// would produce an unattributable device record.
-		log.Warn("WSL scan: host has no usable serial — not triggering distro scans")
+		log.Warn("WSL scan: host has no usable device ID — not triggering distro scans")
 		return nil
 	}
 
@@ -114,7 +116,7 @@ func triggerWSLScans(ctx context.Context, exec executor.Executor, log *progress.
 				"-e", windowsPathToWSL(linuxBin),
 				"send-telemetry",
 				"--config="+guestConfig,
-				"--wsl-host-serial="+dev.SerialNumber,
+				"--wsl-host-serial="+hostID,
 				"--wsl-distro-id="+d.DistroID,
 			)
 			if err != nil {
