@@ -60,8 +60,10 @@ func resolveID(ctx context.Context, exec executor.Executor) string {
 			switch mid := linuxMachineID(exec); {
 			case stored == "":
 				id = keepReportedLinuxID(exec, id, mid)
-			case stored == mid:
-				id = stored // persisted by a root run; not stale
+			case stored == mid, mid == "":
+				// Persisted by a root run, or machine-id is unreadable so a
+				// stale file can't be told apart: keep the stored identity.
+				id = stored
 			}
 		}
 		switch {

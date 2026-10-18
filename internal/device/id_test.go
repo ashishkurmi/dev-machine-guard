@@ -105,13 +105,16 @@ func TestMachineWideIDFile(t *testing.T) {
 		root       bool
 		want       string
 		wantFile   string
+		machineID  string
 	}{
-		{"user prefers file over probe", " PERSISTED \n", false, "PERSISTED", " PERSISTED \n"},
-		{"user ignores placeholder file", "Default string\n", false, "PROBED", "Default string\n"},
-		{"user ignores empty file", "\n", false, "PROBED", "\n"},
-		{"user never writes", "", false, "PROBED", ""},
-		{"root refreshes stale file", "OTHER\n", true, "PROBED", "PROBED\n"},
-		{"root writes missing file", "", true, "PROBED", "PROBED\n"},
+		{"user prefers file over probe", " PERSISTED \n", false, "PERSISTED", " PERSISTED \n", ""},
+		{"user ignores placeholder file", "Default string\n", false, "PROBED", "Default string\n", ""},
+		{"user ignores empty file", "\n", false, "PROBED", "\n", ""},
+		{"user never writes", "", false, "PROBED", "", ""},
+		// Healing needs machine-id readable to tell a stale file from a
+		// persisted machine-id.
+		{"root refreshes stale file", "OTHER\n", true, "PROBED", "PROBED\n", "mid-1"},
+		{"root writes missing file", "", true, "PROBED", "PROBED\n", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(ResetIDCache)
@@ -120,6 +123,9 @@ func TestMachineWideIDFile(t *testing.T) {
 			mock.SetGOOS("linux")
 			mock.SetIsRoot(tc.root)
 			mock.SetFile("/sys/class/dmi/id/product_serial", []byte("PROBED\n"))
+			if tc.machineID != "" {
+				mock.SetFile("/etc/machine-id", []byte(tc.machineID+"\n"))
+			}
 			if tc.file != "" {
 				mock.SetFile(linuxIDFile, []byte(tc.file))
 			}
@@ -343,5 +349,30 @@ func TestFirstRootRunKeepsReportedLinuxID(t *testing.T) {
 				t.Fatalf("second root run rewrote the file to %q", again)
 			}
 		})
+	}
+}
+
+// A later root run that can't read /etc/machine-id must keep the persisted
+// machine-id rather than replace it with the DMI serial.
+func TestRootKeepsPersistedMachineIDWhenMachineIDUnreadable(t *testing.T) {
+	t.Cleanup(ResetIDCache)
+	ctx := context.Background()
+	ResetIDCache()
+	m := executor.NewMock()
+	m.SetGOOS("linux")
+	m.SetIsRoot(true)
+	m.SetFile("/sys/class/dmi/id/product_serial", []byte("HW-SERIAL\n"))
+	m.SetFile("/etc/machine-id", []byte("mid-1\n"))
+	if got := SerialNumber(ctx, m); got != "mid-1" {
+		t.Fatalf("first root run = %q, want mid-1", got)
+	}
+
+	ResetIDCache()
+	m.SetFile("/etc/machine-id", []byte(""))
+	if got := SerialNumber(ctx, m); got != "mid-1" {
+		t.Fatalf("root run without machine-id = %q, want mid-1", got)
+	}
+	if persisted, _ := m.ReadFile(linuxIDFile); string(persisted) != "mid-1\n" {
+		t.Fatalf("persisted = %q, want mid-1", persisted)
 	}
 }
