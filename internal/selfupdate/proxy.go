@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -20,23 +21,86 @@ type machineProxy struct {
 // first, then the WinHTTP machine proxy.
 func NewHTTPClient() *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = proxyFunc(http.ProxyFromEnvironment, loadMachineProxy())
+	tr.Proxy = proxyFunc(envProxyFromOS(), loadMachineProxy())
 	tr.TLSHandshakeTimeout = 30 * time.Second
 	tr.ResponseHeaderTimeout = 60 * time.Second
 	// Events share this client; no request follows https -> http.
 	return &http.Client{Transport: tr, CheckRedirect: refuseDowngrade(nil)}
 }
 
-func proxyFunc(env func(*http.Request) (*url.URL, error), mp *machineProxy) func(*http.Request) (*url.URL, error) {
-	return func(req *http.Request) (*url.URL, error) {
-		if u, err := env(req); u != nil || err != nil {
-			return u, err
+// envProxy is the environment's proxy configuration.
+type envProxy struct {
+	configured bool // HTTP(S)_PROXY set: its decision is final
+	noProxy    string
+	fn         func(*http.Request) (*url.URL, error)
+}
+
+func envProxyFromOS() envProxy {
+	get := func(names ...string) string {
+		for _, n := range names {
+			if v := strings.TrimSpace(os.Getenv(n)); v != "" {
+				return v
+			}
 		}
-		if mp == nil {
+		return ""
+	}
+	return envProxy{
+		configured: get("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy") != "",
+		noProxy:    get("NO_PROXY", "no_proxy"),
+		fn:         http.ProxyFromEnvironment,
+	}
+}
+
+// proxyFunc: an env proxy config decides alone (NO_PROXY included); with
+// none, NO_PROXY still sends listed hosts direct, then the WinHTTP machine
+// proxy applies with its own bypass list.
+func proxyFunc(env envProxy, mp *machineProxy) func(*http.Request) (*url.URL, error) {
+	return func(req *http.Request) (*url.URL, error) {
+		if env.configured {
+			return env.fn(req)
+		}
+		if mp == nil || noProxyMatch(env.noProxy, req.URL.Hostname()) {
 			return nil, nil
 		}
 		return mp.proxyFor(req.URL), nil
 	}
+}
+
+// noProxyMatch applies NO_PROXY: "*", host names (matching the host and
+// its subdomains, with or without a leading dot), IPs and CIDRs; ports are
+// ignored.
+func noProxyMatch(list, host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	ip := net.ParseIP(host)
+	for _, e := range strings.Split(list, ",") {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" {
+			continue
+		}
+		if e == "*" {
+			return true
+		}
+		if _, n, err := net.ParseCIDR(e); err == nil {
+			if ip != nil && n.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if h, _, err := net.SplitHostPort(e); err == nil {
+			e = h
+		}
+		if eip := net.ParseIP(e); eip != nil {
+			if ip != nil && eip.Equal(ip) {
+				return true
+			}
+			continue
+		}
+		e = strings.TrimPrefix(strings.TrimPrefix(e, "*"), ".")
+		if host == e || strings.HasSuffix(host, "."+e) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseWinHTTPProxy parses WINHTTP_PROXY_INFO strings: lpszProxy is a list

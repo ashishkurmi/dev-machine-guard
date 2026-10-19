@@ -282,19 +282,49 @@ func TestProxyParsing(t *testing.T) {
 
 func TestProxyFuncPrefersEnvironment(t *testing.T) {
 	envURL, _ := url.Parse("http://env-proxy:1")
-	mp := parseWinHTTPProxy("machine:2", "")
-	req, _ := http.NewRequest(http.MethodGet, "https://api.example/", nil)
+	mp := parseWinHTTPProxy("machine:2", "*.bypass.corp")
+	get := func(env envProxy, raw string) string {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, raw, nil)
+		u, err := proxyFunc(env, mp)(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u == nil {
+			return "direct"
+		}
+		return u.Host
+	}
+	viaEnv := func(*http.Request) (*url.URL, error) { return envURL, nil }
+	envDirect := func(*http.Request) (*url.URL, error) { return nil, nil }
 
-	fromEnv := proxyFunc(func(*http.Request) (*url.URL, error) { return envURL, nil }, mp)
-	if u, _ := fromEnv(req); u.Host != "env-proxy:1" {
-		t.Fatalf("env proxy not preferred: %v", u)
+	if got := get(envProxy{configured: true, fn: viaEnv}, "https://api.example/"); got != "env-proxy:1" {
+		t.Fatalf("env proxy not preferred: %s", got)
 	}
-	noEnv := proxyFunc(func(*http.Request) (*url.URL, error) { return nil, nil }, mp)
-	if u, _ := noEnv(req); u == nil || u.Host != "machine:2" {
-		t.Fatalf("machine proxy not used: %v", u)
+	// R-C1-4: the env config said "direct" (NO_PROXY) - the machine proxy
+	// must not override it.
+	if got := get(envProxy{configured: true, fn: envDirect}, "https://mirror.corp/"); got != "direct" {
+		t.Fatalf("env NO_PROXY overridden by the machine proxy: %s", got)
 	}
-	none := proxyFunc(func(*http.Request) (*url.URL, error) { return nil, nil }, nil)
-	if u, _ := none(req); u != nil {
+	// No env proxy, but NO_PROXY lists the host: direct.
+	noEnv := envProxy{fn: envDirect, noProxy: "mirror.corp,.internal,10.0.0.0/8"}
+	for raw, want := range map[string]string{
+		"https://mirror.corp/x":   "direct",
+		"https://a.internal/":     "direct",
+		"https://10.1.2.3/":       "direct",
+		"https://api.example/":    "machine:2",
+		"https://x.bypass.corp/":  "direct",
+		"https://notmirror.corp/": "machine:2",
+	} {
+		if got := get(noEnv, raw); got != want {
+			t.Errorf("%s: %s, want %s", raw, got, want)
+		}
+	}
+	if got := get(envProxy{fn: envDirect, noProxy: "*"}, "https://api.example/"); got != "direct" {
+		t.Fatalf("NO_PROXY=* ignored: %s", got)
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.example/", nil)
+	if u, _ := proxyFunc(envProxy{fn: envDirect}, nil)(req); u != nil {
 		t.Fatalf("proxy without config: %v", u)
 	}
 	if NewHTTPClient() == nil {
