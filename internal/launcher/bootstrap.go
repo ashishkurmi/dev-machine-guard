@@ -169,8 +169,6 @@ func (b *Bootstrap) openUpdateLog() func() {
 	return func() { b.log = nil; _ = f.Close() }
 }
 
-func complete(dir string) bool { return updatestate.VersionDirUsable(dir) }
-
 // installDirArg returns the --install-dir value in args, if any.
 func installDirArg(args []string) string {
 	for i, a := range args {
@@ -294,7 +292,10 @@ func (b *Bootstrap) Run(args []string) int {
 		runFile := layout.RunFile(c.Version)
 		runID := b.NewRunID()
 		if err := updatestate.AppendRun(runFile, updatestate.RunRecord{RunID: runID, Version: c.Version.String()}); err != nil {
-			b.logf("run record %s: %v", runFile, err)
+			// Never block a scan on bookkeeping: launch without a run id,
+			// so the agent skips the started marker.
+			b.logf("run record %s: %v; launching without one", runFile, err)
+			runID = ""
 		}
 		env := b.childEnv(map[string]string{
 			EnvRunRecord:         runFile,
@@ -322,6 +323,9 @@ func (b *Bootstrap) Run(args []string) int {
 }
 
 func (b *Bootstrap) finalize(runFile, runID string, code int, killed bool) {
+	if runID == "" {
+		return
+	}
 	if err := updatestate.FinalizeRun(runFile, runID, code, killed, b.Now()); err != nil {
 		b.logf("finalizing run record %s: %v", runFile, err)
 	}

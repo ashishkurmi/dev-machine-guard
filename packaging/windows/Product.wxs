@@ -153,6 +153,23 @@
       </Directory>
     </StandardDirectory>
 
+    <!-- Stop running DMG processes before files are replaced or removed
+         (install, upgrade, repair, uninstall). A scan holds the bootstrap
+         (an MSI file) open for its whole run; without this, /qn treats the
+         file in use as reboot-required and Windows Installer restarts the
+         machine on its own (M-18). Matched by image name, so a running
+         per-user (loader) agent is stopped too; scans are periodic and the
+         next tick re-runs it. -->
+    <util:CloseApplication Id="CloseBootstrap"
+                           Target="stepsecurity-dev-machine-guard-bootstrap.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1"/>
+    <util:CloseApplication Id="CloseLauncher"
+                           Target="stepsecurity-dev-machine-guard-task.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1"/>
+    <util:CloseApplication Id="CloseAgent"
+                           Target="stepsecurity-dev-machine-guard.exe"
+                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1"/>
+
     <Feature Id="Main" Title="Dev Machine Guard" Level="1">
       <ComponentRef Id="BootstrapBinary"/>
       <ComponentRef Id="SeedAgent"/>

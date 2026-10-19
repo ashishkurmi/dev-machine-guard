@@ -141,7 +141,7 @@ jobs:
           # --ignore-telemetry-error so initial telemetry POST failure
           # doesn't roll back the install. Exit 0 expected.
           $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
-            "/i", "dist\dmg-smoke.msi", "/qn",
+            "/i", "dist\dmg-smoke.msi", "/qn", "/norestart",
             "CUSTOMERID=ci-smoke",
             "APIENDPOINT=https://api.invalid.example",
             "APIKEY=ci-test-fake-api-key",
@@ -176,7 +176,9 @@ jobs:
           function Msi($argList, $log) {
             # Wait for msiexec itself only (not descendants), bounded, and dump
             # the log tail plus any DMG processes when it doesn't finish.
-            $p = Start-Process -FilePath "msiexec.exe" -ArgumentList ($argList + @("/l*v", $log)) -PassThru
+            # /norestart: a reboot-required result must fail the step, not
+            # restart the runner (which wedges the job with no logs).
+            $p = Start-Process -FilePath "msiexec.exe" -ArgumentList ($argList + @("/norestart", "/l*v", $log)) -PassThru
             if (-not $p.WaitForExit(300000)) {
               Write-Host "::error::msiexec $($argList -join ' ') still running after 5 min"
               Get-Process | Where-Object { $_.Path -and ($_.Path -like "$root\*" -or $_.Name -like 'msiexec*') } | Format-Table Id, Name, Path -AutoSize | Out-String | Write-Host

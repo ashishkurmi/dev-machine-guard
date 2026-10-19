@@ -301,6 +301,8 @@ func TestRun_ChildExitAndWatchdogRecorded(t *testing.T) {
 	}
 }
 
+// AppendRun failing (here: runs\ is a file) must not block the scan; the
+// child gets no run id, so the agent skips the started marker (D13).
 func TestRun_UnwritableRunsDirStillLaunches(t *testing.T) {
 	f := newFixture(t)
 	f.state(`{"schema":1,"current":"1.2.0"}`)
@@ -312,6 +314,13 @@ func TestRun_UnwritableRunsDirStillLaunches(t *testing.T) {
 	f.sp.results = []SpawnResult{{Started: true, ExitCode: 3}}
 	if code := f.b.Run(scanArgs(f.layout.DataRoot)); code != 3 {
 		t.Fatalf("exit = %d", code)
+	}
+	c := f.sp.calls[0]
+	if _, ok := c.envValue(EnvRunID); ok {
+		t.Fatal("STEPSEC_RUN_ID passed without a run record")
+	}
+	if v, _ := c.envValue(EnvBootstrapVersion); v != "1.2.0" {
+		t.Fatalf("version env = %q", v)
 	}
 }
 
