@@ -253,6 +253,10 @@ const (
 	RunNeutral
 )
 
+// ExitSlept is the exit status of a scan the agent's or the bootstrap's
+// watchdog ended after the system had slept: not evidence of a hang.
+const ExitSlept = 75
+
 // panicExitCode is the exit status of an unrecovered Go panic (and of the
 // agent's watchdog hard-out).
 const panicExitCode = 2
@@ -271,7 +275,7 @@ func ClassifyRun(r RunRecord) RunVerdict {
 		return RunBad
 	case r.Started:
 		return RunHealthy
-	case *r.ExitCode == 0 || *r.ExitCode == 1:
+	case *r.ExitCode == 0 || *r.ExitCode == 1 || *r.ExitCode == ExitSlept:
 		return RunNeutral
 	default:
 		return RunBad

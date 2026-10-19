@@ -323,14 +323,24 @@ func (b *Bootstrap) Run(args []string) int {
 			startReason = ReasonStartFailed + ":" + c.Version.String()
 			continue
 		}
-		code := res.ExitCode
-		if res.Killed {
-			code = ExitKilled
-		}
-		b.finalize(runLock, runFile, runID, code, res.Killed)
+		code, killed := runOutcome(res)
+		b.finalize(runLock, runFile, runID, code, killed)
 		return code
 	}
 	return ExitCannotStart
+}
+
+// runOutcome is the exit code and watchdog flag a scan launch records. A
+// deadline kill after the system slept is recorded as ExitSlept (Neutral),
+// not as a watchdog kill (Bad): it isn't evidence of a hang.
+func runOutcome(res SpawnResult) (code int, watchdogKilled bool) {
+	switch {
+	case res.Killed && res.Slept:
+		return updatestate.ExitSlept, false
+	case res.Killed:
+		return ExitKilled, true
+	}
+	return res.ExitCode, false
 }
 
 func (b *Bootstrap) finalize(runLock, runFile, runID string, code int, killed bool) {

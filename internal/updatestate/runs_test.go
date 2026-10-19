@@ -398,3 +398,14 @@ func TestReadRunsNeverTrims(t *testing.T) {
 		t.Fatalf("reader returned %d records, want 11", n)
 	}
 }
+
+// FR1-3: a watchdog kill that followed a system sleep is Neutral.
+func TestSleptKillIsNeutral(t *testing.T) {
+	code := ExitSlept
+	for _, started := range []bool{false, true} {
+		r := RunRecord{Version: "1.20.0", RunID: "x", Started: started, ExitCode: &code}
+		if v := ClassifyRun(r); v == RunBad {
+			t.Fatalf("started=%v: slept kill classified Bad", started)
+		}
+	}
+}

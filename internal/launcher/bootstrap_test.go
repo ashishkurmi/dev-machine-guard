@@ -901,3 +901,18 @@ func TestUpdate_Schema2StateStillCountsFailuresAndFallsBack(t *testing.T) {
 		}
 	}
 }
+
+// FR1-3: a deadline kill after a system sleep is recorded Neutral.
+func TestRunOutcomeAfterSleep(t *testing.T) {
+	code, killed := runOutcome(SpawnResult{Started: true, Killed: true, Slept: true})
+	exit := code
+	if killed || updatestate.ClassifyRun(updatestate.RunRecord{Version: "1.20.0", ExitCode: &exit}) != updatestate.RunNeutral {
+		t.Fatalf("slept kill: code %d killed %v", code, killed)
+	}
+	if code, killed := runOutcome(SpawnResult{Started: true, Killed: true}); code != ExitKilled || !killed {
+		t.Fatalf("plain kill: code %d killed %v", code, killed)
+	}
+	if code, killed := runOutcome(SpawnResult{Started: true, ExitCode: 3}); code != 3 || killed {
+		t.Fatalf("exit 3: code %d killed %v", code, killed)
+	}
+}

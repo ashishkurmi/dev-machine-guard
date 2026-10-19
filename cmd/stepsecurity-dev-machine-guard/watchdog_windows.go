@@ -7,8 +7,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/step-security/dev-machine-guard/internal/awakeclock"
 	"github.com/step-security/dev-machine-guard/internal/progress"
 	"github.com/step-security/dev-machine-guard/internal/telemetry"
+	"github.com/step-security/dev-machine-guard/internal/updatestate"
 )
 
 // armExecutionWatchdog (Windows): same intent as the Unix version but
@@ -23,10 +25,16 @@ func armExecutionWatchdog(d time.Duration, log *progress.Logger) {
 	if d <= 0 {
 		return
 	}
+	start := awakeclock.Begin(awakeclock.System)
 	go func() {
-		time.Sleep(d)
+		// Awake time: Go's monotonic clock on Windows includes sleep, so a
+		// laptop closed mid-scan would otherwise trip this on resume.
+		_, slept := start.Wait(d, nil, time.Minute)
 		log.Warn("execution-watchdog: max duration %s exceeded — exiting", d)
 		telemetry.ReportFatal(fmt.Sprintf("execution-watchdog: max duration %s exceeded", d), 10*time.Second)
+		if slept {
+			os.Exit(updatestate.ExitSlept) // spanned a system sleep: not a hang
+		}
 		os.Exit(2)
 	}()
 }
