@@ -5,7 +5,7 @@ package faultinject
 import (
 	"bufio"
 	"errors"
-	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,35 +56,46 @@ func TestPointActions(t *testing.T) {
 	}
 }
 
-// R-F1-4: a malformed spec must fail loudly at first use, never silently
-// leave a fault un-fired.
-func TestPointPanicsOnBadSpecs(t *testing.T) {
-	for _, spec := range []string{
-		"S0.locked:explode", "S0.locked:exit", "S0.locked:exit-1", "nocolon", "S0.locked:", ":kill",
-		"S0.locked@sytem:err", "S0.locked@SYSTEM:err", "S4.downloaded:agent.exe", "S0.locked@:err",
-		"unrelated:kill,S0.locked:bogus",
-	} {
+// R-F1-4/R-F1-7: a malformed spec fails loudly at first use with its own
+// exit code and marker, never as a silent no-op and never as exit 2.
+func TestPointMalformedSpecExits64(t *testing.T) {
+	for _, spec := range badSpecs {
 		t.Run(spec, func(t *testing.T) {
 			t.Setenv("DMG_FAULT", spec)
-			defer func() {
-				r := recover()
-				if r == nil || !strings.Contains(fmt.Sprint(r), "faultinject") {
-					t.Fatalf("Point did not panic clearly: %v", r)
-				}
-			}()
-			_ = Point("S0.locked")
+			code := stubExit(t)
+			var buf strings.Builder
+			old := stderr
+			stderr = &buf
+			t.Cleanup(func() { stderr = old })
+			if err := Point("S0.locked"); !errors.Is(err, ErrInjected) {
+				t.Fatalf("Point = %v", err)
+			}
+			if *code != MalformedExitCode || !strings.HasPrefix(buf.String(), MalformedMarker) {
+				t.Fatalf("exit %d, stderr %q", *code, buf.String())
+			}
 		})
 	}
 	old := Baked
 	t.Cleanup(func() { Baked = old })
 	Baked = "S0.locked:typo"
 	t.Setenv("DMG_FAULT", "")
-	defer func() {
-		if recover() == nil {
-			t.Fatal("malformed Baked did not panic")
-		}
-	}()
+	code := stubExit(t)
+	stderr = io.Discard
+	t.Cleanup(func() { stderr = os.Stderr })
 	_ = Point("S0.locked")
+	if *code != MalformedExitCode {
+		t.Fatalf("malformed Baked: exit %d", *code)
+	}
+}
+
+// A real process with a malformed spec exits 64 with the marker (not 2).
+func TestMalformedSpecProcessExit(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+	cmd.Env = append(os.Environ(), "FAULTINJECT_HELPER=1", "FAULTINJECT_MARKER="+filepath.Join(t.TempDir(), "m"), "DMG_FAULT=S6.state-temp@sytem:kill")
+	out, _ := cmd.CombinedOutput()
+	if code := cmd.ProcessState.ExitCode(); code != MalformedExitCode || !strings.Contains(string(out), MalformedMarker) {
+		t.Fatalf("exit %d, output %q", code, out)
+	}
 }
 
 func TestPointColonCheckpoint(t *testing.T) {
@@ -158,6 +169,9 @@ func TestHelperProcess(t *testing.T) {
 
 func helper(t *testing.T, fault string) (*exec.Cmd, *bufio.Reader, string) {
 	t.Helper()
+	if err := Validate(fault); err != nil {
+		t.Fatalf("bad fault spec %q: %v", fault, err)
+	}
 	marker := filepath.Join(t.TempDir(), "marker")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
 	cmd.Env = append(os.Environ(), "FAULTINJECT_HELPER=1", "FAULTINJECT_MARKER="+marker, "DMG_FAULT="+fault)

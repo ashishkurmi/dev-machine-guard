@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/config"
+	"github.com/step-security/dev-machine-guard/internal/faultinject"
 	"github.com/step-security/dev-machine-guard/internal/lock"
 	"github.com/step-security/dev-machine-guard/internal/telemetry"
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
@@ -166,6 +167,9 @@ func newH1Env(t *testing.T) *h1Env {
 // A hang is killed as soon as the trace shows the hanging checkpoint.
 func (e *h1Env) tick(fault, trace string) (exit int) {
 	e.t.Helper()
+	if err := faultinject.Validate(fault); err != nil {
+		e.t.Fatalf("bad fault spec %q: %v", fault, err)
+	}
 	if trace == "" {
 		trace = filepath.Join(e.t.TempDir(), "trace")
 	}
@@ -200,6 +204,10 @@ func (e *h1Env) tick(fault, trace string) (exit int) {
 		select {
 		case err := <-done:
 			e.logs = append(e.logs, fmt.Sprintf("--- tick fault=%q exit=%v\n%s", fault, err, out.String()))
+			if strings.Contains(out.String(), faultinject.MalformedMarker) {
+				e.dumpLogs()
+				e.t.Fatalf("tick fault=%q: malformed fault spec at runtime", fault)
+			}
 			if cmd.ProcessState != nil {
 				return cmd.ProcessState.ExitCode()
 			}

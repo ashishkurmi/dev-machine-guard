@@ -4,6 +4,7 @@ package faultinject
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -25,68 +26,23 @@ const (
 
 // exit and isSystem are swapped by tests.
 var (
-	exit     = os.Exit
-	isSystem = runningAsSystem
+	exit               = os.Exit
+	isSystem           = runningAsSystem
+	stderr   io.Writer = os.Stderr
 )
 
-type rule struct {
-	checkpoint string
-	principal  string // "", "user" or "system"
-	action     string
-}
-
-// parse splits a spec list. Every entry must be <checkpoint>[@user|@system]:<action>
-// with a known action; the action is split off the last ':' because
-// checkpoint names contain ':' (S4.downloaded:<asset>).
-func parse(spec string) ([]rule, error) {
-	var rules []rule
-	for _, entry := range strings.Split(spec, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		i := strings.LastIndexByte(entry, ':')
-		if i <= 0 || i == len(entry)-1 {
-			return nil, fmt.Errorf("entry %q: want <checkpoint>:<action>", entry)
-		}
-		r := rule{checkpoint: entry[:i], action: entry[i+1:]}
-		if !validAction(r.action) {
-			return nil, fmt.Errorf("entry %q: unknown action %q", entry, r.action)
-		}
-		if j := strings.LastIndexByte(r.checkpoint, '@'); j >= 0 {
-			switch p := r.checkpoint[j+1:]; p {
-			case "user", "system":
-				r.principal, r.checkpoint = p, r.checkpoint[:j]
-			default:
-				return nil, fmt.Errorf("entry %q: unknown principal qualifier %q (want @user or @system)", entry, p)
-			}
-		}
-		if r.checkpoint == "" {
-			return nil, fmt.Errorf("entry %q: empty checkpoint", entry)
-		}
-		rules = append(rules, r)
-	}
-	return rules, nil
-}
-
-func validAction(a string) bool {
-	switch a {
-	case "kill", "err", "hang", "diskfull":
-		return true
-	}
-	n, ok := strings.CutPrefix(a, "exit")
-	code, err := strconv.Atoi(n)
-	return ok && err == nil && code >= 0
-}
-
 // Point acts on the first fault configured for name, if any. A malformed
-// DMG_FAULT or Baked spec panics: a typo must never let a fault test pass
-// without injecting anything.
+// DMG_FAULT or Baked spec ends the process with MalformedExitCode and the
+// MalformedMarker on stderr: a typo must never let a fault test pass without
+// injecting anything, nor pass for a crash (exit 2 is a Bad run, D5).
+// Drivers call Validate before launching, so this is the last line.
 func Point(name string) error {
 	trace(name)
 	rules, err := parse(Baked + "," + os.Getenv(envFault))
 	if err != nil {
-		panic(fmt.Sprintf("faultinject: invalid %s/Baked fault spec: %v", envFault, err))
+		fmt.Fprintf(stderr, "%s %s/Baked: %v\n", MalformedMarker, envFault, err)
+		exit(MalformedExitCode)
+		return fmt.Errorf("%w: %v", ErrInjected, err) // only reached when exit is stubbed
 	}
 	for _, r := range rules {
 		if r.checkpoint != name {
