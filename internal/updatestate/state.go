@@ -39,6 +39,8 @@ type State struct {
 	// Outbox holds update events not yet accepted by the backend. Events
 	// are added in the same atomic write as the state change they report.
 	Outbox []OutboxEvent `json:"outbox,omitempty"`
+	// OutboxDropped counts events dropped because the outbox was full.
+	OutboxDropped uint64 `json:"outbox_dropped,omitempty"`
 
 	// Extra holds keys this version doesn't know; Save writes them back.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -52,6 +54,9 @@ type OutboxEvent struct {
 	To          string    `json:"update_to,omitempty"`
 	Error       string    `json:"error_message,omitempty"`
 	At          time.Time `json:"at"`
+	// Attempts and NextAttempt implement the retry backoff.
+	Attempts    int       `json:"attempts,omitempty"`
+	NextAttempt time.Time `json:"next_attempt,omitzero"`
 
 	Extra map[string]json.RawMessage `json:"-"` // unknown keys, kept on Save
 }

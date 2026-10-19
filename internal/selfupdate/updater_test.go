@@ -745,3 +745,43 @@ func TestLandedWriteWithErrorIsNotAFailure(t *testing.T) {
 		t.Fatalf("current = %s", st.Current)
 	}
 }
+
+// R-C2-3: a retryable send failure keeps the event with a backoff; the
+// outbox is capped at 64, dropping the oldest and counting the drops.
+func TestOutboxBackoffAndCap(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.20.0")
+	e.self = "1.20.0"
+	st := baseState("1.20.0", "")
+	st.LastCheck = e.now
+	for i := 0; i < 70; i++ {
+		enqueueTo(st, e.now, time.Hour, EventCheckFailed, "1.20.0", "", fmt.Sprint(i), "")
+	}
+	if len(st.Outbox) != 64 || st.OutboxDropped != 6 || st.Outbox[0].Error != "6" {
+		t.Fatalf("cap: len=%d dropped=%d first=%q", len(st.Outbox), st.OutboxDropped, st.Outbox[0].Error)
+	}
+	st.Outbox = st.Outbox[:1]
+	e.writeState(st)
+	calls := 0
+	d := e.deps()
+	d.Send = func(context.Context, updatestate.OutboxEvent) error { calls++; return errors.New("HTTP 429") }
+	Run(context.Background(), d)
+	if calls != 1 {
+		t.Fatalf("first attempt calls = %d", calls)
+	}
+	pending := e.state().Outbox
+	if len(pending) != 1 || pending[0].Attempts != 1 || !pending[0].NextAttempt.After(e.now) {
+		t.Fatalf("after a 429: %+v", pending)
+	}
+	// Within the backoff: not retried.
+	e.now = e.now.Add(30 * time.Minute)
+	Run(context.Background(), d)
+	if calls != 1 {
+		t.Fatalf("retried inside the backoff (calls=%d)", calls)
+	}
+	e.now = e.now.Add(2 * time.Hour)
+	Run(context.Background(), d)
+	if calls != 2 || e.state().Outbox[0].Attempts != 2 {
+		t.Fatalf("not retried after the backoff: calls=%d %+v", calls, e.state().Outbox)
+	}
+}

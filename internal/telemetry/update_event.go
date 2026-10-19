@@ -52,12 +52,13 @@ type updateEventBody struct {
 	ErrorMessage     string `json:"error_message,omitempty"`
 }
 
-// ErrUpdateEventRejected means the backend answered 4xx: retrying the same
-// event cannot help.
+// ErrUpdateEventRejected means the backend answered 400/422: retrying the
+// same event cannot help.
 var ErrUpdateEventRejected = errors.New("run-status rejected the update event")
 
 // PostUpdateEvent posts ev with a small retry budget. agent_version is
-// always this process's version. It returns nil only on a 2xx.
+// always this process's version. It returns nil only on a 2xx, and
+// ErrUpdateEventRejected only for 400/422 (or an event that can't be valid).
 func PostUpdateEvent(ctx context.Context, client *http.Client, ev UpdateEvent) error {
 	if !config.IsEnterpriseMode() {
 		return errors.New("not in enterprise mode")
@@ -124,9 +125,11 @@ func postUpdateEventOnce(ctx context.Context, client *http.Client, endpoint stri
 	switch {
 	case resp.StatusCode < 300:
 		return nil
-	case resp.StatusCode < 500:
+	case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity:
+		// A permanent validation reject: the same body can never succeed.
 		return fmt.Errorf("%w: HTTP %d", ErrUpdateEventRejected, resp.StatusCode)
 	}
+	// 401/403 (key rotation, WAF), 408, 429 and 5xx are transient.
 	return fmt.Errorf("run-status: HTTP %d", resp.StatusCode)
 }
 

@@ -21,7 +21,8 @@ const (
 	inconclusiveMinRuns   = 6  // D5
 	switchDeferralsReport = 4  // update_switch_deferred after this many
 	updaterFailureLimit   = 3  // update_updater_failed threshold
-	maxOutbox             = 32 // pending events kept
+	maxOutbox             = 64 // pending events kept (oldest dropped)
+	maxSendBackoff        = 24 * time.Hour
 	inconclusiveRetry     = 7 * 24 * time.Hour
 	freeSpaceMargin       = 50 << 20
 	runTimeout            = 25 * time.Minute // under the task's 30 min limit
@@ -250,8 +251,9 @@ func enqueueTo(st *updatestate.State, now time.Time, window time.Duration, event
 	st.Outbox = append(st.Outbox, updatestate.OutboxEvent{
 		ExecutionID: uuid.NewString(), Event: event, From: from, To: to, Error: msg, At: now.UTC(),
 	})
-	if len(st.Outbox) > maxOutbox {
-		st.Outbox = st.Outbox[len(st.Outbox)-maxOutbox:]
+	if n := len(st.Outbox) - maxOutbox; n > 0 {
+		st.Outbox = st.Outbox[n:]
+		st.OutboxDropped += uint64(n) // #nosec G115 -- n > 0
 	}
 }
 
@@ -753,27 +755,41 @@ func (t *tick) finish(ctx context.Context, code int) int {
 	return code
 }
 
-// flush sends pending events oldest first. Delivered and rejected events
-// are removed; anything else stays for the next tick. It never blocks the
-// update outcome, which is already on disk. It reports whether the outbox
-// changed.
+// flush sends due pending events oldest first. Delivered and rejected
+// (400/422) events are removed; anything else stays with an exponential
+// backoff (1 h, 2 h, ... capped at 24 h). It never blocks the update
+// outcome, which is already on disk. It reports whether the outbox changed.
 func (t *tick) flush(ctx context.Context) bool {
 	if len(t.st.Outbox) == 0 || t.d.Send == nil {
 		return false
 	}
+	if t.st.OutboxDropped > 0 {
+		t.d.Logf("self-update: %d events were dropped from a full outbox", t.st.OutboxDropped)
+	}
+	changed := false
 	var keep []updatestate.OutboxEvent
 	for _, ev := range t.st.Outbox {
+		if ev.NextAttempt.After(t.now) && !ev.NextAttempt.After(t.now.Add(maxSendBackoff)) {
+			keep = append(keep, ev)
+			continue
+		}
 		err := t.d.Send(ctx, ev)
+		changed = true
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrEventRejected):
 			t.d.Logf("self-update: %s dropped: %v", ev.Event, err)
 		default:
-			t.d.Logf("self-update: %s not sent (kept for the next tick): %v", ev.Event, err)
+			ev.Attempts++
+			backoff := maxSendBackoff
+			if ev.Attempts <= 5 {
+				backoff = time.Duration(1<<(ev.Attempts-1)) * time.Hour
+			}
+			ev.NextAttempt = t.now.Add(backoff).UTC()
+			t.d.Logf("self-update: %s not sent (attempt %d, retry after %s): %v", ev.Event, ev.Attempts, backoff, err)
 			keep = append(keep, ev)
 		}
 	}
-	changed := len(keep) != len(t.st.Outbox)
 	t.st.Outbox = keep
 	return changed
 }

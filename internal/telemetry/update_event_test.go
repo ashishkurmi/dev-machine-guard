@@ -159,3 +159,22 @@ func TestStartedMarkerOnlyAfterAcceptedStarted(t *testing.T) {
 		t.Fatalf("unset env: %v", err)
 	}
 }
+
+// R-C2-3: only a permanent validation reject (400/422) drops an event;
+// auth, timeout, rate-limit and server errors are retried.
+func TestUpdateEventStatusPolicy(t *testing.T) {
+	status := atomic.Int32{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(status.Load()))
+	}))
+	defer srv.Close()
+	defer withEnterpriseConfig(t, srv.URL)()
+	ev := UpdateEvent{ExecutionID: "e", DeviceID: "d", InstallChannel: "msi", Event: "update_ok"}
+	for code, drop := range map[int]bool{400: true, 422: true, 401: false, 403: false, 408: false, 429: false, 500: false, 503: false} {
+		status.Store(int32(code))
+		err := PostUpdateEvent(context.Background(), srv.Client(), ev)
+		if err == nil || errors.Is(err, ErrUpdateEventRejected) != drop {
+			t.Errorf("HTTP %d: err=%v, want dropped=%v", code, err, drop)
+		}
+	}
+}
