@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -1004,8 +1005,10 @@ func TestRollbackDespiteAbandonedRecords(t *testing.T) {
 	probationState(t, e)
 	pv := mustV("1.20.0")
 	stale := time.Now().Add(-48 * time.Hour)
+	exited := exec.Command(os.Args[0], "-test.run=^$")
+	must(t, exited.Run())
 	for i := 0; i < 12; i++ {
-		must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: fmt.Sprintf("dead-%d", i), Version: "1.20.0", StartedAt: stale}))
+		must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: fmt.Sprintf("dead-%d", i), Version: "1.20.0", StartedAt: stale, OwnerPID: exited.Process.Pid}))
 	}
 	for i := 0; i < 2 && e.state().Current == "1.20.0"; i++ {
 		id := fmt.Sprintf("crash-%d", i)

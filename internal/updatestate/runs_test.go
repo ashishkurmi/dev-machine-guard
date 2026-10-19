@@ -3,6 +3,7 @@ package updatestate
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -230,8 +231,9 @@ func TestTrimNeverEvictsOpenRecords(t *testing.T) {
 func TestStaleOpenRecordsDoNotEvictTheFinalizedOne(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "1.20.0.json")
 	stale := time.Now().Add(-(abandonAfter + time.Hour))
+	dead := deadPID(t)
 	for i := 0; i < 12; i++ {
-		if err := AppendRun(path, RunRecord{RunID: fmt.Sprintf("dead-%d", i), Version: "1.20.0", StartedAt: stale}); err != nil {
+		if err := AppendRun(path, RunRecord{RunID: fmt.Sprintf("dead-%d", i), Version: "1.20.0", StartedAt: stale, OwnerPID: dead}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -278,3 +280,99 @@ func TestStaleOpenRecordsDoNotEvictTheFinalizedOne(t *testing.T) {
 		t.Fatalf("live=%d len=%d", live, len(recs))
 	}
 }
+
+// deadPID is the pid of a process that has already exited.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func recordOf(t *testing.T, path, id string) RunRecord {
+	t.Helper()
+	for _, r := range ReadRuns(path) {
+		if r.RunID == id {
+			return r
+		}
+	}
+	t.Fatalf("record %s missing", id)
+	return RunRecord{}
+}
+
+// R-F1-9: abandonment follows the owning bootstrap's liveness, not the
+// wall clock: a laptop asleep for two days doesn't abandon a live run.
+func TestAbandonFollowsOwnerLiveness(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "1.20.0.json")
+	twoDaysAgo := time.Now().Add(-48 * time.Hour)
+	future := time.Now().Add(48 * time.Hour)
+	dead := deadPID(t)
+	for _, r := range []RunRecord{
+		{RunID: "asleep-alive", StartedAt: twoDaysAgo}, // owner = this process (alive)
+		{RunID: "fresh-dead", OwnerPID: dead},
+		{RunID: "future-dead", StartedAt: future, OwnerPID: dead},
+	} {
+		r.Version = "1.20.0"
+		if err := AppendRun(path, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := AppendRun(path, RunRecord{RunID: "trigger", Version: "1.20.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := recordOf(t, path, "asleep-alive"); r.Abandoned {
+		t.Fatal("a live owner's old run was abandoned")
+	}
+	for _, id := range []string{"fresh-dead", "future-dead"} {
+		if r := recordOf(t, path, id); !r.Abandoned {
+			t.Fatalf("%s: dead owner's run not abandoned", id)
+		}
+	}
+	// A late finalize by the run itself revives it with the real outcome.
+	if err := FinalizeRun(path, "fresh-dead", 2, false, time.Now()); err != nil {
+		t.Fatalf("late finalize: %v", err)
+	}
+	if r := recordOf(t, path, "fresh-dead"); r.Abandoned || ClassifyRun(r) != RunBad {
+		t.Fatalf("late finalize lost: %+v", r)
+	}
+	if err := MarkRunStarted(path, "future-dead"); err != nil {
+		t.Fatalf("late marker: %v", err)
+	}
+	if r := recordOf(t, path, "future-dead"); r.Abandoned || !r.Started {
+		t.Fatalf("late marker lost: %+v", r)
+	}
+}
+
+// Without an owner (older records), a future start time counts from when a
+// writer first saw it.
+func TestAbandonUnknownOwnerFutureStart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "1.20.0.json")
+	future := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339Nano)
+	body := `{"records":[{"run_id":"old","version":"1.20.0","start":"` + future + `"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendRun(path, RunRecord{RunID: "t1", Version: "1.20.0"}); err != nil {
+		t.Fatal(err)
+	}
+	r := recordOf(t, path, "old")
+	if r.Abandoned || r.FirstSeen.IsZero() {
+		t.Fatalf("first sighting: %+v", r)
+	}
+	// Seen long ago: past the bound now.
+	data, _ := os.ReadFile(path)
+	stale := time.Now().Add(-(abandonAfter + time.Hour)).UTC().Format(time.RFC3339Nano)
+	data = []byte(strings.Replace(string(data), r.FirstSeen.Format(time.RFC3339Nano), stale, 1))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendRun(path, RunRecord{RunID: "t2", Version: "1.20.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := recordOf(t, path, "old"); !r.Abandoned {
+		t.Fatalf("unknown owner, seen long ago: not abandoned: %+v", r)
+	}
+}
+

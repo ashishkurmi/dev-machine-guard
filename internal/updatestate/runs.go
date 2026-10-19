@@ -40,7 +40,13 @@ type RunRecord struct {
 	StartedAt time.Time `json:"start,omitzero"`
 	// Abandoned marks an open record whose launch outlived any possible
 	// scan (its bootstrap died); it is Neutral and evicted first.
-	Abandoned      bool      `json:"abandoned,omitempty"`
+	Abandoned bool `json:"abandoned,omitempty"`
+	// OwnerPID/OwnerStart identify the bootstrap process that owns an open
+	// record (its creation time guards against PID reuse); FirstSeen is
+	// when a writer first saw a record whose start time it couldn't trust.
+	OwnerPID       int       `json:"owner_pid,omitempty"`
+	OwnerStart     time.Time `json:"owner_start,omitzero"`
+	FirstSeen      time.Time `json:"first_seen,omitzero"`
 	ExecutionID    string    `json:"execution_id,omitempty"`
 	Started        bool      `json:"started"`
 	ExitCode       *int      `json:"exit_code,omitempty"`
@@ -104,13 +110,30 @@ func trimRuns(recs []RunRecord, protect string) []RunRecord {
 	return out
 }
 
-// abandonStale marks open records older than abandonAfter (or with no start
-// time) as abandoned: their bootstrap died and will never finalize them.
-func abandonStale(recs []RunRecord, now time.Time) {
+// abandonStale marks open records whose bootstrap is gone as abandoned:
+// they will never be finalized. Liveness comes from the owning process
+// (PID + creation time). Only when it can't be determined does wall-clock
+// age decide, from the start time, or from FirstSeen when the start time
+// is missing or in the future (clock moved).
+func abandonStale(recs []RunRecord, now time.Time, protect string) {
 	for i := range recs {
 		r := &recs[i]
-		if ClassifyRun(*r) == RunOpen && (r.StartedAt.IsZero() || now.Sub(r.StartedAt) > abandonAfter) {
+		if r.Abandoned || ClassifyRun(*r) != RunOpen || (protect != "" && r.RunID == protect) {
+			continue // the record this write touches is its own live evidence
+		}
+		switch ownerOf(*r) {
+		case ownerDead:
 			r.Abandoned = true
+		case ownerAlive:
+		default:
+			switch {
+			case !r.StartedAt.IsZero() && !r.StartedAt.After(now):
+				r.Abandoned = now.Sub(r.StartedAt) > abandonAfter
+			case r.FirstSeen.IsZero():
+				r.FirstSeen = now.UTC()
+			default:
+				r.Abandoned = now.Sub(r.FirstSeen) > abandonAfter
+			}
 		}
 	}
 }
@@ -118,7 +141,7 @@ func abandonStale(recs []RunRecord, now time.Time) {
 // writeRuns abandons stale open records, trims (never evicting protect)
 // and writes. Callers hold the run-record lock.
 func writeRuns(path string, recs []RunRecord, protect string) error {
-	abandonStale(recs, time.Now())
+	abandonStale(recs, time.Now(), protect)
 	recs = trimRuns(recs, protect)
 	data, err := json.Marshal(runFile{Records: recs})
 	if err != nil {
@@ -152,6 +175,7 @@ func AppendRun(path string, r RunRecord) error {
 	if r.StartedAt.IsZero() {
 		r.StartedAt = time.Now().UTC()
 	}
+	stampOwner(&r)
 	return writeRuns(path, append(recs, r), r.RunID)
 }
 
@@ -201,7 +225,10 @@ func updateOpenRun(path, runID string, fn func(*RunRecord)) error {
 	}
 	recs := ReadRuns(path)
 	for i := range recs {
-		if recs[i].RunID == runID && ClassifyRun(recs[i]) == RunOpen {
+		// An abandoned record is revivable by its own run: its late
+		// finalize or marker records the real outcome.
+		if r := recs[i]; r.RunID == runID && r.ExitCode == nil && !r.WatchdogKilled {
+			recs[i].Abandoned = false
 			fn(&recs[i])
 			return writeRuns(path, recs, runID)
 		}
