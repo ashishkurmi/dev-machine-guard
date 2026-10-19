@@ -610,6 +610,9 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 		}
 		t.d.Logf("self-update: smoke of %s failed: %v", target, err)
 		t.st.Quarantine[target] = updatestate.Quarantine{Reason: ReasonSmokeFailed, At: t.now.UTC()}
+		if t.st.PendingSwitch == target {
+			t.st.PendingSwitch, t.st.SwitchDeferrals = "", 0 // let GC remove it
+		}
 		t.enqueue(EventHealthFailed, st.Current, target, err.Error(), "")
 		return t.finish(ctx, ExitOK)
 	}

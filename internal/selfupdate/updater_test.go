@@ -1014,3 +1014,29 @@ func TestRollbackDespiteAbandonedRecords(t *testing.T) {
 		t.Fatalf("crashing version not rolled back: %+v", e.state())
 	}
 }
+
+// R-C2-11: a deferred target that then fails its smoke is quarantined and
+// no longer pending, so GC removes its dir (U6).
+func TestQuarantinedPendingTargetIsCollected(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.busy = 1
+	e.tick() // staged, switch deferred
+	if st := e.state(); st.PendingSwitch != "1.20.0" {
+		t.Fatalf("not pending: %+v", st)
+	}
+	e.smokeErr["1.20.0"] = errors.New("exit 3")
+	e.now = e.now.Add(time.Hour)
+	e.tick()
+	st := e.state()
+	if st.PendingSwitch != "" || st.Quarantine["1.20.0"].Reason != ReasonSmokeFailed {
+		t.Fatalf("after smoke failure: pending=%q quarantine=%+v", st.PendingSwitch, st.Quarantine)
+	}
+	e.now = e.now.Add(time.Hour)
+	e.tick()
+	if _, err := os.Stat(e.L.VersionDir(mustV("1.20.0"))); !os.IsNotExist(err) {
+		t.Fatalf("quarantined dir kept: %v", err)
+	}
+	assertHygiene(t, e)
+}
