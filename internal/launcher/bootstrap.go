@@ -98,6 +98,9 @@ type Bootstrap struct {
 	Environ  func() []string
 	Out      io.Writer
 	NewRunID func() string
+	// SetRunningVersion records the version adopt-seed made current
+	// (HKLM RunningVersion on Windows); nil skips it.
+	SetRunningVersion func(string) error
 
 	AdoptLockWait  time.Duration // adopt-seed: bounded wait for the update lock
 	RecordLockWait time.Duration // update: wait to record the updater result
@@ -112,19 +115,20 @@ type Bootstrap struct {
 // exePath, with runs under the default data root.
 func NewBootstrap(exePath string, isSystem func() bool) *Bootstrap {
 	return &Bootstrap{
-		Layout:         updatestate.Layout{InstallRoot: filepath.Dir(exePath), DataRoot: updatestate.DefaultDataRoot},
-		Spawn:          SpawnHidden,
-		IsSystem:       isSystem,
-		Now:            time.Now,
-		Sleep:          time.Sleep,
-		Getenv:         os.Getenv,
-		Environ:        os.Environ,
-		Out:            os.Stdout,
-		NewRunID:       uuid.NewString,
-		AdoptLockWait:  60 * time.Second,
-		RecordLockWait: 30 * time.Second,
-		LockPoll:       500 * time.Millisecond,
-		UpdateDeadline: defaultUpdateDeadline,
+		Layout:            updatestate.Layout{InstallRoot: filepath.Dir(exePath), DataRoot: updatestate.DefaultDataRoot},
+		Spawn:             SpawnHidden,
+		IsSystem:          isSystem,
+		Now:               time.Now,
+		Sleep:             time.Sleep,
+		Getenv:            os.Getenv,
+		Environ:           os.Environ,
+		Out:               os.Stdout,
+		NewRunID:          uuid.NewString,
+		SetRunningVersion: SetRunningVersion,
+		AdoptLockWait:     60 * time.Second,
+		RecordLockWait:    30 * time.Second,
+		LockPoll:          500 * time.Millisecond,
+		UpdateDeadline:    defaultUpdateDeadline,
 	}
 }
 
@@ -662,6 +666,7 @@ func (b *Bootstrap) adoptState(seed updatestate.Version) {
 			return
 		}
 		b.logf("adopt-seed: no state; current = seed %s", s)
+		b.recordRunningVersion(s)
 		return
 	case p.Schema > updatestate.SchemaVersion:
 		b.logf("adopt-seed: state schema %d is newer than this bootstrap; left unchanged", p.Schema)
@@ -696,5 +701,18 @@ func (b *Bootstrap) adoptState(seed updatestate.Version) {
 	}
 	if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
 		b.logf("adopt-seed: writing state: %v", err)
+		return
+	}
+	b.recordRunningVersion(s)
+}
+
+// recordRunningVersion sets RunningVersion after adopt-seed set current
+// (R-B-4). Best effort: inventory only.
+func (b *Bootstrap) recordRunningVersion(v string) {
+	if b.SetRunningVersion == nil {
+		return
+	}
+	if err := b.SetRunningVersion(v); err != nil {
+		b.logf("adopt-seed: setting RunningVersion: %v", err)
 	}
 }

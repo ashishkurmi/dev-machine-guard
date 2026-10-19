@@ -781,3 +781,35 @@ func TestAdoptSeed_PreservesExistingState(t *testing.T) {
 		})
 	}
 }
+
+// R-B-4: adopt-seed sets RunningVersion whenever it sets current, and only then.
+func TestAdoptSeed_SetsRunningVersionWithCurrent(t *testing.T) {
+	cases := []struct {
+		name  string
+		state string
+		ver   []string
+		want  []string
+	}{
+		{"fresh install", "", nil, []string{"1.5.0"}},
+		{"seed newer", `{"schema":1,"current":"1.4.0"}`, []string{"1.4.0"}, []string{"1.5.0"}},
+		{"current unusable", `{"schema":1,"current":"1.6.0"}`, nil, []string{"1.5.0"}},
+		{"seed older: unchanged", `{"schema":1,"current":"1.6.0"}`, []string{"1.6.0"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			var got []string
+			f.b.SetRunningVersion = func(v string) error { got = append(got, v); return nil }
+			if tc.state != "" {
+				f.state(tc.state)
+			}
+			for _, v := range tc.ver {
+				f.version(v)
+			}
+			f.adopt(f.seed("1.5.0"))
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("RunningVersion writes = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

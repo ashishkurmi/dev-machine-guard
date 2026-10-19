@@ -263,9 +263,11 @@ jobs:
           AssertProtected "$root\versions"
           AssertProtected "$root\state"
 
-          # 3. AgentVersion (Intune detection) = MSI version; no RunningVersion yet.
+          # 3. AgentVersion (Intune detection) = MSI version; RunningVersion = current.
           $av = (Get-ItemProperty -Path 'HKLM:\Software\StepSecurity' -Name AgentVersion -ErrorAction SilentlyContinue).AgentVersion
           Check ($av -eq $ver) "AgentVersion = $ver ($av)"
+          $rv = (Get-ItemProperty -Path 'HKLM:\Software\StepSecurity' -Name RunningVersion -ErrorAction SilentlyContinue).RunningVersion
+          Check ($rv -eq $ver) "RunningVersion = $ver, set by adopt-seed with current ($rv)"
 
           # 4. Machine-wide config with our values; installed with AUTOUPDATE=0.
           $content = Get-Content $cfg -Raw
@@ -356,6 +358,9 @@ jobs:
           Check ($s.current -eq "99.0.0") "seed $next < current 99.0.0: no downgrade (got $($s.current))"
           $av = (Get-ItemProperty -Path 'HKLM:\Software\StepSecurity' -Name AgentVersion).AgentVersion
           Check ($av -eq $next) "AgentVersion = $next ($av)"
+          # Present before uninstall, so "RunningVersion removed" below can fail.
+          $rv = (Get-ItemProperty -Path 'HKLM:\Software\StepSecurity' -Name RunningVersion -ErrorAction SilentlyContinue).RunningVersion
+          Check ([bool]$rv) "RunningVersion present before uninstall ($rv)"
           # The old product's uninstall CA is skipped on upgrade (M-6).
           $ranUninstall = Select-String -Path "dist\dmg-upgrade.log" -Pattern 'Doing action: RunUninstallScheduledTask' -SimpleMatch -Quiet
           Check (-not $ranUninstall) "old uninstall CA not run during the upgrade"
