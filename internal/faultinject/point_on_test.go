@@ -5,6 +5,7 @@ package faultinject
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,12 +56,44 @@ func TestPointActions(t *testing.T) {
 	}
 }
 
-func TestPointRejectsBadSpecs(t *testing.T) {
-	for _, spec := range []string{"S0.locked:explode", "S0.locked:exit", "S0.locked:exit-1", "nocolon", "S0.locked:", ":kill"} {
-		t.Setenv("DMG_FAULT", spec)
-		if err := Point("S0.locked"); !errors.Is(err, ErrInjected) {
-			t.Errorf("%q: Point = %v, want an injected error", spec, err)
+// R-F1-4: a malformed spec must fail loudly at first use, never silently
+// leave a fault un-fired.
+func TestPointPanicsOnBadSpecs(t *testing.T) {
+	for _, spec := range []string{
+		"S0.locked:explode", "S0.locked:exit", "S0.locked:exit-1", "nocolon", "S0.locked:", ":kill",
+		"S0.locked@sytem:err", "S0.locked@SYSTEM:err", "S4.downloaded:agent.exe", "S0.locked@:err",
+		"unrelated:kill,S0.locked:bogus",
+	} {
+		t.Run(spec, func(t *testing.T) {
+			t.Setenv("DMG_FAULT", spec)
+			defer func() {
+				r := recover()
+				if r == nil || !strings.Contains(fmt.Sprint(r), "faultinject") {
+					t.Fatalf("Point did not panic clearly: %v", r)
+				}
+			}()
+			_ = Point("S0.locked")
+		})
+	}
+	old := Baked
+	t.Cleanup(func() { Baked = old })
+	Baked = "S0.locked:typo"
+	t.Setenv("DMG_FAULT", "")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("malformed Baked did not panic")
 		}
+	}()
+	_ = Point("S0.locked")
+}
+
+func TestPointColonCheckpoint(t *testing.T) {
+	t.Setenv("DMG_FAULT", "S4.downloaded:agent.exe:err")
+	if err := Point("S4.downloaded:agent.exe"); !errors.Is(err, ErrInjected) {
+		t.Fatalf("Point = %v", err)
+	}
+	if err := Point("S4.downloaded:task.exe"); err != nil {
+		t.Fatalf("other asset fired: %v", err)
 	}
 }
 
