@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -176,5 +177,11 @@ func TestUpdateEventStatusPolicy(t *testing.T) {
 		if err == nil || errors.Is(err, ErrUpdateEventRejected) != drop {
 			t.Errorf("HTTP %d: err=%v, want dropped=%v", code, err, drop)
 		}
+	}
+}
+
+func TestExitCodeForRunErrors(t *testing.T) {
+	if ExitCode(fmt.Errorf("%w: boom", ErrPanic)) != 2 || ExitCode(errors.New("offline")) != 1 {
+		t.Fatal("ExitCode mapping wrong")
 	}
 }

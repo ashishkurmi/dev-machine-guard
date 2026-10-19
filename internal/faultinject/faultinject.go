@@ -5,7 +5,8 @@
 // (merged with the link-time Baked value) and act at the matching checkpoint.
 // Actions: kill (os.Exit(137), no cleanup), err (return ErrInjected), hang
 // (block until killed), diskfull (return an error wrapping the OS disk-full
-// errno), exit<N> (os.Exit(N), e.g. exit2 mimics a Go panic). With
+// errno), panic (a real Go panic, so recovery paths run), exit<N>
+// (os.Exit(N)). With
 // DMG_FAULT_TRACE=<file>, every reached checkpoint name is appended to file.
 //
 // Checkpoint names may contain ':' (S4.downloaded:<asset>); the action is the

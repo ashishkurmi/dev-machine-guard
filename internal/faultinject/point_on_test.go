@@ -5,6 +5,7 @@ package faultinject
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -214,4 +215,15 @@ func TestHangBlocksUntilKilled(t *testing.T) {
 	}
 	_ = cmd.Process.Kill()
 	<-done
+}
+
+func TestPointPanicAction(t *testing.T) {
+	t.Setenv("DMG_FAULT", "S0.locked:panic")
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "S0.locked") {
+			t.Fatalf("recovered %v, want a faultinject panic", r)
+		}
+	}()
+	_ = Point("S0.locked")
+	t.Fatal("no panic")
 }

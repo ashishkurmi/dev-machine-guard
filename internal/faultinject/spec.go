@@ -65,7 +65,7 @@ func parse(spec string) ([]rule, error) {
 
 func validAction(a string) bool {
 	switch a {
-	case "kill", "err", "hang", "diskfull":
+	case "kill", "err", "hang", "diskfull", "panic":
 		return true
 	}
 	n, ok := strings.CutPrefix(a, "exit")

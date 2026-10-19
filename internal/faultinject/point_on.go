@@ -64,6 +64,9 @@ func act(name, action string) error {
 		return fmt.Errorf("%w: err at %s", ErrInjected, name)
 	case "diskfull":
 		return fmt.Errorf("%w: diskfull at %s: %w", ErrInjected, name, errDiskFull)
+	case "panic":
+		// A real Go panic, so recover() paths run as in a crash.
+		panic(fmt.Sprintf("faultinject: panic at %s", name))
 	case "hang":
 		for {
 			time.Sleep(time.Hour)

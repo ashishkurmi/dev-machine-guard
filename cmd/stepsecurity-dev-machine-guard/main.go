@@ -300,7 +300,7 @@ func main() {
 		if telemetryErr != nil {
 			restoreTarget()
 			log.Error("%v", telemetryErr)
-			os.Exit(1)
+			os.Exit(telemetry.ExitCode(telemetryErr))
 		}
 		runHookStateReconcile(exec, log, cfg)
 		if targetOK {
@@ -423,7 +423,7 @@ func main() {
 			} else {
 				restoreTarget()
 				log.Error("%v", telemetryErr)
-				os.Exit(1)
+				os.Exit(telemetry.ExitCode(telemetryErr))
 			}
 		}
 		runHookStateReconcile(exec, log, cfg)
@@ -552,7 +552,7 @@ func main() {
 			restoreTarget()
 			if telemetryErr != nil {
 				log.Error("%v", telemetryErr)
-				os.Exit(1)
+				os.Exit(telemetry.ExitCode(telemetryErr))
 			}
 		default:
 			log.Debug("dispatch: community scan (default)")

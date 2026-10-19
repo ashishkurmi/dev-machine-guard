@@ -467,7 +467,7 @@ func TestKillMatrix(t *testing.T) {
 	if testing.Short() {
 		t.Skip("kill matrix is long")
 	}
-	actions := []string{"kill", "err", "hang", "diskfull"}
+	actions := []string{"kill", "err", "hang", "diskfull", "panic"}
 	for _, sc := range scenarios() {
 		ticks := traceScenario(t, sc)
 		total := 0
@@ -536,6 +536,8 @@ func runFaultCase(t *testing.T, sc scenario, faultTick int, fault string) {
 	switch {
 	case strings.HasSuffix(fault, ":kill") && code != 137:
 		t.Fatalf("kill: exit %d, want 137", code)
+	case strings.HasSuffix(fault, ":panic") && code != 2:
+		t.Fatalf("panic: exit %d, want 2 (a crash)", code)
 	case strings.HasSuffix(fault, ":hang") && code == 0:
 		t.Fatalf("hang: process was not killed (exit %d)", code)
 	}
