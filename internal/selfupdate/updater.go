@@ -674,7 +674,7 @@ func (t *tick) waitInstance(ctx context.Context) (func(), bool) {
 		if err == nil {
 			return release, true
 		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
+		if !time.Now().Before(deadline) || ctx.Err() != nil {
 			return nil, false
 		}
 		select {
