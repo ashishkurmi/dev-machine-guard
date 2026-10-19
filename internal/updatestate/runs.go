@@ -83,12 +83,25 @@ func writeRuns(path string, recs []RunRecord) error {
 	return writeAtomic(path, data, nil, nil)
 }
 
+// ErrRunID means AppendRun got an empty run_id or one already in the file;
+// such a record could never be finalized by its own launch.
+var ErrRunID = errors.New("updatestate: run record needs a unique run_id")
+
 // AppendRun appends r, keeping the newest MaxRunRecords.
 func AppendRun(path string, r RunRecord) error {
 	if !validVersion(r.Version) {
 		return errors.New("updatestate: run record needs a strict x.y.z version")
 	}
-	return writeRuns(path, append(ReadRuns(path), r))
+	if r.RunID == "" {
+		return ErrRunID
+	}
+	recs := ReadRuns(path)
+	for _, existing := range recs {
+		if existing.RunID == r.RunID {
+			return ErrRunID
+		}
+	}
+	return writeRuns(path, append(recs, r))
 }
 
 // MarkRunStarted sets the started marker on the open record runID.

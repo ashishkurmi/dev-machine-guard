@@ -48,7 +48,7 @@ func TestRunRecordsLifecycle(t *testing.T) {
 	if !last.Started || last.RunID != "run-12" || *last.ExitCode != 0 {
 		t.Fatalf("last record %+v", last)
 	}
-	if err := AppendRun(path, RunRecord{Version: "1.19.0"}); err != nil {
+	if err := AppendRun(path, RunRecord{RunID: "run-13", Version: "1.19.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if recs := ReadRuns(path); ClassifyRun(recs[len(recs)-1]) != RunOpen {
@@ -103,6 +103,24 @@ func TestOverlappingRunsMatchByRunID(t *testing.T) {
 	}
 }
 
+// D13: a record without a run_id, or with one already in the file, could
+// never be matched (or would be matched twice), so AppendRun refuses it.
+func TestAppendRunRequiresUniqueRunID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "1.19.0.json")
+	if err := AppendRun(path, RunRecord{Version: "1.19.0"}); err == nil {
+		t.Fatal("empty run_id accepted")
+	}
+	if err := AppendRun(path, RunRecord{RunID: "A", Version: "1.19.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendRun(path, RunRecord{RunID: "A", Version: "1.19.0"}); err == nil {
+		t.Fatal("duplicate run_id accepted")
+	}
+	if recs := ReadRuns(path); len(recs) != 1 {
+		t.Fatalf("records = %+v", recs)
+	}
+}
+
 func TestReadRunsToleratesGarbage(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "1.19.0.json")
@@ -116,7 +134,7 @@ func TestReadRunsToleratesGarbage(t *testing.T) {
 		}
 	}
 	// Garbage is replaced, not appended to.
-	if err := AppendRun(path, RunRecord{Version: "1.19.0"}); err != nil {
+	if err := AppendRun(path, RunRecord{RunID: "r1", Version: "1.19.0"}); err != nil {
 		t.Fatal(err)
 	}
 	if recs := ReadRuns(path); len(recs) != 1 {

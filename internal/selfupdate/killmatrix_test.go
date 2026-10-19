@@ -361,7 +361,7 @@ func scenarios() []scenario {
 				}))
 				for i := 0; i < 2; i++ {
 					code := 0xC0000005
-					must(e.t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{Version: h1Target, ExitCode: &code, At: time.Now().UTC()}))
+					must(e.t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: fmt.Sprintf("crash-%d", i), Version: h1Target, ExitCode: &code, At: time.Now().UTC()}))
 				}
 			},
 			converged: func(_ *h1Env, st *updatestate.State) bool {

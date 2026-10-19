@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
 )
 
@@ -161,7 +162,7 @@ func (e *env) lastSent(event string) updatestate.OutboxEvent {
 // addRun appends a finalized run record for v.
 func (e *env) addRun(v string, started bool, exit int) {
 	pv, _ := updatestate.ParseVersion(v)
-	must(e.t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{Version: v, Started: started, ExitCode: &exit, At: e.now}))
+	must(e.t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: uuid.NewString(), Version: v, Started: started, ExitCode: &exit, At: e.now}))
 }
 
 func must(t *testing.T, err error) {
