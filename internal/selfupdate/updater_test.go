@@ -848,3 +848,35 @@ func TestInconclusiveCountsBadRuns(t *testing.T) {
 		t.Fatalf("want an inconclusive rollback, got %v (events %v)", rb, e.events())
 	}
 }
+
+// D15/R-C2-6: the smoke has its own budget: the tick's context ending
+// doesn't cut it, and a smoke that fails because the tick budget ran out is
+// retried, never a quarantine.
+func TestSmokeBudgetCutoffRetries(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := e.deps()
+	smokeCtxAlive := false
+	d.Smoke = func(sctx context.Context, _ string, _ updatestate.Version) error {
+		cancel() // the tick's budget ends while the smoke runs
+		smokeCtxAlive = sctx.Err() == nil
+		return fmt.Errorf("self-check timed out: %w", context.DeadlineExceeded)
+	}
+	Run(ctx, d)
+	if !smokeCtxAlive {
+		t.Fatal("the smoke context was cut by the tick budget")
+	}
+	st := e.state()
+	if _, q := st.Quarantine["1.20.0"]; q {
+		t.Fatalf("budget cutoff quarantined the target: %+v", st.Quarantine)
+	}
+	if slices.Contains(e.events(), EventHealthFailed) {
+		t.Fatal("budget cutoff reported update_health_failed")
+	}
+	if !st.LastCheck.IsZero() {
+		t.Fatal("the target check is not retried on the next tick")
+	}
+}

@@ -26,6 +26,7 @@ const (
 	inconclusiveRetry     = 7 * 24 * time.Hour
 	freeSpaceMargin       = 50 << 20
 	runTimeout            = 25 * time.Minute // under the task's 30 min limit
+	smokeReserveMargin    = 30 * time.Second // on top of the smoke timeout
 )
 
 // Event names (spec §7).
@@ -406,7 +407,7 @@ func (t *tick) health(ctx context.Context) (closed bool, err error) {
 		return true, t.rollback(ReasonInconclusive, t.now.Add(inconclusiveRetry).UTC())
 	}
 	// Window over with too few runs to judge: re-smoke, then promote on it.
-	if err := t.d.Smoke(ctx, filepath.Join(t.L.VersionDir(v), updatestate.AgentFile), v); err != nil {
+	if err := t.d.Smoke(context.WithoutCancel(ctx), filepath.Join(t.L.VersionDir(v), updatestate.AgentFile), v); err != nil {
 		t.d.Logf("self-update: re-smoke of %s failed: %v", v, err)
 		return true, t.rollback(ReasonSmokeFailed, time.Time{})
 	}
@@ -566,8 +567,14 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 		return t.finish(ctx, ExitOK)
 	}
 
-	// S4 Stage.
-	if event, err := t.stage(ctx, rel); err != nil {
+	// S4 Stage, leaving the smoke its reserved budget.
+	stageCtx := ctx
+	if dl, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		stageCtx, cancel = context.WithDeadline(ctx, dl.Add(-(duration(knobSmokeTimeout) + smokeReserveMargin)))
+		defer cancel()
+	}
+	if event, err := t.stage(stageCtx, rel); err != nil {
 		t.d.Logf("self-update: stage %s: %v", target, err)
 		t.enqueue(event, st.Current, target, err.Error(), event+":"+target)
 		code := ExitOK
@@ -586,7 +593,14 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 
 	// S5 Smoke.
 	agent := filepath.Join(t.L.VersionDir(rel.Version), updatestate.AgentFile)
-	if err := t.d.Smoke(ctx, agent, rel.Version); err != nil {
+	// The smoke runs on its own budget (its timeout), not the tick's. If the
+	// tick's budget is gone anyway, that is a retry, never the version's fault.
+	if err := t.d.Smoke(context.WithoutCancel(ctx), agent, rel.Version); err != nil {
+		if ctx.Err() != nil {
+			t.d.Logf("self-update: smoke of %s cut by the tick budget (%v); retrying next tick", target, err)
+			t.st.LastCheck = time.Time{}
+			return t.finish(context.WithoutCancel(ctx), ExitFailed)
+		}
 		t.d.Logf("self-update: smoke of %s failed: %v", target, err)
 		t.st.Quarantine[target] = updatestate.Quarantine{Reason: ReasonSmokeFailed, At: t.now.UTC()}
 		t.enqueue(EventHealthFailed, st.Current, target, err.Error(), "")
