@@ -23,10 +23,22 @@ type testCert struct {
 	subject string
 }
 
+// psCommand runs Windows PowerShell without the caller's PSModulePath: on
+// GitHub runners it points at PowerShell 7 modules, which hides the Cert:
+// drive from Windows PowerShell 5.1.
+func psCommand(script string) *exec.Cmd {
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(kv), "PSMODULEPATH=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	return cmd
+}
+
 func powershell(t *testing.T, script string) string {
 	t.Helper()
-	out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-		"$ErrorActionPreference='Stop'; "+script).CombinedOutput()
+	out, err := psCommand("$ErrorActionPreference='Stop'; " + script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("powershell: %v\n%s\nscript: %s", err, out, script)
 	}
@@ -46,8 +58,7 @@ Remove-Item $f
 $c.Thumbprint`, subject))
 	t.Cleanup(func() {
 		for _, store := range []string{"My", "Root", "TrustedPublisher"} {
-			_ = exec.Command("powershell.exe", "-NoProfile", "-Command",
-				fmt.Sprintf(`Remove-Item -Force -ErrorAction SilentlyContinue Cert:\LocalMachine\%s\%s`, store, thumb)).Run()
+			_ = psCommand(fmt.Sprintf(`Remove-Item -Force -ErrorAction SilentlyContinue Cert:\LocalMachine\%s\%s`, store, thumb)).Run()
 		}
 	})
 	return &testCert{thumb: thumb, subject: subject}
@@ -61,7 +72,7 @@ func (c *testCert) sign(t *testing.T, path, tsa string) bool {
 	if tsa != "" {
 		ts = "-TimestampServer '" + tsa + "'"
 	}
-	out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", fmt.Sprintf(`
+	out, err := psCommand(fmt.Sprintf(`
 $c = Get-Item Cert:\LocalMachine\My\%s
 $r = Set-AuthenticodeSignature -FilePath '%s' -Certificate $c -HashAlgorithm SHA256 %s
 $r.Status`, c.thumb, path, ts)).CombinedOutput()
