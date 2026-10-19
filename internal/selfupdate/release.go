@@ -110,13 +110,17 @@ type latestBinaryResponse struct {
 	SignedChecksum         string `json:"signed_checksum"`
 	LauncherChecksum       string `json:"launcher_checksum"`
 	SignedLauncherChecksum string `json:"signed_launcher_checksum"`
+	LinuxChecksum          string `json:"linux_checksum"`
+	SignedLinuxChecksum    string `json:"signed_linux_checksum"`
 }
 
 // ErrCheck wraps every latest-binary failure (update_check_failed).
 var ErrCheck = errors.New("latest-binary check failed")
 
-// Latest resolves the target: the windows response (agent + launcher) and
-// the linux response for dmg-linux, which must name the same version.
+// Latest resolves the target from one windows latest-binary response:
+// agent, launcher and dmg-linux all come from the same resolution, so they
+// always name one version. Missing dmg-linux fields are left empty for
+// VerifySignatures to reject (update_verify_failed).
 func (c *Client) Latest(ctx context.Context) (*Release, error) {
 	win, err := c.fetch(ctx, "windows")
 	if err != nil {
@@ -129,17 +133,6 @@ func (c *Client) Latest(ctx context.Context) (*Release, error) {
 	if win.Checksum == "" || win.SignedChecksum == "" || win.LauncherChecksum == "" || win.SignedLauncherChecksum == "" {
 		return nil, fmt.Errorf("%w: response for %s lacks agent or launcher checksums", ErrCheck, v)
 	}
-	lin, err := c.fetch(ctx, "linux")
-	if err != nil {
-		return nil, err
-	}
-	if lin.Version != win.Version {
-		// The gate moved between the two calls; the next tick retries.
-		return nil, fmt.Errorf("%w: linux target %q differs from windows target %s", ErrCheck, lin.Version, v)
-	}
-	if lin.Checksum == "" || lin.SignedChecksum == "" {
-		return nil, fmt.Errorf("%w: linux response for %s lacks checksums", ErrCheck, v)
-	}
 	vs := v.String()
 	return &Release{Version: v, Assets: []Asset{
 		{File: updatestate.AgentFile, Remote: fmt.Sprintf("%s-%s-windows_%s.exe", agentAssetBase, vs, c.Arch),
@@ -147,7 +140,7 @@ func (c *Client) Latest(ctx context.Context) (*Release, error) {
 		{File: updatestate.LauncherFile, Remote: fmt.Sprintf("%s-%s-windows_%s.exe", launcherAssetBase, vs, c.Arch),
 			Checksum: strings.ToLower(win.LauncherChecksum), Signed: win.SignedLauncherChecksum},
 		{File: updatestate.LinuxFile, Remote: fmt.Sprintf("%s-%s-linux_%s", agentAssetBase, vs, c.Arch),
-			Checksum: strings.ToLower(lin.Checksum), Signed: lin.SignedChecksum},
+			Checksum: strings.ToLower(win.LinuxChecksum), Signed: win.SignedLinuxChecksum},
 	}}, nil
 }
 
@@ -200,6 +193,9 @@ var ErrVerify = errors.New("verification failed")
 // downloaded: one unverifiable asset rejects the whole release.
 func (c *Client) VerifySignatures(r *Release) error {
 	for _, a := range r.Assets {
+		if a.Checksum == "" || a.Signed == "" {
+			return fmt.Errorf("%w: latest-binary gave no checksum or signature for %s", ErrVerify, a.File)
+		}
 		if !isHexSHA256(a.Checksum) {
 			return fmt.Errorf("%w: %s checksum is not a sha256", ErrVerify, a.File)
 		}

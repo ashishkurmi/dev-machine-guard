@@ -41,10 +41,12 @@ func TestLatestRequestsNativeArchWithAuth(t *testing.T) {
 			t.Errorf("%s remote = %s, want %s", a.File, a.Remote, wantRemote[a.File])
 		}
 	}
-	if len(f.requests) != 2 {
-		t.Fatalf("latest-binary requests = %d, want 2 (windows + linux)", len(f.requests))
+	// D11: one resolution = one version; dmg-linux comes from the same
+	// windows response.
+	if len(f.requests) != 1 {
+		t.Fatalf("latest-binary requests = %d, want 1", len(f.requests))
 	}
-	for i, goos := range []string{"windows", "linux"} {
+	for i, goos := range []string{"windows"} {
 		r := f.requests[i]
 		q := r.URL.Query()
 		if q.Get("os") != goos || q.Get("arch") != "arm64" || q.Get("lag_behind") != "1" || q.Get("cooldown_hours") != "24" {
@@ -75,7 +77,6 @@ func TestLatestFailures(t *testing.T) {
 		"garbage":         func(f *fakeAPI) { f.metaBody = "<html>" },
 		"oversized":       func(f *fakeAPI) { f.metaBody = `{"version":"` + strings.Repeat("1", maxMetaBytes) + `"}` },
 		"no launcher":     func(f *fakeAPI) { f.metaBody = `{"version":"1.20.0","checksum":"a","signed_checksum":"b"}` },
-		"linux mismatch":  func(f *fakeAPI) { f.linuxVersion = "1.19.5" },
 		"missing release": func(f *fakeAPI) { f.target = "1.21.0" },
 	}
 	for name, mut := range cases {
@@ -86,6 +87,20 @@ func TestLatestFailures(t *testing.T) {
 				t.Fatalf("err = %v, want ErrCheck", err)
 			}
 		})
+	}
+}
+
+// D11: a response without the dmg-linux fields is a verify failure, not a
+// silent skip and not a check failure.
+func TestMissingLinuxFieldsFailVerification(t *testing.T) {
+	f, c := newReleaseFixture(t)
+	f.noLinuxFields = true
+	rel, err := c.Latest(context.Background())
+	if err != nil {
+		t.Fatalf("Latest = %v, want a release whose verification fails", err)
+	}
+	if err := c.VerifySignatures(rel); !errors.Is(err, ErrVerify) || !strings.Contains(err.Error(), updatestate.LinuxFile) {
+		t.Fatalf("VerifySignatures = %v, want ErrVerify naming %s", err, updatestate.LinuxFile)
 	}
 }
 

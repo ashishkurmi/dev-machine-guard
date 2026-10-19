@@ -642,3 +642,17 @@ func TestEventExecutionIDs(t *testing.T) {
 		t.Fatalf("delivered events reuse ids: %+v", e.all)
 	}
 }
+
+func TestMissingLinuxFieldsReportVerifyFailed(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.api.noLinuxFields = true
+	if code := e.tick(); code != ExitOK {
+		t.Fatalf("tick = %d", code)
+	}
+	wantEvents(t, e.events(), EventVerifyFailed)
+	if len(e.api.githubHits) != 0 {
+		t.Fatalf("downloaded before verification: %v", e.api.githubHits)
+	}
+}

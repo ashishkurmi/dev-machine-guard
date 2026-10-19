@@ -26,7 +26,7 @@ type fakeAPI struct {
 	// fault knobs
 	metaStatus     int               // non-zero: latest-binary returns this
 	metaBody       string            // non-empty: raw latest-binary body
-	linuxVersion   string            // non-empty: linux response names this version
+	noLinuxFields  bool              // windows response omits linux_checksum fields
 	githubDown     bool              // release downloads 404
 	mirrorDown     bool              // mirror downloads 404
 	badSig         map[string]bool   // remote asset -> signature over wrong data
@@ -119,12 +119,9 @@ func (f *fakeAPI) latest(w http.ResponseWriter, r *http.Request) {
 	case "windows":
 		resp["checksum"], resp["signed_checksum"] = f.assetFields(v, fmt.Sprintf("stepsecurity-dev-machine-guard-%s-windows_%s.exe", v, arch))
 		resp["launcher_checksum"], resp["signed_launcher_checksum"] = f.assetFields(v, fmt.Sprintf("stepsecurity-dev-machine-guard-task-%s-windows_%s.exe", v, arch))
-	case "linux":
-		if f.linuxVersion != "" {
-			v = f.linuxVersion
-			resp["version"] = v
+		if !f.noLinuxFields {
+			resp["linux_checksum"], resp["signed_linux_checksum"] = f.assetFields(v, fmt.Sprintf("stepsecurity-dev-machine-guard-%s-linux_%s", v, arch))
 		}
-		resp["checksum"], resp["signed_checksum"] = f.assetFields(v, fmt.Sprintf("stepsecurity-dev-machine-guard-%s-linux_%s", v, arch))
 	default:
 		w.WriteHeader(http.StatusBadRequest)
 		return
