@@ -73,6 +73,18 @@ var (
 // telemetry.ExecutionDeadline.
 var MaxExecutionDuration string
 
+// Windows self-update settings (internal/selfupdate), read from the
+// machine config the SYSTEM updater trusts. AutoUpdate nil means the
+// default (on for MSI installs); `configure --auto-update=false` (the MSI
+// AUTOUPDATE=0 property) turns it off. The other three mirror the loader's
+// update-policy knobs and optional HTTPS packages mirror.
+var (
+	AutoUpdate          *bool
+	UpdateMirrorURL     string
+	UpdateLagBehind     int
+	UpdateCooldownHours int
+)
+
 // ConfigFile is the JSON structure persisted to ~/.stepsecurity/config.json.
 type ConfigFile struct {
 	DeviceID              string   `json:"device_id,omitempty"`
@@ -94,6 +106,10 @@ type ConfigFile struct {
 	MaxExecutionDuration  string   `json:"max_execution_duration,omitempty"`
 	UseLegacyNodeScan     *bool    `json:"use_legacy_node_scan,omitempty"`
 	UseLegacyPythonScan   *bool    `json:"use_legacy_python_scan,omitempty"`
+	AutoUpdate            *bool    `json:"auto_update,omitempty"`
+	UpdateMirrorURL       string   `json:"update_mirror_url,omitempty"`
+	UpdateLagBehind       int      `json:"update_lag_behind,omitempty"`
+	UpdateCooldownHours   int      `json:"update_cooldown_hours,omitempty"`
 }
 
 // userConfigDir returns ~/.stepsecurity — the per-user config location.
@@ -271,6 +287,18 @@ func Load() {
 	}
 	if cfg.UseLegacyPythonScan != nil {
 		UseLegacyPythonScan = *cfg.UseLegacyPythonScan
+	}
+	if cfg.AutoUpdate != nil && AutoUpdate == nil {
+		AutoUpdate = cfg.AutoUpdate
+	}
+	if cfg.UpdateMirrorURL != "" && UpdateMirrorURL == "" {
+		UpdateMirrorURL = cfg.UpdateMirrorURL
+	}
+	if cfg.UpdateLagBehind > 0 && UpdateLagBehind == 0 {
+		UpdateLagBehind = cfg.UpdateLagBehind
+	}
+	if cfg.UpdateCooldownHours > 0 && UpdateCooldownHours == 0 {
+		UpdateCooldownHours = cfg.UpdateCooldownHours
 	}
 }
 
@@ -793,6 +821,7 @@ type NonInteractiveOptions struct {
 	APIKey        string   // --api-key (or DMG_API_KEY env)
 	ScanFrequency string   // --scan-frequency (hours, as string)
 	SearchDirs    []string // --search-dirs (re-used from scan flag; empty = unchanged)
+	AutoUpdate    *bool    // --auto-update=true|false (nil = unchanged)
 }
 
 // HasAny reports whether the caller supplied any inline value. Used by
@@ -805,7 +834,8 @@ func (o NonInteractiveOptions) HasAny() bool {
 		o.APIEndpoint != "" ||
 		o.APIKey != "" ||
 		o.ScanFrequency != "" ||
-		len(o.SearchDirs) > 0
+		len(o.SearchDirs) > 0 ||
+		o.AutoUpdate != nil
 }
 
 // RunConfigureNonInteractive applies the supplied options to the existing
@@ -846,6 +876,9 @@ func RunConfigureNonInteractive(opts NonInteractiveOptions) error {
 	}
 	if len(opts.SearchDirs) > 0 {
 		existing.SearchDirs = opts.SearchDirs
+	}
+	if opts.AutoUpdate != nil {
+		existing.AutoUpdate = opts.AutoUpdate
 	}
 
 	// Validation: an MSI deploy with no creds is almost certainly a bug.
