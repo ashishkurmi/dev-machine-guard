@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,6 +93,8 @@ func helperUpdater() int {
 	return Run(context.Background(), d)
 }
 
+var h1EnvSeq atomic.Int64
+
 var (
 	selfBytesOnce sync.Once
 	selfBytes     []byte
@@ -141,7 +144,9 @@ func newH1Env(t *testing.T) *h1Env {
 	e.api.addRelease(h1Target, testArch, testBinaryBytes(t), payload("task", h1Target), payload("linux", h1Target))
 	e.api.setTarget(h1Target)
 	if runtime.GOOS == "windows" {
-		e.lock = fmt.Sprintf("DMGTestH1-%d-%d", os.Getpid(), time.Now().UnixNano())
+		// A counter, not the clock: parallel cases created within one
+		// Windows clock tick would otherwise share a mutex and defer.
+		e.lock = fmt.Sprintf("DMGTestH1-%d-%d", os.Getpid(), h1EnvSeq.Add(1))
 	} else {
 		e.lock = filepath.Join(root, "instance.flock")
 	}
