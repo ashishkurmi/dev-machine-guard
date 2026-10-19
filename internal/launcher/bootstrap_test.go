@@ -839,3 +839,34 @@ func TestAdoptSeed_QuarantineExpiry(t *testing.T) {
 		})
 	}
 }
+
+// D18: a schema-1 state with values this build's Load rejects (RC versions
+// outside the pointers) must not stop the failure count, or the seed-updater
+// fallback never triggers and a broken updater is never recovered.
+func TestUpdate_RCStateStillCountsFailuresAndFallsBack(t *testing.T) {
+	f := newFixture(t)
+	f.state(`{"schema":1,"current":"1.21.0","previous":"1.20.0","quarantine":{"1.22.0-rc.1":{"reason":"bad_runs","future":1}},"probation":{"version":"1.22.0-rc.2"},"future_top":{"x":[1]}}`)
+	f.version("1.21.0")
+	f.version("1.20.0")
+	f.seed("1.19.0")
+	for i := 1; i <= 3; i++ {
+		f.sp.calls = nil
+		f.sp.results = []SpawnResult{{Started: true, ExitCode: 1}}
+		f.b.Update()
+		if got := f.updaterRan(); got != "versions/1.21.0" {
+			t.Fatalf("tick %d: updater = %s", i, got)
+		}
+	}
+	f.sp.calls = nil
+	f.sp.results = nil
+	f.b.Update()
+	if got := f.updaterRan(); got != "seed/1.19.0" {
+		t.Fatalf("4th tick: updater = %s, want the seed", got)
+	}
+	data, _ := os.ReadFile(f.layout.StateFile())
+	for _, keep := range []string{`"1.22.0-rc.1"`, `"future": 1`, `"1.22.0-rc.2"`, `"future_top"`, `"consecutive_failures": 3`} {
+		if !strings.Contains(string(data), keep) {
+			t.Fatalf("missing %s in %s", keep, data)
+		}
+	}
+}

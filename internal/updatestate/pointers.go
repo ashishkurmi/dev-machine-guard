@@ -219,3 +219,58 @@ func ResolveRunVersion(l Layout, st *State) (Version, string) {
 // of that file takes (R-B-2): the bootstrap's AppendRun/FinalizeRun and the
 // agent's MarkRunStarted, so overlapping scan tasks never lose a record.
 func (l Layout) RunLockFile(v Version) string { return l.RunFile(v) + ".lock" }
+
+// ErrNotRecordable means SaveUpdaterRecord found no state it may patch: the
+// file is missing, its pointers are unreadable, or its schema is newer.
+var ErrNotRecordable = errors.New("updatestate: state not recordable by this build")
+
+// SaveUpdaterRecord rewrites only state.updater.{version,consecutive_failures}
+// via fn, through the same tolerant read as LoadPointers (D18): every other
+// byte of the file, including values this build's Load would reject and
+// unknown keys inside updater, is kept. Written atomically with checkpoints
+// <prefix>.state-temp / <prefix>.state-renamed. Call it with the update lock
+// held.
+func SaveUpdaterRecord(path, prefix string, fn func(version string, failures int) (string, int)) error {
+	data, err := readBounded(path, maxStateSize)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errUnreadable) {
+			return ErrNotRecordable
+		}
+		return err
+	}
+	p, err := decodePointers(data)
+	if err != nil || p.Schema != SchemaVersion {
+		return ErrNotRecordable
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return ErrNotRecordable
+	}
+	upd := map[string]json.RawMessage{}
+	if json.Unmarshal(raw["updater"], &upd) != nil || upd == nil {
+		upd = map[string]json.RawMessage{}
+	}
+	version, failures := fn(p.UpdaterVersion, p.UpdaterFailures)
+	if failures < 0 {
+		failures = 0
+	}
+	if upd["version"], err = json.Marshal(version); err != nil {
+		return err
+	}
+	if upd["consecutive_failures"], err = json.Marshal(failures); err != nil {
+		return err
+	}
+	if raw["updater"], err = json.Marshal(upd); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	var afterTemp, afterRename func() error
+	if prefix != "" {
+		afterTemp = func() error { return checkpoint(prefix + ".state-temp") }
+		afterRename = func() error { return checkpoint(prefix + ".state-renamed") }
+	}
+	return writeAtomic(path, append(out, '\n'), afterTemp, afterRename)
+}

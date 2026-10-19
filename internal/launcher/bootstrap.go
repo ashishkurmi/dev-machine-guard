@@ -463,22 +463,20 @@ func (b *Bootstrap) recordUpdater(version string, code int) {
 		return
 	}
 	defer l.Release()
-	path := b.Layout.StateFile()
-	st, corrupt, err := updatestate.Load(path)
-	if err != nil || corrupt || st == nil {
-		b.logf("not recording updater result (state missing, corrupt or unreadable: %v)", err)
-		return
-	}
-	switch {
-	case code == 0:
-		st.Updater.Version, st.Updater.ConsecutiveFailures = version, 0
-	case st.Updater.Version == version:
-		st.Updater.ConsecutiveFailures++
-	default:
-		st.Updater.Version, st.Updater.ConsecutiveFailures = version, 1
-	}
-	if err := updatestate.SaveCheckpointed(path, st, "boot"); err != nil {
-		b.logf("recording updater result: %v", err)
+	// D18: the same tolerant read as the run path, so values this build's
+	// Load rejects can't stop the failure count (and the seed fallback).
+	err = updatestate.SaveUpdaterRecord(b.Layout.StateFile(), "boot", func(v string, failures int) (string, int) {
+		switch {
+		case code == 0:
+			return version, 0
+		case v == version:
+			return version, failures + 1
+		default:
+			return version, 1
+		}
+	})
+	if err != nil {
+		b.logf("not recording updater result: %v", err)
 	}
 }
 
