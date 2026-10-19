@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -199,24 +200,40 @@ func newUpdateLog(path string) func(string, ...any) {
 	}
 }
 
+// parseBootstrapFallback splits STEPSEC_BOOTSTRAP_FALLBACK=<reason>[:<version>]
+// on the first ':'. to is the version the bootstrap actually ran (the
+// suffix when it is a strict x.y.z, else self); from is the version
+// state.json named.
+func parseBootstrapFallback(env, named, self string) (reason, from, to string) {
+	reason, ran, _ := strings.Cut(env, ":")
+	to = self
+	if v, _, _ := strings.Cut(ran, ":"); v != "" {
+		if pv, err := updatestate.ParseVersion(v); err == nil {
+			to = pv.String()
+		}
+	}
+	return reason, named, to
+}
+
 // reportBootstrapFallback sends update_pointer_invalid when the bootstrap
-// ran a fallback version (STEPSEC_BOOTSTRAP_FALLBACK=<reason>): from = the
-// version state.json names, to = this version. Best-effort; the bootstrap
-// sets it on every fallback run until the updater repairs the pointer.
+// ran a fallback version (STEPSEC_BOOTSTRAP_FALLBACK=<reason>[:<version>]).
+// Best-effort; the bootstrap sets it on every fallback run until the
+// updater repairs the pointer.
 func reportBootstrapFallback() {
-	reason := os.Getenv(telemetry.EnvBootstrapFallback)
-	if reason == "" || runtime.GOOS != model.PlatformWindows {
+	env := os.Getenv(telemetry.EnvBootstrapFallback)
+	if env == "" || runtime.GOOS != model.PlatformWindows {
 		return
 	}
 	named := ""
 	if st, _, err := updatestate.Load(updatestate.MSILayout().StateFile()); err == nil && st != nil {
 		named = st.Current
 	}
+	reason, from, to := parseBootstrapFallback(env, named, buildinfo.Version)
 	ctx, cancel := context.WithTimeout(context.Background(), deviceProbeTimeout)
 	defer cancel()
 	err := telemetry.PostUpdateEvent(ctx, nil, telemetry.UpdateEvent{
 		ExecutionID: uuid.NewString(), DeviceID: resolveDeviceID(ctx), InstallChannel: installChannelMSI,
-		Event: selfupdate.EventPointerInvalid, From: named, To: buildinfo.Version, Error: reason,
+		Event: selfupdate.EventPointerInvalid, From: from, To: to, Error: reason,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[warn] update_pointer_invalid not sent: %v\n", err)

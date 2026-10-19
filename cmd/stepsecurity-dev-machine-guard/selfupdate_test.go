@@ -38,3 +38,20 @@ func TestUpdateLogRotates(t *testing.T) {
 		t.Fatalf("not rotated: %v", err)
 	}
 }
+
+// STEPSEC_BOOTSTRAP_FALLBACK=<reason>[:<version>]: reason is the part
+// before the first ':', update_to the version actually run (the suffix, or
+// this binary's version), update_from the version state.json named.
+func TestParseBootstrapFallback(t *testing.T) {
+	for _, tc := range []struct{ env, named, self, reason, from, to string }{
+		{"current_incomplete:1.19.0", "1.20.0", "1.19.0", "current_incomplete", "1.20.0", "1.19.0"},
+		{"seed_fallback", "1.20.0", "1.18.0", "seed_fallback", "1.20.0", "1.18.0"},
+		{"state_corrupt:1.18.0:extra", "", "1.18.0", "state_corrupt", "", "1.18.0"},
+		{"bad:not-a-version", "1.20.0", "1.18.0", "bad", "1.20.0", "1.18.0"},
+	} {
+		reason, from, to := parseBootstrapFallback(tc.env, tc.named, tc.self)
+		if reason != tc.reason || from != tc.from || to != tc.to {
+			t.Errorf("%q: got (%q,%q,%q), want (%q,%q,%q)", tc.env, reason, from, to, tc.reason, tc.from, tc.to)
+		}
+	}
+}
