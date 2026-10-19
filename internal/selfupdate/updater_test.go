@@ -785,3 +785,50 @@ func TestOutboxBackoffAndCap(t *testing.T) {
 		t.Fatalf("not retried after the backoff: calls=%d %+v", calls, e.state().Outbox)
 	}
 }
+
+// R-C2-4: a switch made while the clock ran a year ahead, then corrected
+// backwards: crash runs recorded after the correction still roll back.
+func TestProbationSurvivesBackwardsClock(t *testing.T) {
+	e := newEnv(t)
+	probationState(t, e)
+	st := e.state()
+	st.Probation.Since = e.now.Add(365 * 24 * time.Hour)
+	e.writeState(st)
+	for i := 0; i < 3 && e.state().Current == "1.20.0"; i++ {
+		e.addRun("1.20.0", false, 0xC0000005)
+		e.tick()
+		e.now = e.now.Add(time.Hour)
+	}
+	if st := e.state(); st.Current != "1.19.0" || st.Quarantine["1.20.0"].Reason != ReasonBadRuns {
+		t.Fatalf("crashing version kept after a clock correction: %+v", st)
+	}
+}
+
+// The probation also closes after window/1h update ticks, whatever the
+// clock says.
+func TestProbationClosesByTickCount(t *testing.T) {
+	e := newEnv(t)
+	probationState(t, e)
+	st := e.state()
+	st.Probation.Ticks = 71
+	e.writeState(st)
+	e.tick()
+	if c := e.lastSent(EventConfirmed); c.Error != "smoke_only" {
+		t.Fatalf("confirm = %+v", c)
+	}
+}
+
+// A quarantine expiry set by a clock far ahead is clamped to 7 days.
+func TestQuarantineUntilClamped(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.20.0")
+	e.self = "1.20.0"
+	st := baseState("1.20.0", "")
+	st.LastCheck = e.now
+	st.Quarantine = map[string]updatestate.Quarantine{"1.21.0": {Reason: ReasonInconclusive, At: e.now, Until: e.now.Add(2 * 365 * 24 * time.Hour)}}
+	e.writeState(st)
+	e.tick()
+	if u := e.state().Quarantine["1.21.0"].Until; u.After(e.now.Add(7 * 24 * time.Hour)) {
+		t.Fatalf("until not clamped: %v", u)
+	}
+}

@@ -280,6 +280,11 @@ func (t *tick) sweep(ctx context.Context) {
 		}
 	}
 	for v, q := range t.st.Quarantine {
+		if limit := t.now.Add(inconclusiveRetry); q.Until.After(limit) {
+			// Set while the clock was ahead: never longer than D5's 7 days.
+			q.Until = limit.UTC()
+			t.st.Quarantine[v] = q
+		}
 		if !q.Until.IsZero() && t.now.After(q.Until) {
 			t.d.Logf("self-update: quarantine of %s expired", v)
 			delete(t.st.Quarantine, v)
@@ -363,6 +368,13 @@ func (t *tick) health(ctx context.Context) (closed bool, err error) {
 	if !t.dirValid(p.Version) {
 		return true, t.rollback(ReasonPointerInvalid, time.Time{})
 	}
+	if t.now.Before(p.Since) {
+		// The clock went backwards since the switch: re-base, or every
+		// later run would look older than the probation and be ignored.
+		t.d.Logf("self-update: clock is before the probation start %s; re-basing", p.Since)
+		p.Since = t.now.UTC()
+	}
+	p.Ticks++
 	healthy, neutral, bad := 0, 0, 0
 	v, _ := updatestate.ParseVersion(p.Version)
 	for _, r := range updatestate.ReadRuns(t.L.RunFile(v)) {
@@ -387,7 +399,7 @@ func (t *tick) health(ctx context.Context) (closed bool, err error) {
 		return true, nil
 	case bad >= badRunsToRollback:
 		return true, t.rollback(ReasonBadRuns, time.Time{})
-	case t.now.Sub(p.Since) < window:
+	case t.now.Sub(p.Since) < window && p.Ticks < probationTicks(window):
 		return false, nil
 	case neutral >= inconclusiveMinRuns:
 		return true, t.rollback(ReasonInconclusive, t.now.Add(inconclusiveRetry).UTC())
@@ -399,6 +411,14 @@ func (t *tick) health(ctx context.Context) (closed bool, err error) {
 	}
 	t.confirm("smoke_only")
 	return true, nil
+}
+
+// probationTicks is the window in hourly update ticks.
+func probationTicks(window time.Duration) int {
+	if n := int(window / time.Hour); n > 0 {
+		return n
+	}
+	return 1
 }
 
 func (t *tick) confirm(note string) {

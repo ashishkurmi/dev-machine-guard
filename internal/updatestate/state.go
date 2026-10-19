@@ -69,6 +69,9 @@ type Probation struct {
 	OK      int       `json:"ok"`
 	Bad     int       `json:"bad"`
 	SmokeOK bool      `json:"smoke_ok"`
+	// Ticks counts update ticks that evaluated this probation, so it closes
+	// even if the clock jumps (additive).
+	Ticks int `json:"ticks,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"` // unknown keys, kept on Save
 }
