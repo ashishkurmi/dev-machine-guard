@@ -172,7 +172,21 @@ jobs:
           function Done { if ($script:fail) { exit 1 }; exit 0 }
           function State { Get-Content "$root\state\state.json" -Raw | ConvertFrom-Json }
           function TaskXml($name) { [xml](schtasks /query /tn $name /xml | Out-String) }
-          function UsableDir($d) { (Test-Path "$d\agent.exe") -and (Test-Path "$d\task.exe") -and (Test-Path "$d\dmg-linux") }
+          function UsableDir($d) { (Test-Path "$d\stepsecurity-dev-machine-guard.exe") -and (Test-Path "$d\stepsecurity-dev-machine-guard-task.exe") -and (Test-Path "$d\dmg-linux") }
+          function Msi($argList, $log) {
+            # Wait for msiexec itself only (not descendants), bounded, and dump
+            # the log tail plus any DMG processes when it doesn't finish.
+            $p = Start-Process -FilePath "msiexec.exe" -ArgumentList ($argList + @("/l*v", $log)) -PassThru
+            if (-not $p.WaitForExit(300000)) {
+              Write-Host "::error::msiexec $($argList -join ' ') still running after 5 min"
+              Get-Process | Where-Object { $_.Path -and ($_.Path -like "$root\*" -or $_.Name -like 'msiexec*') } | Format-Table Id, Name, Path -AutoSize | Out-String | Write-Host
+              Get-Content $log -Tail 120 -ErrorAction SilentlyContinue | Out-Host
+              $p.Kill(); return -1
+            }
+            if ($p.ExitCode -ne 0) { Get-Content $log -Tail 80 -ErrorAction SilentlyContinue | Out-Host }
+            return $p.ExitCode
+          }
+          function DmgProcesses { Get-Process | Where-Object { $_.Path -and $_.Path -like "$root\*" } | Format-Table Id, Name, Path -AutoSize | Out-String | Write-Host }
           function AssertTasks {
             foreach ($t in $tasks) {
               schtasks /query /tn $t 2>&1 | Out-Null
@@ -220,7 +234,7 @@ jobs:
 
           # 1. Layout: bootstrap + seed; the legacy top-level agent/launcher are gone.
           Check (Test-Path $boot) "bootstrap present"
-          Check (UsableDir $seed) "seed\$ver has agent.exe, task.exe, dmg-linux"
+          Check (UsableDir $seed) "seed\$ver has the agent, launcher and dmg-linux"
           Check (-not (Test-Path "$root\stepsecurity-dev-machine-guard.exe")) "no top-level agent"
           Check (-not (Test-Path "$root\stepsecurity-dev-machine-guard-task.exe")) "no top-level launcher"
 
@@ -234,7 +248,7 @@ jobs:
 
           # 2. adopt-seed: versions\<ver> copied, state.json current = seed,
           # versions\ and state\ protected.
-          Check (UsableDir "$root\versions\$ver") "versions\$ver adopted from the seed"
+          Check ((UsableDir "$root\versions\$ver") -and (Test-Path "$root\versions\$ver\manifest.json")) "versions\$ver adopted from the seed, with manifest"
           $state = State
           Check ($state.schema -eq 1 -and $state.current -eq $ver) "state.json current = $ver (got $($state.current))"
           AssertProtected "$root\versions"
@@ -247,7 +261,7 @@ jobs:
           # 4. Machine-wide config with our values; AUTOUPDATE defaults on.
           $content = Get-Content $cfg -Raw
           Check ($content -match '"customer_id"\s*:\s*"ci-smoke"' -and $content -match '"api_key"\s*:\s*"ci-test-fake-api-key"') "config written with expected values"
-          Check ($content -match '"auto_update"\s*:\s*true') "config auto_update true (AUTOUPDATE default)"
+          Check ($content -notmatch '"auto_update"\s*:\s*false') "config not opted out of self-update (AUTOUPDATE default)"
 
           # 5. config.json ACL hardening: Users R, Admins + SYSTEM F.
           $acl = & icacls $cfg | Out-String
@@ -286,9 +300,11 @@ jobs:
           $s = State
           Check ($s.updater.version -eq $ver) "state.updater recorded by the bootstrap: $($s.updater | ConvertTo-Json -Compress)"
           Get-Content "$root\state\update.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
+          DmgProcesses
           Done
 
       - name: Repair keeps current and restores tasks (M-7)
+        timeout-minutes: 8
         shell: pwsh
         run: |
           . "$env:RUNNER_TEMP\dmg-assert.ps1"
@@ -302,23 +318,22 @@ jobs:
           # And a deleted scan task, which the repair must restore.
           schtasks /delete /tn $tasks[0] /f | Out-Null
 
-          $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/fa", $env:INSTALLED_MSI, "/qn", "/l*v", "dist\dmg-repair.log") -Wait -PassThru
-          Check ($p.ExitCode -eq 0) "msiexec /fa exit 0 ($($p.ExitCode))"
+          $code = Msi @("/fa", $env:INSTALLED_MSI, "/qn") "dist\dmg-repair.log"
+          Check ($code -eq 0) "msiexec /fa exit 0 ($code)"
           $s = State
           Check ($s.current -eq "99.0.0" -and $s.previous -eq $ver) "repair kept current 99.0.0 (got $($s.current)/$($s.previous))"
           AssertTasks
           Done
 
       - name: Major upgrade N to N+1 keeps tasks and never downgrades
+        timeout-minutes: 8
         shell: pwsh
         run: |
           . "$env:RUNNER_TEMP\dmg-assert.ps1"
           $next = $env:MSI_NEXT_VERSION
-          $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
-            "/i", "dist\dmg-smoke-next.msi", "/qn", "/l*v", "dist\dmg-upgrade.log"
-          ) -Wait -PassThru
-          Check ($p.ExitCode -eq 0) "upgrade msiexec exit 0 ($($p.ExitCode))"
-          if ($p.ExitCode -eq 0) {
+          $code = Msi @("/i", "dist\dmg-smoke-next.msi", "/qn") "dist\dmg-upgrade.log"
+          Check ($code -eq 0) "upgrade msiexec exit 0 ($code)"
+          if ($code -eq 0) {
             "INSTALLED_MSI=dist\dmg-smoke-next.msi" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
           Check (UsableDir "$root\seed\$next") "seed\$next installed"
@@ -336,16 +351,15 @@ jobs:
 
       - name: Uninstall MSI
         if: always()
+        timeout-minutes: 8
         shell: pwsh
         run: |
+          . "$env:RUNNER_TEMP\dmg-assert.ps1"
           $msi = $env:INSTALLED_MSI
           if ($msi -and (Test-Path $msi)) {
-            $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
-              "/x", $msi, "/qn",
-              "/l*v", "dist\dmg-uninstall.log"
-            ) -Wait -PassThru
-            Write-Host "msiexec /x $msi exit: $($p.ExitCode)"
-            if ($p.ExitCode -ne 0) { exit 1 }
+            $code = Msi @("/x", $msi, "/qn") "dist\dmg-uninstall.log"
+            Write-Host "msiexec /x $msi exit: $code"
+            if ($code -ne 0) { exit 1 }
           }
 
       - name: Verify uninstall cleanup
@@ -371,12 +385,13 @@ jobs:
           Done
 
       - name: Upload install logs on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: msi-smoke-logs
           path: |
             dist/dmg-install.log
+            C:/Program Files/StepSecurity/state/update.log
             dist/dmg-repair.log
             dist/dmg-upgrade.log
             dist/dmg-uninstall.log

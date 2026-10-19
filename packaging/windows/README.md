@@ -48,18 +48,21 @@ the three scheduled tasks; the SYSTEM updater owns `versions\` and
 ```
 C:\Program Files\StepSecurity\
   stepsecurity-dev-machine-guard-bootstrap.exe        stable task entrypoint
-  seed\<msi-version>\{agent.exe, task.exe, dmg-linux}  read-only fallback
-  versions\<v>\{agent.exe, task.exe, dmg-linux}       self-update versions
+  seed\<msi-version>\                                 read-only fallback
+  versions\<v>\                                      self-update versions
+      (each holds stepsecurity-dev-machine-guard.exe,
+       stepsecurity-dev-machine-guard-task.exe, dmg-linux;
+       versions\<v>\ also a manifest.json)
   state\state.json                                    which version is current
 ```
 
 | Step | Mechanism |
 |------|-----------|
 | Drop the bootstrap and `seed\<version>\` | MSI standard `InstallFiles` |
-| Write tenant config to `C:\ProgramData\StepSecurity\config.json` | `seed\<version>\agent.exe configure --non-interactive ...` (install / upgrade with credentials) |
+| Write tenant config to `C:\ProgramData\StepSecurity\config.json` | `seed\<version>\stepsecurity-dev-machine-guard.exe configure --non-interactive ...` (install / upgrade with credentials) |
 | Create `versions\` + `state\` (SYSTEM-owned, Users read-only), copy the seed into `versions\<version>`, point `current` at it unless a newer self-updated version is already current | `bootstrap.exe adopt-seed` (install, upgrade, repair; never fails the MSI) |
-| (Re)create the 3 scheduled tasks | `seed\<version>\agent.exe install` (install, upgrade **and repair**) |
-| Real uninstall: delete the tasks, stop running DMG processes, remove `versions\`, `state\`, `RunningVersion` | `seed\<version>\agent.exe uninstall` (skipped during a major upgrade; failures never block removal) |
+| (Re)create the 3 scheduled tasks | `seed\<version>\stepsecurity-dev-machine-guard.exe install` (install, upgrade **and repair**) |
+| Real uninstall: delete the tasks, stop running DMG processes, remove `versions\`, `state\`, `RunningVersion` | `seed\<version>\stepsecurity-dev-machine-guard.exe uninstall` (skipped during a major upgrade; failures never block removal) |
 
 Scheduled tasks:
 
@@ -88,11 +91,13 @@ msiexec /i stepsecurity-dev-machine-guard-<version>-x64.msi /qn ^
 ```
 
 This writes `"auto_update": false` into the SYSTEM-owned machine config
-(also on a repair or an upgrade without credentials). The update task
-keeps running and reports `update_disabled` with the version it is not
-taking. A later install or upgrade **with credentials** writes the
-`AUTOUPDATE` value it is given (default `1`), so keep `AUTOUPDATE=0` in the
-app's install command line to stay opted out.
+(on install, upgrade and repair). The update task keeps running and
+reports `update_disabled` with the version it is not taking. The default
+`AUTOUPDATE=1` writes nothing, so a later MSI run without `AUTOUPDATE=0`
+does **not** turn self-update back on; re-enable it with
+`stepsecurity-dev-machine-guard.exe configure --non-interactive
+--auto-update=true` (as an administrator) or by redeploying
+`BOOTSTRAPFILE` without `auto_update`.
 
 ## How tenants pass credentials
 
