@@ -30,9 +30,11 @@ func NewHTTPClient() *http.Client {
 
 // envProxy is the environment's proxy configuration.
 type envProxy struct {
-	configured bool // HTTP(S)_PROXY set: its decision is final
-	noProxy    string
-	fn         func(*http.Request) (*url.URL, error)
+	// https/http: the env defines a proxy for that scheme; its decision
+	// (NO_PROXY included) is final for requests of that scheme.
+	https, http bool
+	noProxy     string
+	fn          func(*http.Request) (*url.URL, error)
 }
 
 func envProxyFromOS() envProxy {
@@ -45,18 +47,19 @@ func envProxyFromOS() envProxy {
 		return ""
 	}
 	return envProxy{
-		configured: get("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy") != "",
-		noProxy:    get("NO_PROXY", "no_proxy"),
-		fn:         http.ProxyFromEnvironment,
+		https:   get("HTTPS_PROXY", "https_proxy") != "",
+		http:    get("HTTP_PROXY", "http_proxy") != "",
+		noProxy: get("NO_PROXY", "no_proxy"),
+		fn:      http.ProxyFromEnvironment,
 	}
 }
 
-// proxyFunc: an env proxy config decides alone (NO_PROXY included); with
-// none, NO_PROXY still sends listed hosts direct, then the WinHTTP machine
-// proxy applies with its own bypass list.
+// proxyFunc, per request scheme: an env proxy for that scheme decides alone
+// (NO_PROXY included); without one, NO_PROXY still sends listed hosts
+// direct, then the WinHTTP machine proxy applies with its own bypass list.
 func proxyFunc(env envProxy, mp *machineProxy) func(*http.Request) (*url.URL, error) {
 	return func(req *http.Request) (*url.URL, error) {
-		if env.configured {
+		if (req.URL.Scheme == "https" && env.https) || (req.URL.Scheme == "http" && env.http) {
 			return env.fn(req)
 		}
 		if mp == nil || noProxyMatch(env.noProxy, req.URL.Hostname()) {

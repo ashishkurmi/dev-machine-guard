@@ -298,12 +298,12 @@ func TestProxyFuncPrefersEnvironment(t *testing.T) {
 	viaEnv := func(*http.Request) (*url.URL, error) { return envURL, nil }
 	envDirect := func(*http.Request) (*url.URL, error) { return nil, nil }
 
-	if got := get(envProxy{configured: true, fn: viaEnv}, "https://api.example/"); got != "env-proxy:1" {
+	if got := get(envProxy{https: true, fn: viaEnv}, "https://api.example/"); got != "env-proxy:1" {
 		t.Fatalf("env proxy not preferred: %s", got)
 	}
 	// R-C1-4: the env config said "direct" (NO_PROXY) - the machine proxy
 	// must not override it.
-	if got := get(envProxy{configured: true, fn: envDirect}, "https://mirror.corp/"); got != "direct" {
+	if got := get(envProxy{https: true, fn: envDirect}, "https://mirror.corp/"); got != "direct" {
 		t.Fatalf("env NO_PROXY overridden by the machine proxy: %s", got)
 	}
 	// No env proxy, but NO_PROXY lists the host: direct.
@@ -319,6 +319,15 @@ func TestProxyFuncPrefersEnvironment(t *testing.T) {
 		if got := get(noEnv, raw); got != want {
 			t.Errorf("%s: %s, want %s", raw, got, want)
 		}
+	}
+	// D20: only HTTP_PROXY in the env: an https request still uses the
+	// WinHTTP machine proxy (the SYSTEM updater only talks https).
+	httpOnly := envProxy{http: true, fn: viaEnv}
+	if got := get(httpOnly, "https://api.example/"); got != "machine:2" {
+		t.Fatalf("https with only HTTP_PROXY set: %s, want the machine proxy", got)
+	}
+	if got := get(httpOnly, "http://api.example/"); got != "env-proxy:1" {
+		t.Fatalf("http with HTTP_PROXY set: %s", got)
 	}
 	if got := get(envProxy{fn: envDirect, noProxy: "*"}, "https://api.example/"); got != "direct" {
 		t.Fatalf("NO_PROXY=* ignored: %s", got)
