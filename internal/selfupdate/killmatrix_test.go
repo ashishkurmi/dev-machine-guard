@@ -179,20 +179,10 @@ func (e *h1Env) tick(fault, trace string) (exit int) {
 		trace = filepath.Join(e.t.TempDir(), "trace")
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	cmd.Env = append(os.Environ(),
-		envRole+"=updater", envHelper+"=1",
-		"DMG_SU_API="+e.api.URL(), "DMG_SU_SELF="+h1Base,
-		"DMG_SU_INSTALL="+e.L.InstallRoot, "DMG_SU_DATA="+e.L.DataRoot,
-		"DMG_SU_INSTANCE_LOCK="+e.lock,
-		"DMG_TEST_SSHSIG_PUBKEY="+e.api.signer.pubB64,
-		"DMG_TEST_RELEASE_BASE_URL="+e.api.URL()+"/releases",
-		"DMG_TEST_CHECK_INTERVAL=0s", "DMG_TEST_SWITCH_WAIT=0s",
-		"DMG_TEST_DEDUPE_WINDOW=0s", "DMG_TEST_PROBATION_WINDOW=0s",
-		"DMG_TEST_SMOKE_TIMEOUT=60s", "DMG_TEST_SEND_BACKOFF=0s",
-		"DMG_FAULT="+fault, "DMG_FAULT_TRACE="+trace,
-	)
+	cmd.Env = e.childEnv(fault, trace)
 	var out strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &out
+	tickStart := time.Now()
 	if err := cmd.Start(); err != nil {
 		e.t.Fatal(err)
 	}
@@ -208,7 +198,7 @@ func (e *h1Env) tick(fault, trace string) (exit int) {
 	for {
 		select {
 		case err := <-done:
-			e.logs = append(e.logs, fmt.Sprintf("--- tick fault=%q exit=%v\n%s", fault, err, out.String()))
+			e.logs = append(e.logs, fmt.Sprintf("--- tick fault=%q exit=%v took=%s\n%s", fault, err, time.Since(tickStart), out.String()))
 			if strings.Contains(out.String(), faultinject.MalformedMarker) {
 				e.dumpLogs()
 				e.t.Fatalf("tick fault=%q: malformed fault spec at runtime", fault)
@@ -228,6 +218,27 @@ func (e *h1Env) tick(fault, trace string) (exit int) {
 			e.t.Fatalf("tick fault=%q did not finish", fault)
 		}
 	}
+}
+
+// childEnv is the updater subprocess environment (the smoke self-check it
+// starts inherits it).
+func (e *h1Env) childEnv(fault, trace string) []string {
+	return append(os.Environ(),
+		envRole+"=updater", envHelper+"=1",
+		"DMG_SU_API="+e.api.URL(), "DMG_SU_SELF="+h1Base,
+		"DMG_SU_INSTALL="+e.L.InstallRoot, "DMG_SU_DATA="+e.L.DataRoot,
+		"DMG_SU_INSTANCE_LOCK="+e.lock,
+		"DMG_TEST_SSHSIG_PUBKEY="+e.api.signer.pubB64,
+		"DMG_TEST_RELEASE_BASE_URL="+e.api.URL()+"/releases",
+		"DMG_TEST_CHECK_INTERVAL=0s", "DMG_TEST_SWITCH_WAIT=0s",
+		"DMG_TEST_DEDUPE_WINDOW=0s", "DMG_TEST_PROBATION_WINDOW=0s",
+		"DMG_TEST_SMOKE_TIMEOUT=60s", "DMG_TEST_SEND_BACKOFF=0s",
+		"DMG_FAULT="+fault, "DMG_FAULT_TRACE="+trace,
+		// A -race binary sleeps 1 s at exit by default; every tick starts
+		// two of them (the updater and its smoke self-check), which made the
+		// matrix spend most of its time asleep.
+		"GORACE=atexit_sleep_ms=0",
+	)
 }
 
 func readTrace(path string) []string {
@@ -561,6 +572,9 @@ func runFaultCase(t *testing.T, sc scenario, faultTick int, fault string) {
 			e.assertHygiene(st)
 			e.assertEventsDelivered(pendingIDs)
 			e.assertUniqueExecutionIDs()
+			if os.Getenv("DMG_SU_DUMP") == "1" {
+				e.dumpLogs()
+			}
 			return
 		}
 	}
@@ -679,5 +693,16 @@ func TestStateCorruptionMatrix(t *testing.T) {
 			e.dumpLogs()
 			t.Fatalf("not converged: %+v", e.state())
 		})
+	}
+}
+
+// The matrix runs ~1500 subprocess ticks; a -race child sleeps 1 s at exit
+// unless GORACE says otherwise, which once pushed the package past its CI
+// timeout. Every child the harness starts must turn that sleep off.
+func TestHarnessChildrenSkipRaceExitSleep(t *testing.T) {
+	e := newH1Env(t)
+	env := e.childEnv("", filepath.Join(t.TempDir(), "trace"))
+	if !slices.Contains(env, "GORACE=atexit_sleep_ms=0") {
+		t.Fatalf("child env lacks GORACE=atexit_sleep_ms=0")
 	}
 }
