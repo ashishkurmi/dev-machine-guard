@@ -191,3 +191,16 @@ func TestVerifySignedWindows(t *testing.T) {
 		t.Fatalf("pinned subject: %v", err)
 	}
 }
+
+// R-C1-2: for GENERIC_VERIFY_V2, revocation is only off with
+// WTD_REVOCATION_CHECK_NONE in the provider flags.
+func TestTrustDataDisablesRevocation(t *testing.T) {
+	file := &windows.WinTrustFileInfo{}
+	d := newTrustData(file)
+	if d.ProvFlags&windows.WTD_REVOCATION_CHECK_NONE == 0 || d.RevocationChecks != windows.WTD_REVOKE_NONE {
+		t.Fatalf("ProvFlags=%#x RevocationChecks=%d", d.ProvFlags, d.RevocationChecks)
+	}
+	if d.UIChoice != windows.WTD_UI_NONE || d.StateAction != windows.WTD_STATEACTION_VERIFY {
+		t.Fatalf("data = %+v", d)
+	}
+}
