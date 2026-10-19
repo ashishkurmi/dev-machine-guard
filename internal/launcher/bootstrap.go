@@ -692,7 +692,9 @@ func (b *Bootstrap) adoptState(seed updatestate.Version) {
 	case updatestate.Compare(seed, cur) <= 0:
 		return
 	default:
-		if _, q := st.Quarantine[s]; q {
+		// Only an unexpired quarantine of the seed's own version blocks it
+		// (R-B-6); a D5 "until" in the past has ended.
+		if q, ok := st.Quarantine[s]; ok && (q.Until.IsZero() || b.Now().Before(q.Until)) {
 			b.logf("adopt-seed: seed %s is quarantined; current %s kept", s, old)
 			return
 		}

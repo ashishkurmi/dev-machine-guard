@@ -813,3 +813,29 @@ func TestAdoptSeed_SetsRunningVersionWithCurrent(t *testing.T) {
 		})
 	}
 }
+
+// R-B-6: only an unexpired quarantine of the seed's own version blocks
+// adopting it; an expired one (D5 until) or other versions' entries don't.
+func TestAdoptSeed_QuarantineExpiry(t *testing.T) {
+	// The fixture clock is 2026-10-19T12:00:00Z.
+	cases := map[string]struct {
+		quarantine string
+		want       string
+	}{
+		"permanent seed entry blocks": {`{"1.5.0":{"reason":"bad_runs","at":"2026-10-01T00:00:00Z"}}`, "1.4.0"},
+		"unexpired seed entry blocks": {`{"1.5.0":{"reason":"inconclusive","at":"2026-10-15T00:00:00Z","until":"2026-10-22T00:00:00Z"}}`, "1.4.0"},
+		"expired seed entry allows":   {`{"1.5.0":{"reason":"inconclusive","at":"2026-10-01T00:00:00Z","until":"2026-10-08T00:00:00Z"}}`, "1.5.0"},
+		"other version never blocks":  {`{"1.4.5":{"reason":"bad_runs","at":"2026-10-01T00:00:00Z"}}`, "1.5.0"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.state(`{"schema":1,"current":"1.4.0","quarantine":` + tc.quarantine + `}`)
+			f.version("1.4.0")
+			f.adopt(f.seed("1.5.0"))
+			if got := f.load().Current; got != tc.want {
+				t.Fatalf("current = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
