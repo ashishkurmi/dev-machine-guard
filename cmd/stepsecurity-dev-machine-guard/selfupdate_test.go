@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"github.com/step-security/dev-machine-guard/internal/device"
+	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/launcher"
 	"github.com/step-security/dev-machine-guard/internal/telemetry"
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
@@ -131,5 +134,22 @@ func TestBootstrapFallbackEndToEnd(t *testing.T) {
 				t.Fatalf("agent saw %v, want [%s 1.20.0 1.19.0]", events, tc.reason)
 			}
 		})
+	}
+}
+
+// D23/R-C2-13: the SYSTEM self-check resolves its id like the updater
+// (device.SystemID): with no shared device-id file and a failed hardware
+// probe it must not write one (the old root path minted a UUID or
+// MachineGuid there, flipping user scans' identity).
+func TestSystemSelfCheckNeverWritesSharedID(t *testing.T) {
+	device.ResetIDCache()
+	t.Cleanup(device.ResetIDCache)
+	m := executor.NewMock()
+	m.SetGOOS("windows")
+	m.SetIsRoot(true) // SYSTEM; no wmic/powershell answers: the probe fails
+	cache := filepath.Join(t.TempDir(), "state", "device-id")
+	_ = selfCheckDeviceID(context.Background(), m, true, cache)
+	if b, err := m.ReadFile(`C:\ProgramData\StepSecurity\device-id`); err == nil && len(b) > 0 {
+		t.Fatalf("SYSTEM self-check wrote the shared device-id: %q", b)
 	}
 }

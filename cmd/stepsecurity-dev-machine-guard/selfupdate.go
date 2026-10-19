@@ -25,6 +25,7 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/selfupdate"
 	"github.com/step-security/dev-machine-guard/internal/telemetry"
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
+	"github.com/step-security/dev-machine-guard/internal/winproc"
 )
 
 const (
@@ -53,13 +54,25 @@ func runEarlyVerbs(args []string) {
 	}
 }
 
-// resolveDeviceID returns the configured device id, else the hardware
-// identity. Elevated (SYSTEM) runs probe the hardware and rewrite the shared
-// device-id file rather than trusting it (M-9).
+// resolveDeviceID is the scan's device id (user context), for events the
+// scanning agent sends. SYSTEM paths use device.SystemID instead.
 func resolveDeviceID(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, deviceProbeTimeout)
 	defer cancel()
 	return device.ID(model.Device{SerialNumber: device.SerialNumber(ctx, executor.NewReal())})
+}
+
+// selfCheckDeviceID resolves the self-check's device id. As SYSTEM (the
+// updater's S5 smoke) it goes through device.SystemID like every other
+// SYSTEM resolution in self-update, so it never writes the shared
+// device-id file from a fallback; elsewhere it is the scan's resolution.
+func selfCheckDeviceID(ctx context.Context, exec executor.Executor, system bool, cachePath string) string {
+	if system {
+		return device.SystemID(ctx, exec, cachePath)
+	}
+	ctx, cancel := context.WithTimeout(ctx, deviceProbeTimeout)
+	defer cancel()
+	return device.ID(model.Device{SerialNumber: device.SerialNumber(ctx, exec)})
 }
 
 // runSelfCheck is `agent self-check`: the S5 smoke test run by the updater
@@ -69,7 +82,9 @@ func runSelfCheck() int {
 	sc := selfupdate.SelfCheck{
 		Version:  buildinfo.Version,
 		ConfigOK: config.LoadError() == nil && config.IsEnterpriseMode(),
-		DeviceID: resolveDeviceID(context.Background()),
+		DeviceID: selfCheckDeviceID(context.Background(), executor.NewReal(),
+			runtime.GOOS == model.PlatformWindows && winproc.IsLocalSystem(),
+			filepath.Join(updatestate.MSILayout().StateDir(), "device-id")),
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(sc); err != nil {
 		return selfCheckExitFailed
