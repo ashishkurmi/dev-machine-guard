@@ -285,3 +285,19 @@ func TestLoadNeverReturnsNilMaps(t *testing.T) {
 		st.Dedupe["k"] = time.Now()
 	}
 }
+
+// R-F1-5: a directory at the state.json path is corrupt, not an I/O
+// error, on every OS (Windows CreateFile refused directories before).
+func TestDirectoryAtStatePathIsCorrupt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, corrupt, err := Load(path)
+	if err != nil || !corrupt || st != nil {
+		t.Fatalf("Load(dir) = %v, corrupt=%v, err=%v; want corrupt", st, corrupt, err)
+	}
+	if recs := ReadRuns(path); recs != nil {
+		t.Fatalf("ReadRuns(dir) = %v", recs)
+	}
+}
