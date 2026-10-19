@@ -1135,3 +1135,67 @@ func TestReSmokeTimeoutsRollBackOnlyAfterThree(t *testing.T) {
 		t.Fatalf("rollback = %+v", rb)
 	}
 }
+
+// FR1-6: runs are counted by sequence after the switch, not by time: two
+// crashes finalized with timestamps before the probation start (the clock
+// went back between the switch and the runs) still roll back.
+func TestProbationCountsRunsBySequence(t *testing.T) {
+	e := newEnv(t)
+	probationState(t, e)
+	pv := mustV("1.20.0")
+	must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: "before-switch", Version: "1.20.0"}))
+	st := e.state()
+	since := updatestate.MaxRunSeq(e.L.RunFile(pv))
+	st.Probation.SinceSeq = &since
+	e.writeState(st)
+	early := st.Probation.Since.Add(-time.Hour)
+	for i := 0; i < 2 && e.state().Current == "1.20.0"; i++ {
+		id := fmt.Sprintf("crash-%d", i)
+		must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: id, Version: "1.20.0"}))
+		must(t, updatestate.FinalizeRun(e.L.RunFile(pv), id, 2, false, early))
+		e.tick()
+	}
+	if rb := e.lastSentOrNil(EventRolledBack); rb == nil || rb.Error != ReasonBadRuns {
+		t.Fatalf("runs before the probation's timestamp were dropped: %+v", e.state())
+	}
+}
+
+// The switch records the runs file's current sequence.
+func TestSwitchRecordsSinceSeq(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	pv := mustV("1.20.0")
+	for _, id := range []string{"a", "b"} {
+		must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: id, Version: "1.20.0"}))
+	}
+	e.tick()
+	if p := e.state().Probation; p == nil || p.SinceSeq == nil || *p.SinceSeq != 2 {
+		t.Fatalf("probation = %+v, want since_seq 2", p)
+	}
+}
+
+// A target that never ran (empty runs file) records since_seq 0, and the
+// seq rule still applies to its runs.
+func TestProbationSeqWithFreshTarget(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.tick() // switch to 1.20.0
+	st := e.state()
+	if st.Probation == nil || st.Probation.SinceSeq == nil || *st.Probation.SinceSeq != 0 {
+		t.Fatalf("probation = %+v", st.Probation)
+	}
+	pv := mustV("1.20.0")
+	early := st.Probation.Since.Add(-time.Hour)
+	for i := 0; i < 2 && e.state().Current == "1.20.0"; i++ {
+		id := fmt.Sprintf("crash-%d", i)
+		must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: id, Version: "1.20.0"}))
+		must(t, updatestate.FinalizeRun(e.L.RunFile(pv), id, 2, false, early))
+		e.now = e.now.Add(time.Hour)
+		e.tick()
+	}
+	if e.state().Current != "1.19.0" {
+		t.Fatalf("not rolled back: %+v", e.state())
+	}
+}

@@ -410,7 +410,7 @@ func (t *tick) health(ctx context.Context) (closed bool, err error) {
 	healthy, neutral, bad := 0, 0, 0
 	v, _ := updatestate.ParseVersion(p.Version)
 	for _, r := range updatestate.ReadRuns(t.L.RunFile(v)) {
-		if r.At.Before(p.Since) {
+		if !inProbation(r, p) {
 			continue
 		}
 		switch updatestate.ClassifyRun(r) {
@@ -448,6 +448,16 @@ func (t *tick) health(ctx context.Context) (closed bool, err error) {
 	delete(t.st.SmokeTimeouts, v.String())
 	t.confirm("smoke_only")
 	return true, nil
+}
+
+// inProbation reports whether run r belongs to probation p: by sequence
+// (seq > since_seq) when both are recorded, so clock jumps can't drop
+// runs; by time only for records or probations without one.
+func inProbation(r updatestate.RunRecord, p *updatestate.Probation) bool {
+	if r.Seq > 0 && p.SinceSeq != nil {
+		return r.Seq > *p.SinceSeq
+	}
+	return !r.At.Before(p.Since)
 }
 
 // probationTicks is the window in hourly update ticks.
@@ -568,6 +578,10 @@ func cloneState(s *updatestate.State) *updatestate.State {
 	c := *s
 	if s.Probation != nil {
 		p := *s.Probation
+		if p.SinceSeq != nil {
+			v := *p.SinceSeq
+			p.SinceSeq = &v
+		}
 		c.Probation = &p
 	}
 	c.Quarantine = make(map[string]updatestate.Quarantine, len(s.Quarantine))
@@ -713,7 +727,8 @@ func (t *tick) switchTo(ctx context.Context, v updatestate.Version) int {
 	next := cloneState(t.st)
 	next.Previous = old
 	next.Current = target
-	next.Probation = &updatestate.Probation{Version: target, Since: t.now.UTC(), SmokeOK: true}
+	sinceSeq := updatestate.MaxRunSeq(t.L.RunFile(v))
+	next.Probation = &updatestate.Probation{Version: target, Since: t.now.UTC(), SmokeOK: true, SinceSeq: &sinceSeq}
 	next.SwitchDeferrals = 0
 	next.PendingSwitch = ""
 	enqueueTo(next, t.now, t.dedupeWindow(), EventOK, old, target, "", "")

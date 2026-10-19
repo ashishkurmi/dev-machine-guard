@@ -428,3 +428,25 @@ func TestSessionEndExitsAreNeutral(t *testing.T) {
 		t.Fatal("access violation not Bad")
 	}
 }
+
+// FR1-6: every appended record gets the next per-file sequence number, and
+// it keeps counting past trimmed records.
+func TestRunSeqIsMonotonic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "1.20.0.json")
+	at := time.Now()
+	for i := 1; i <= MaxRunRecords+5; i++ {
+		id := fmt.Sprintf("r%d", i)
+		if err := AppendRun(path, RunRecord{RunID: id, Version: "1.20.0"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := FinalizeRun(path, id, 0, false, at); err != nil {
+			t.Fatal(err)
+		}
+		if got := recordOf(t, path, id).Seq; got != i {
+			t.Fatalf("record %d has seq %d", i, got)
+		}
+	}
+	if MaxRunSeq(path) != MaxRunRecords+5 {
+		t.Fatalf("MaxRunSeq = %d", MaxRunSeq(path))
+	}
+}

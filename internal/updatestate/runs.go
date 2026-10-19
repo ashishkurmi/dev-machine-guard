@@ -34,7 +34,9 @@ const maxRunsSize = 64 << 10
 // RunID, so overlapping launches never touch each other's record. A nil
 // ExitCode means not finalized yet.
 type RunRecord struct {
-	RunID   string `json:"run_id,omitempty"`
+	RunID string `json:"run_id,omitempty"`
+	// Seq is the per-file launch sequence number (max+1 at append).
+	Seq     int    `json:"seq,omitempty"`
 	Version string `json:"version"`
 	// StartedAt is when the record was appended (the launch began).
 	StartedAt time.Time `json:"start,omitzero"`
@@ -56,6 +58,9 @@ type RunRecord struct {
 
 type runFile struct {
 	Records []RunRecord `json:"records"`
+	// MaxSeq is the highest Seq ever assigned in this file, kept across
+	// trimming so sequence numbers never repeat.
+	MaxSeq int `json:"max_seq,omitempty"`
 }
 
 // ErrNoOpenRun means the run file has no unfinalized record with that run_id.
@@ -66,17 +71,39 @@ var ErrNoOpenRun = errors.New("updatestate: no open run record")
 // is user-writable, so anything unreadable or malformed reads as no records
 // and records with an invalid version are dropped; it never fails.
 func ReadRuns(path string) []RunRecord {
+	recs, _ := readRunFile(path)
+	return recs
+}
+
+// MaxRunSeq is the highest sequence number assigned in a run file (0 when
+// none). The updater records it at a switch as the probation's start.
+func MaxRunSeq(path string) int {
+	_, maxSeq := readRunFile(path)
+	return maxSeq
+}
+
+func readRunFile(path string) ([]RunRecord, int) {
 	data, err := readBounded(path, maxRunsSize)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
-	return decodeRuns(data)
+	return decodeRunFile(data)
 }
 
 func decodeRuns(data []byte) []RunRecord {
+	recs, _ := decodeRunFile(data)
+	return recs
+}
+
+// decodeRunFile returns the valid records and the file's highest seq.
+func decodeRunFile(data []byte) ([]RunRecord, int) {
 	var f runFile
 	if json.Unmarshal(data, &f) != nil {
-		return nil
+		return nil, 0
+	}
+	maxSeq := max(f.MaxSeq, 0)
+	for _, r := range f.Records {
+		maxSeq = max(maxSeq, r.Seq)
 	}
 	out := f.Records[:0]
 	for _, r := range f.Records {
@@ -85,9 +112,9 @@ func decodeRuns(data []byte) []RunRecord {
 		}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, maxSeq
 	}
-	return out
+	return out, maxSeq
 }
 
 // trimRuns keeps at most MaxRunRecords plus any fresh open records,
@@ -140,10 +167,10 @@ func abandonStale(recs []RunRecord, now time.Time, protect string) {
 
 // writeRuns abandons stale open records, trims (never evicting protect)
 // and writes. Callers hold the run-record lock.
-func writeRuns(path string, recs []RunRecord, protect string) error {
+func writeRuns(path string, recs []RunRecord, protect string, maxSeq int) error {
 	abandonStale(recs, time.Now(), protect)
 	recs = trimRuns(recs, protect)
-	data, err := json.Marshal(runFile{Records: recs})
+	data, err := json.Marshal(runFile{Records: recs, MaxSeq: maxSeq})
 	if err != nil {
 		return err
 	}
@@ -166,7 +193,7 @@ func AppendRun(path string, r RunRecord) error {
 	if r.RunID == "" {
 		return ErrRunID
 	}
-	recs := ReadRuns(path)
+	recs, maxSeq := readRunFile(path)
 	for _, existing := range recs {
 		if existing.RunID == r.RunID {
 			return ErrRunID
@@ -176,7 +203,9 @@ func AppendRun(path string, r RunRecord) error {
 		r.StartedAt = time.Now().UTC()
 	}
 	stampOwner(&r)
-	return writeRuns(path, append(recs, r), r.RunID)
+	maxSeq++
+	r.Seq = maxSeq
+	return writeRuns(path, append(recs, r), r.RunID, maxSeq)
 }
 
 // MarkRunStarted sets the started marker on the open record runID.
@@ -223,14 +252,14 @@ func updateOpenRun(path, runID string, fn func(*RunRecord)) error {
 	if runID == "" {
 		return ErrNoOpenRun
 	}
-	recs := ReadRuns(path)
+	recs, maxSeq := readRunFile(path)
 	for i := range recs {
 		// An abandoned record is revivable by its own run: its late
 		// finalize or marker records the real outcome.
 		if r := recs[i]; r.RunID == runID && r.ExitCode == nil && !r.WatchdogKilled {
 			recs[i].Abandoned = false
 			fn(&recs[i])
-			return writeRuns(path, recs, runID)
+			return writeRuns(path, recs, runID, maxSeq)
 		}
 	}
 	return ErrNoOpenRun
