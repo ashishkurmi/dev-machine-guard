@@ -18,7 +18,7 @@ import (
 )
 
 // instanceMutex is the scan singleton (internal/lock).
-const instanceMutex = `Global\StepSecurityDevMachineGuard`
+var instanceMutex = `Global\StepSecurityDevMachineGuard`
 
 // stopDMGProcessesPlatform waits up to wait for a running scan to release the
 // instance mutex, then terminates every process (other than this one) whose
