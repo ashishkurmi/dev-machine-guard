@@ -27,7 +27,7 @@ type Pointers struct {
 // previous (strict x.y.z, else dropped) decide whether the state is usable;
 // no other field is validated, for any schema, so a future writer can change
 // everything else without stranding first-generation bootstraps on the seed.
-// For schema 1, probation and updater are read best-effort for the update
+// Probation and updater are read best-effort, for any schema, for the update
 // verb's selection: anything malformed there reads as absent, never corrupt.
 // The (p, corrupt, err) contract matches Load.
 func LoadPointers(path string) (p *Pointers, corrupt bool, err error) {
@@ -62,9 +62,8 @@ func decodePointers(data []byte) (*Pointers, error) {
 	if json.Unmarshal(raw["previous"], &p.Previous) != nil || !validVersion(p.Previous) {
 		p.Previous = ""
 	}
-	if p.Schema != SchemaVersion {
-		return &p, nil
-	}
+	// Existing fields keep their meaning in every schema (additive-only
+	// contract), so probation/updater are read for any schema, best-effort.
 	var prob struct {
 		Version string `json:"version"`
 	}
@@ -221,7 +220,7 @@ func ResolveRunVersion(l Layout, st *State) (Version, string) {
 func (l Layout) RunLockFile(v Version) string { return l.RunFile(v) + ".lock" }
 
 // ErrNotRecordable means SaveUpdaterRecord found no state it may patch: the
-// file is missing, its pointers are unreadable, or its schema is newer.
+// file is missing or its pointers (schema/current/previous) are unreadable.
 var ErrNotRecordable = errors.New("updatestate: state not recordable by this build")
 
 // SaveUpdaterRecord rewrites only state.updater.{version,consecutive_failures}
@@ -238,8 +237,10 @@ func SaveUpdaterRecord(path, prefix string, fn func(version string, failures int
 		}
 		return err
 	}
+	// Any schema >= 1: updater.version/consecutive_failures keep their meaning
+	// in every schema, and the rest of the file (schema included) is kept.
 	p, err := decodePointers(data)
-	if err != nil || p.Schema != SchemaVersion {
+	if err != nil {
 		return ErrNotRecordable
 	}
 	var raw map[string]json.RawMessage

@@ -870,3 +870,34 @@ func TestUpdate_RCStateStillCountsFailuresAndFallsBack(t *testing.T) {
 		}
 	}
 }
+
+// D18 follow-up: on a schema-2 state the failure count still increments (the
+// updater fields keep their meaning in every schema) and the 4th tick picks
+// the seed; schema and every other field stay as they were.
+func TestUpdate_Schema2StateStillCountsFailuresAndFallsBack(t *testing.T) {
+	f := newFixture(t)
+	f.state(`{"schema":2,"current":"1.21.0","previous":"1.20.0","brand_new":{"x":[1]},"updater":{"version":"","consecutive_failures":0,"extra":true}}`)
+	f.version("1.21.0")
+	f.version("1.20.0")
+	f.seed("1.19.0")
+	for i := 1; i <= 3; i++ {
+		f.sp.calls = nil
+		f.sp.results = []SpawnResult{{Started: true, ExitCode: 1}}
+		f.b.Update()
+		if got := f.updaterRan(); got != "versions/1.21.0" {
+			t.Fatalf("tick %d: updater = %s", i, got)
+		}
+	}
+	f.sp.calls = nil
+	f.sp.results = nil
+	f.b.Update()
+	if got := f.updaterRan(); got != "seed/1.19.0" {
+		t.Fatalf("4th tick: updater = %s, want the seed", got)
+	}
+	data, _ := os.ReadFile(f.layout.StateFile())
+	for _, keep := range []string{`"schema": 2`, `"brand_new"`, `"extra": true`, `"consecutive_failures": 3`, `"version": "1.21.0"`} {
+		if !strings.Contains(string(data), keep) {
+			t.Fatalf("missing %s in %s", keep, data)
+		}
+	}
+}

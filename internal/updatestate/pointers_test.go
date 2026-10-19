@@ -116,8 +116,9 @@ func TestLoadPointers_Schema2ExtraFields(t *testing.T) {
 	if err != nil || corrupt || p == nil || p.Current != "1.4.0" || p.Previous != "1.3.0" || p.Schema != 2 {
 		t.Fatalf("p=%+v corrupt=%v err=%v", p, corrupt, err)
 	}
-	if p.Probation != "" || p.UpdaterVersion != "" || p.UpdaterFailures != 0 {
-		t.Fatalf("schema-2 non-pointer fields read: %+v", p)
+	// Existing fields keep their meaning in a newer schema (additive-only).
+	if p.Probation != "1.4.0" {
+		t.Fatalf("schema-2 probation not read: %+v", p)
 	}
 }
 
