@@ -70,5 +70,6 @@ func validAction(a string) bool {
 	}
 	n, ok := strings.CutPrefix(a, "exit")
 	code, err := strconv.Atoi(n)
-	return ok && err == nil && code >= 0
+	// MalformedExitCode is reserved: a fault may not imitate a bad spec.
+	return ok && err == nil && code >= 0 && code != MalformedExitCode
 }
