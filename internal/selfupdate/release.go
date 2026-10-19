@@ -94,6 +94,34 @@ func (c *Client) releaseBase() string {
 	return defaultReleaseBaseURL
 }
 
+// errDowngrade refuses an https -> http redirect.
+var errDowngrade = errors.New("refusing a redirect from https to http")
+
+// httpClient is c.HTTP with redirects that downgrade https to http refused
+// (on top of any redirect policy the client already has).
+func (c *Client) httpClient() *http.Client {
+	hc := *c.HTTP
+	hc.CheckRedirect = refuseDowngrade(hc.CheckRedirect)
+	return &hc
+}
+
+func refuseDowngrade(prev func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		for _, v := range via {
+			if v.URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return errDowngrade
+			}
+		}
+		if prev != nil {
+			return prev(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+}
+
 func (c *Client) signingKey() string {
 	if c.SigningKey != "" {
 		return c.SigningKey
@@ -163,7 +191,7 @@ func (c *Client) fetch(ctx context.Context, goos string) (*latestBinaryResponse,
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("X-Agent-Version", c.AgentVersion)
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrCheck, err)
 	}
@@ -259,7 +287,7 @@ func (c *Client) downloadURL(ctx context.Context, assetURL, dst, want string) er
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrDownload, err)
 	}
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrDownload, err)
 	}

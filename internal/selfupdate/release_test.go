@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
@@ -303,5 +305,59 @@ func TestProxyFuncPrefersEnvironment(t *testing.T) {
 func TestNativeArch(t *testing.T) {
 	if a := NativeArch(); a != "amd64" && a != "arm64" && a != "386" && a != "riscv64" && a != "s390x" && a != "ppc64le" && a != "loong64" {
 		t.Fatalf("NativeArch = %q", a)
+	}
+}
+
+// R-C1-3: an https endpoint redirecting to plain http is a failure, never
+// followed, for downloads (GitHub, mirror) and for latest-binary.
+func TestRedirectDowngradeRefused(t *testing.T) {
+	var plainHits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		plainHits.Add(1)
+		_, _ = w.Write([]byte("agent-1.20.0"))
+	}))
+	defer plain.Close()
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	_, c := newReleaseFixture(t)
+	rel, err := c.Latest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.HTTP = redirector.Client()
+	c.ReleaseBaseURL = redirector.URL + "/releases"
+	if err := c.Download(context.Background(), rel.Version, rel.Assets[0], t.TempDir()); !errors.Is(err, ErrDownload) {
+		t.Fatalf("github redirect to http: %v", err)
+	}
+	c.ReleaseBaseURL = redirector.URL + "/gone"
+	c.MirrorURL = redirector.URL + "/mirror"
+	if err := c.Download(context.Background(), rel.Version, rel.Assets[0], t.TempDir()); !errors.Is(err, ErrDownload) {
+		t.Fatalf("mirror redirect to http: %v", err)
+	}
+	c.APIEndpoint = redirector.URL
+	if _, err := c.Latest(context.Background()); !errors.Is(err, ErrCheck) {
+		t.Fatalf("latest-binary redirect to http: %v", err)
+	}
+	if n := plainHits.Load(); n != 0 {
+		t.Fatalf("followed %d downgrade redirects", n)
+	}
+	// An https -> https redirect is still followed.
+	c2 := *c
+	_, fc := newReleaseFixture(t)
+	hop := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, fc.ReleaseBaseURL+strings.TrimPrefix(r.URL.Path, "/hop"), http.StatusFound)
+	}))
+	defer hop.Close()
+	c2.HTTP = fc.HTTP
+	c2.ReleaseBaseURL = hop.URL + "/hop"
+	c2.MirrorURL = ""
+	tr := fc.HTTP.Transport.(*http.Transport).Clone()
+	tr.TLSClientConfig.RootCAs.AddCert(hop.Certificate())
+	c2.HTTP = &http.Client{Transport: tr}
+	if err := c2.Download(context.Background(), rel.Version, rel.Assets[0], t.TempDir()); err != nil {
+		t.Fatalf("https redirect: %v", err)
 	}
 }

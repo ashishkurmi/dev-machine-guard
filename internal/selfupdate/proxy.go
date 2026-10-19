@@ -23,7 +23,8 @@ func NewHTTPClient() *http.Client {
 	tr.Proxy = proxyFunc(http.ProxyFromEnvironment, loadMachineProxy())
 	tr.TLSHandshakeTimeout = 30 * time.Second
 	tr.ResponseHeaderTimeout = 60 * time.Second
-	return &http.Client{Transport: tr}
+	// Events share this client; no request follows https -> http.
+	return &http.Client{Transport: tr, CheckRedirect: refuseDowngrade(nil)}
 }
 
 func proxyFunc(env func(*http.Request) (*url.URL, error), mp *machineProxy) func(*http.Request) (*url.URL, error) {
