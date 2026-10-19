@@ -3,6 +3,7 @@ package updatestate
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -122,6 +123,27 @@ func AppendRun(path string, r RunRecord) error {
 // MarkRunStarted sets the started marker on the open record runID.
 func MarkRunStarted(path, runID string) error {
 	return updateOpenRun(path, runID, func(r *RunRecord) { r.Started = true })
+}
+
+// MarkRunStartedLocked is the agent's MarkRunStarted under the run-record
+// lock the bootstrap takes for AppendRun/FinalizeRun (runs\<v>.json.lock,
+// Layout.RunLockFile on the boot branch), waiting at most wait. On timeout it
+// returns an error without writing; callers skip the marker and never fail
+// the scan.
+func MarkRunStartedLocked(path, runID string, wait time.Duration) error {
+	lockPath := path + ".lock"
+	deadline := time.Now().Add(wait)
+	for {
+		l, err := AcquireLock(lockPath)
+		if err == nil {
+			defer l.Release()
+			return MarkRunStarted(path, runID)
+		}
+		if !errors.Is(err, ErrLocked) || !time.Now().Before(deadline) {
+			return fmt.Errorf("run-record lock %s: %w", lockPath, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // FinalizeRun closes the open record runID.

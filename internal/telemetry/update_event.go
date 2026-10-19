@@ -25,6 +25,7 @@ const (
 	updateEventHTTPTimeout  = 10 * time.Second
 	updateEventRetryBackoff = time.Second
 	updateEventMaxError     = 2048
+	runLockWait             = 5 * time.Second
 )
 
 // UpdateEvent is one self-update event (spec Contracts: Update event),
@@ -152,5 +153,6 @@ func markRunStarted() error {
 	if !filepath.IsAbs(path) || !strings.EqualFold(filepath.Ext(path), ".json") {
 		return fmt.Errorf("%s=%q is not an absolute .json path", EnvRunRecord, path)
 	}
-	return updatestate.MarkRunStarted(path, runID)
+	// Same lock and bounded wait as the bootstrap's run-record writes.
+	return updatestate.MarkRunStartedLocked(path, runID, runLockWait)
 }
