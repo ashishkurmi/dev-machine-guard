@@ -10,6 +10,8 @@ import (
 
 func prepareSmoke(*exec.Cmd) {}
 
+func runSmokeCmd(cmd *exec.Cmd) error { return cmd.Run() }
+
 // EnsureConfigACL is Windows-only; elsewhere config.json keeps its mode.
 func EnsureConfigACL(string) (bool, error) { return false, nil }
 

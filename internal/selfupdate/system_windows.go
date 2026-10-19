@@ -17,6 +17,53 @@ func prepareSmoke(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 }
 
+var procNtResumeProcess = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtResumeProcess")
+
+// runSmokeCmd runs the self-check inside a kill-on-close job (spec S5 "in a
+// job"): the child starts suspended, joins the job, then resumes, so
+// nothing it spawns escapes; a timeout terminates the whole job, and
+// closing the job on return (or on our own death) kills any leftovers.
+func runSmokeCmd(cmd *exec.Cmd) error {
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return fmt.Errorf("smoke job: %w", err)
+	}
+	defer func() { _ = windows.CloseHandle(job) }()
+	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
+		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE},
+	}
+	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		return fmt.Errorf("smoke job limits: %w", err)
+	}
+	cmd.Cancel = func() error {
+		if windows.TerminateJobObject(job, 1) == nil {
+			return nil
+		}
+		return cmd.Process.Kill()
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SUSPEND_RESUME, false, uint32(cmd.Process.Pid)) // #nosec G115 -- a live pid
+	if err == nil {
+		err = windows.AssignProcessToJobObject(job, h)
+		if err == nil {
+			if status, _, _ := procNtResumeProcess.Call(uintptr(h)); status != 0 {
+				err = fmt.Errorf("resume self-check: NTSTATUS 0x%x", status)
+			}
+		}
+		_ = windows.CloseHandle(h)
+	}
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("smoke job: %w", err)
+	}
+	return cmd.Wait()
+}
+
 // configFileSDDL matches `configure`'s icacls hardening: SYSTEM F,
 // Administrators F, Users R, inheritance off.
 const configFileSDDL = "D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)"

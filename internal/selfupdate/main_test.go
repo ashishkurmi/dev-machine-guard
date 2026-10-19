@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,9 +34,22 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func init() {
+	// "sleep": a grandchild that outlives a hung self-check unless a job
+	// kills it.
+	helperRoles["sleep"] = func() int { time.Sleep(time.Hour); return 0 }
+}
+
 func helperSelfCheck() int {
 	exe, _ := os.Executable()
 	v := filepath.Base(filepath.Dir(exe))
+	if pidFile := os.Getenv("DMG_SU_SMOKE_GRANDCHILD"); pidFile != "" {
+		cmd := exec.Command(exe)
+		cmd.Env = append(os.Environ(), envRole+"=sleep", envHelper+"=0")
+		if err := cmd.Start(); err == nil {
+			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
+		}
+	}
 	if os.Getenv("DMG_SU_SMOKE_HANG") == "1" {
 		time.Sleep(time.Hour)
 	}

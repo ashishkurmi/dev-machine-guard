@@ -48,7 +48,7 @@ func RunSmoke(ctx context.Context, exe string, want updatestate.Version) error {
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = 5 * time.Second
 	prepareSmoke(cmd)
-	if err := cmd.Run(); err != nil {
+	if err := runSmokeCmd(cmd); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("self-check timed out after %s", duration(knobSmokeTimeout))
 		}
