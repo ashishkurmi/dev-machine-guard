@@ -22,10 +22,14 @@ type Pointers struct {
 	UpdaterFailures int
 }
 
-// LoadPointers reads state.json for the bootstrap. Schema 1 must pass the
-// full Validate (so the bootstrap and the updater agree on what is corrupt).
-// A higher schema only needs a strict current; an invalid previous is
-// dropped. The (p, corrupt, err) contract matches Load.
+// LoadPointers reads state.json for the bootstrap through the frozen read
+// contract (R-B-1): only schema (an integer >= 1), current (strict x.y.z) and
+// previous (strict x.y.z, else dropped) decide whether the state is usable;
+// no other field is validated, for any schema, so a future writer can change
+// everything else without stranding first-generation bootstraps on the seed.
+// For schema 1, probation and updater are read best-effort for the update
+// verb's selection: anything malformed there reads as absent, never corrupt.
+// The (p, corrupt, err) contract matches Load.
 func LoadPointers(path string) (p *Pointers, corrupt bool, err error) {
 	data, err := readBounded(path, maxStateSize)
 	switch {
@@ -44,38 +48,37 @@ func LoadPointers(path string) (p *Pointers, corrupt bool, err error) {
 }
 
 func decodePointers(data []byte) (*Pointers, error) {
-	var head struct {
-		Schema   int    `json:"schema"`
-		Current  string `json:"current"`
-		Previous string `json:"previous"`
-	}
-	if err := json.Unmarshal(data, &head); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, err
 	}
-	switch {
-	case head.Schema == SchemaVersion:
-		s, err := decodeState(data)
-		if err != nil {
-			return nil, err
-		}
-		p := &Pointers{Schema: s.Schema, Current: s.Current, Previous: s.Previous,
-			UpdaterVersion: s.Updater.Version, UpdaterFailures: s.Updater.ConsecutiveFailures}
-		if s.Probation != nil {
-			p.Probation = s.Probation.Version
-		}
-		return p, nil
-	case head.Schema > SchemaVersion:
-		if !validVersion(head.Current) {
-			return nil, fmt.Errorf("invalid current %q", head.Current)
-		}
-		p := &Pointers{Schema: head.Schema, Current: head.Current}
-		if validVersion(head.Previous) {
-			p.Previous = head.Previous
-		}
-		return p, nil
-	default:
-		return nil, fmt.Errorf("unsupported schema %d", head.Schema)
+	var p Pointers
+	if err := json.Unmarshal(raw["schema"], &p.Schema); err != nil || p.Schema < SchemaVersion {
+		return nil, fmt.Errorf("unsupported schema %s", raw["schema"])
 	}
+	if err := json.Unmarshal(raw["current"], &p.Current); err != nil || !validVersion(p.Current) {
+		return nil, fmt.Errorf("invalid current %s", raw["current"])
+	}
+	if json.Unmarshal(raw["previous"], &p.Previous) != nil || !validVersion(p.Previous) {
+		p.Previous = ""
+	}
+	if p.Schema != SchemaVersion {
+		return &p, nil
+	}
+	var prob struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(raw["probation"], &prob) == nil {
+		p.Probation = prob.Version
+	}
+	var upd struct {
+		Version             string `json:"version"`
+		ConsecutiveFailures int    `json:"consecutive_failures"`
+	}
+	if json.Unmarshal(raw["updater"], &upd) == nil {
+		p.UpdaterVersion, p.UpdaterFailures = upd.Version, upd.ConsecutiveFailures
+	}
+	return &p, nil
 }
 
 // Fallback reasons for the bootstrap's EnvBootstrapFallback. Reasons about a

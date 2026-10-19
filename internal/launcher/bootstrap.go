@@ -602,53 +602,63 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// adoptState sets current = seed when the state is missing or corrupt, when
-// current is unusable, or when the seed is newer than current (and not
-// quarantined). An MSI never downgrades a self-updated device. A higher
-// schema is left alone. Called with the update lock held.
+// adoptState sets current = seed when there is no state yet, when current
+// is unusable, or when the seed is newer than current (and not quarantined).
+// An existing state is never replaced (R-B-1): only current/previous (and
+// probation, which belonged to the old current) change, through the
+// unknown-field-preserving Save; a state this build can't round-trip
+// (unreadable pointers, fields Load rejects, a newer schema) is left
+// byte-for-byte alone for the updater to handle. An MSI never downgrades a
+// self-updated device. Called with the update lock held.
 func (b *Bootstrap) adoptState(seed updatestate.Version) {
 	path := b.Layout.StateFile()
-	p, _, err := updatestate.LoadPointers(path)
-	if err != nil {
-		b.logf("adopt-seed: reading state: %v; left unchanged", err)
-		return
-	}
-	if p != nil && p.Schema > updatestate.SchemaVersion {
-		b.logf("adopt-seed: state schema %d is newer than this bootstrap; left unchanged", p.Schema)
-		return
-	}
 	s := seed.String()
-	st, corrupt, err := updatestate.Load(path)
+	p, corrupt, err := updatestate.LoadPointers(path)
 	switch {
 	case err != nil:
 		b.logf("adopt-seed: reading state: %v; left unchanged", err)
 		return
-	case st == nil:
-		st = &updatestate.State{Schema: updatestate.SchemaVersion, Current: s}
-		b.logf("adopt-seed: state %s; current = seed %s", map[bool]string{true: "corrupt", false: "missing"}[corrupt], s)
-	default:
-		old := st.Current
-		cur, _ := updatestate.ParseVersion(old)
-		switch {
-		case !updatestate.VersionDirUsable(b.Layout.VersionDir(cur)):
-			st.Current = s
-			if st.Probation != nil && st.Probation.Version == old {
-				st.Probation = nil
-			}
-			if st.Previous == s {
-				st.Previous = ""
-			}
-			b.logf("adopt-seed: current %s unusable; current = seed %s", old, s)
-		case updatestate.Compare(seed, cur) <= 0:
+	case corrupt:
+		b.logf("adopt-seed: state pointers unreadable; left unchanged for the updater")
+		return
+	case p == nil:
+		st := &updatestate.State{Schema: updatestate.SchemaVersion, Current: s}
+		if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
+			b.logf("adopt-seed: writing state: %v", err)
 			return
-		default:
-			if _, q := st.Quarantine[s]; q {
-				b.logf("adopt-seed: seed %s is quarantined; current %s kept", s, old)
-				return
-			}
-			st.Previous, st.Current, st.Probation = old, s, nil
-			b.logf("adopt-seed: seed %s newer than current %s; current = seed", s, old)
 		}
+		b.logf("adopt-seed: no state; current = seed %s", s)
+		return
+	case p.Schema > updatestate.SchemaVersion:
+		b.logf("adopt-seed: state schema %d is newer than this bootstrap; left unchanged", p.Schema)
+		return
+	}
+	st, corrupt, err := updatestate.Load(path)
+	if err != nil || corrupt || st == nil {
+		b.logf("adopt-seed: state has fields this build can't round-trip (%v); left unchanged", err)
+		return
+	}
+	old := st.Current
+	cur, _ := updatestate.ParseVersion(old)
+	switch {
+	case !updatestate.VersionDirUsable(b.Layout.VersionDir(cur)):
+		st.Current = s
+		if st.Probation != nil && st.Probation.Version == old {
+			st.Probation = nil
+		}
+		if st.Previous == s {
+			st.Previous = ""
+		}
+		b.logf("adopt-seed: current %s unusable; current = seed %s", old, s)
+	case updatestate.Compare(seed, cur) <= 0:
+		return
+	default:
+		if _, q := st.Quarantine[s]; q {
+			b.logf("adopt-seed: seed %s is quarantined; current %s kept", s, old)
+			return
+		}
+		st.Previous, st.Current, st.Probation = old, s, nil
+		b.logf("adopt-seed: seed %s newer than current %s; current = seed", s, old)
 	}
 	if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
 		b.logf("adopt-seed: writing state: %v", err)

@@ -570,7 +570,6 @@ func TestAdoptSeed_StateRules(t *testing.T) {
 		{"current missing repaired", `{"schema":1,"current":"1.6.0","previous":"1.4.0","probation":{"version":"1.6.0"}}`, nil, "1.5.0", "1.4.0", false},
 		{"current incomplete repaired", `{"schema":1,"current":"1.6.0"}`, nil, "1.5.0", "", false},
 		{"quarantined seed not adopted", `{"schema":1,"current":"1.4.0","quarantine":{"1.5.0":{"reason":"bad_runs","at":"2026-01-01T00:00:00Z"}}}`, []string{"1.4.0"}, "1.4.0", "", true},
-		{"corrupt state replaced", `{"schema":1,"current":"zz"}`, nil, "1.5.0", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -722,5 +721,63 @@ func TestAdoptSeed_UnverifiableSeedVersionReplaced(t *testing.T) {
 	f.adopt(f.seed("1.5.0"))
 	if err := updatestate.VerifyVersionDir(filepath.Join(f.layout.VersionsDir(), "1.5.0"), updatestate.Version{Major: 1, Minor: 5}); err != nil {
 		t.Fatalf("not replaced by a verified copy: %v", err)
+	}
+}
+
+// R-B-1: a schema-1 state that a future writer filled with RC versions
+// outside current/previous still resolves current, for run and update.
+func TestFrozenSchema1_RCFieldsStillResolveCurrent(t *testing.T) {
+	body := `{"schema":1,"current":"1.21.0","previous":"1.20.0","quarantine":{"1.22.0-rc.1":{"reason":"bad_runs"}},"updater":{"version":"1.22.0-rc.1","consecutive_failures":0},"probation":{"version":"1.22.0-rc.1"}}`
+	f := newFixture(t)
+	f.state(body)
+	f.version("1.21.0")
+	f.version("1.20.0")
+	f.seed("1.19.0")
+	f.b.Run(scanArgs(f.layout.DataRoot))
+	c := f.sp.calls[0]
+	if !strings.Contains(c.path, filepath.Join("versions", "1.21.0")) {
+		t.Fatalf("run launched %s", c.path)
+	}
+	if r, ok := c.envValue(EnvBootstrapFallback); ok {
+		t.Fatalf("unexpected fallback %q", r)
+	}
+	f.sp.calls = nil
+	f.b.Update()
+	if got := f.updaterRan(); got != "versions/1.21.0" {
+		t.Fatalf("updater = %s", got)
+	}
+}
+
+// R-B-1: adopt-seed never replaces an existing state with a fresh one. It
+// changes current/previous through the preserving Save, and leaves a state it
+// can't round-trip (odd fields, unreadable pointers) byte-for-byte alone.
+func TestAdoptSeed_PreservesExistingState(t *testing.T) {
+	t.Run("unknown fields kept", func(t *testing.T) {
+		f := newFixture(t)
+		f.state(`{"schema":1,"current":"1.4.0","future_top":{"a":1},"updater":{"version":"1.4.0","consecutive_failures":0,"future_nested":true}}`)
+		f.version("1.4.0")
+		f.adopt(f.seed("1.5.0"))
+		data, _ := os.ReadFile(f.layout.StateFile())
+		if !strings.Contains(string(data), "future_top") || !strings.Contains(string(data), "future_nested") {
+			t.Fatalf("unknown fields dropped: %s", data)
+		}
+		if st := f.load(); st.Current != "1.5.0" || st.Previous != "1.4.0" {
+			t.Fatalf("state = %+v", st)
+		}
+	})
+	for name, body := range map[string]string{
+		"rc fields":           `{"schema":1,"current":"1.4.0","quarantine":{"1.6.0-rc.1":{"reason":"x"}}}`,
+		"unreadable pointers": `{"schema":1,"current":"zz"}`,
+		"garbage":             `not json`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.state(body)
+			f.version("1.4.0")
+			f.adopt(f.seed("1.5.0"))
+			if got, _ := os.ReadFile(f.layout.StateFile()); string(got) != body {
+				t.Fatalf("state rewritten to %s", got)
+			}
+		})
 	}
 }
