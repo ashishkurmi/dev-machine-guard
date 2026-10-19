@@ -257,6 +257,19 @@ const (
 // watchdog ended after the system had slept: not evidence of a hang.
 const ExitSlept = 75
 
+// sessionEnd reports exits caused by the user's session ending, not by the
+// version: 130 (the agent's SIGTERM path, which Go maps CTRL_CLOSE /
+// CTRL_LOGOFF / CTRL_SHUTDOWN events to), STATUS_CONTROL_C_EXIT 0xC000013A
+// and DBG_TERMINATE_PROCESS 0x40010004 (a process terminated at logoff or
+// shutdown). Compared as uint32, so the int32 and uint32 forms both match.
+func sessionEnd(code int) bool {
+	switch uint32(code) { // #nosec G115 -- Windows exit codes are 32-bit
+	case 130, 0xC000013A, 0x40010004:
+		return true
+	}
+	return false
+}
+
 // panicExitCode is the exit status of an unrecovered Go panic (and of the
 // agent's watchdog hard-out).
 const panicExitCode = 2
@@ -275,7 +288,7 @@ func ClassifyRun(r RunRecord) RunVerdict {
 		return RunBad
 	case r.Started:
 		return RunHealthy
-	case *r.ExitCode == 0 || *r.ExitCode == 1 || *r.ExitCode == ExitSlept:
+	case *r.ExitCode == 0 || *r.ExitCode == 1 || *r.ExitCode == ExitSlept || sessionEnd(*r.ExitCode):
 		return RunNeutral
 	default:
 		return RunBad

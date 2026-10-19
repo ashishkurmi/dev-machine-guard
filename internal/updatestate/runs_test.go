@@ -409,3 +409,22 @@ func TestSleptKillIsNeutral(t *testing.T) {
 		}
 	}
 }
+
+// FR1-5: exits caused by the session ending (logoff, shutdown, console
+// close) are Neutral; a real crash code is still Bad.
+func TestSessionEndExitsAreNeutral(t *testing.T) {
+	codes := []int{-1073741510} // 0xC000013A as int32
+	for _, u := range []uint32{130, 0xC000013A, 0x40010004} {
+		codes = append(codes, int(u)) // uint32 form (wraps on 32-bit hosts)
+	}
+	for _, code := range codes {
+		c := code
+		if v := ClassifyRun(RunRecord{Version: "1.20.0", RunID: "x", ExitCode: &c}); v != RunNeutral {
+			t.Errorf("exit %#x: verdict %v, want Neutral", code, v)
+		}
+	}
+	crash := int(uint32(0xC0000005))
+	if ClassifyRun(RunRecord{Version: "1.20.0", RunID: "x", ExitCode: &crash}) != RunBad {
+		t.Fatal("access violation not Bad")
+	}
+}

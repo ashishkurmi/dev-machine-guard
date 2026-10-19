@@ -87,12 +87,16 @@ A new version is on probation until its scans prove it. Each scan launch
 is classified:
 
 - **Healthy:** the scan reached the backend (run-status `started`).
-- **Bad:** a crash (for example a Go panic, exit 2), a watchdog kill, or
-  an exit before `started` with any code other than 0 or 1 (including
-  "couldn't start the agent").
+- **Bad:** a crash (a Go panic, recovered or not, exits 2), a watchdog
+  kill, or an exit before `started` with any other code (including
+  "couldn't start the agent", 70).
 - **Neutral:** an exit 0 or 1 before `started` (offline, or skipped
-  because another scan was running), or a launch whose bootstrap died
-  without recording an outcome (shutdown, logoff, the task time limit).
+  because another scan was running); an exit caused by the session
+  ending (130, `0xC000013A` STATUS_CONTROL_C_EXIT, `0x40010004`
+  DBG_TERMINATE_PROCESS); a watchdog stop of a scan that spanned a system
+  sleep (exit 75: the watchdogs count awake time only); or a launch whose
+  bootstrap died without recording an outcome (shutdown, logoff, the task
+  time limit).
 
 Outcome:
 
