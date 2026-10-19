@@ -111,7 +111,9 @@ func runSelfUpdate(args []string) int {
 	}
 	httpClient := selfupdate.NewHTTPClient()
 	// The SYSTEM chain never reads the user-writable device-id file.
-	deviceID := sync.OnceValue(func() string { return device.SystemID(context.Background(), executor.NewReal()) })
+	deviceID := sync.OnceValue(func() string {
+		return device.SystemID(context.Background(), executor.NewReal(), filepath.Join(layout.StateDir(), "device-id"))
+	})
 	exec := executor.NewReal()
 	machineConfig := config.ConfigFilePath()
 

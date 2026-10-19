@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -9,26 +10,60 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/executor"
 )
 
-// systemProbeTimeout bounds the hardware probe (the WMI subprocess).
-const systemProbeTimeout = 20 * time.Second
+// systemProbeTimeout bounds the hardware probe (the WMI subprocess). The
+// update task isn't latency-sensitive, so it gets more than a scan.
+const systemProbeTimeout = 60 * time.Second
+
+// systemProbe is probeSerial; tests stub it.
+var systemProbe = probeSerial
+
+// systemIDCache is the SYSTEM-only identity cache (state\device-id).
+type systemIDCache struct {
+	DeviceID string `json:"device_id"`
+	Source   string `json:"source"` // "hardware" | "configured"
+}
 
 // SystemID is the device identity for the SYSTEM self-updater. It never
-// reads the shared device-id file, which users can write (M-9): the
-// configured device_id wins, else the hardware probe (BIOS serial from the
-// registry, then WMI, then MachineGuid), which is then written to the file
-// for unprivileged runs. "" when nothing usable is found.
-func SystemID(ctx context.Context, exec executor.Executor) string {
+// reads the shared ProgramData device-id file, which users can write (M-9).
+// Order: the configured device_id; the hardware probe (BIOS serial from the
+// registry, then WMI); cachePath (state\device-id: protected, written only
+// by SYSTEM, only from a hardware or configured result); MachineGuid. Only
+// a hardware or configured result is cached, and only a hardware result
+// rewrites the shared file, so a probe that fell back to MachineGuid never
+// changes the identity user scans read (U4). "" when nothing is usable.
+func SystemID(ctx context.Context, exec executor.Executor, cachePath string) string {
+	w, canWrite := exec.(idWriter)
+	cache := func(id, source string) {
+		if canWrite && cachePath != "" {
+			if b, err := json.Marshal(systemIDCache{DeviceID: id, Source: source}); err == nil {
+				_ = w.WriteFileAtomic(cachePath, b, 0o644) // best-effort
+			}
+		}
+	}
 	if id := strings.TrimSpace(config.DeviceID); id != "" {
+		cache(id, "configured")
 		return id
 	}
 	ctx, cancel := context.WithTimeout(ctx, systemProbeTimeout)
 	defer cancel()
-	id, _ := probeSerial(ctx, exec)
-	if !usableSerial(id) {
-		return ""
+	id, hardware := systemProbe(ctx, exec)
+	if hardware && usableSerial(id) {
+		cache(id, "hardware")
+		if canWrite {
+			_ = w.WriteFileAtomic(machineIDFile(exec.GOOS()), []byte(id+"\n"), 0o644) // best-effort
+		}
+		return id
 	}
-	if w, ok := exec.(idWriter); ok {
-		_ = w.WriteFileAtomic(machineIDFile(exec.GOOS()), []byte(id+"\n"), 0o644) // best-effort
+	if cachePath != "" {
+		if data, err := exec.ReadFile(cachePath); err == nil && len(data) <= 4096 {
+			var c systemIDCache
+			if json.Unmarshal(data, &c) == nil && usableSerial(c.DeviceID) {
+				return c.DeviceID
+			}
+		}
 	}
-	return id
+	if usableSerial(id) {
+		return id // MachineGuid: reported, never persisted
+	}
+	return ""
 }
