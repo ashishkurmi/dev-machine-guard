@@ -447,3 +447,21 @@ func TestParseHooks_AcceptsInstallDir(t *testing.T) {
 // See internal/aiagents/cli/hook_test.go for handler-level tests and
 // cmd/stepsecurity-dev-machine-guard/main_test.go for the integration
 // test that asserts the binary always exits 0 on `_hook` invocations.
+
+func TestParse_AutoUpdate(t *testing.T) {
+	for _, args := range [][]string{
+		{"configure", "--non-interactive", "--auto-update=false"},
+		{"configure", "--non-interactive", "--auto-update", "false"},
+	} {
+		cfg, err := Parse(args)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if cfg.ConfigAutoUpdate != "false" {
+			t.Errorf("%v: ConfigAutoUpdate = %q", args, cfg.ConfigAutoUpdate)
+		}
+	}
+	if _, err := Parse([]string{"configure", "--auto-update"}); err == nil {
+		t.Error("missing value accepted")
+	}
+}

@@ -7,15 +7,30 @@
 
     -d Version=<semver>       e.g. 1.8.2
     -d BinaryPath=<path>      path to stepsecurity-dev-machine-guard.exe
+                              (installed as seed\<Version>\agent.exe)
     -d LauncherPath=<path>    path to stepsecurity-dev-machine-guard-task.exe
-                              (GUI-subsystem launcher Task Scheduler invokes
-                              so the agent doesn't flash a console window)
+                              (GUI-subsystem launcher; installed twice: as
+                              the bootstrap in the install root and as
+                              seed\<Version>\task.exe)
     -d LinuxBinaryPath=<path> path to the LINUX build of the agent, installed
                               as dmg-linux so a Windows host can scan inside
                               its WSL distributions. Must match the MSI's
                               architecture: Windows on ARM runs an aarch64
                               WSL2 kernel. Windows never executes it.
     -d Arch=<x64|arm64>       selects InstallScope + UpgradeCode
+
+  Self-update layout (see internal/launcher/bootstrap.go):
+
+    C:\Program Files\StepSecurity\
+      stepsecurity-dev-machine-guard-bootstrap.exe   MSI (stable entrypoint)
+      seed\<Version>\{agent.exe, task.exe, dmg-linux}  MSI (read-only fallback)
+      versions\, state\                               updater-owned, created by
+                                                      the adopt-seed CA
+
+  The scheduled tasks run the bootstrap, which launches the version that
+  state.json names. The MSI owns the bootstrap, the seed, AgentVersion and
+  the three tasks; it never touches versions\ or state\ except on a real
+  uninstall.
 
   Designed for SCCM/Intune deployment under environments where PowerShell
   egress is blocked by EDR. Custom actions invoke the .exe directly via
@@ -68,53 +83,61 @@
     <Property Id="APIKEY"        Secure="yes" Hidden="yes"/>
     <Property Id="SCANFREQUENCY" Secure="yes" Value="4"/>
     <Property Id="BOOTSTRAPFILE" Secure="yes"/>
+    <!-- AUTOUPDATE=0 opts the device out of self-update: configure writes
+         auto_update:false into the SYSTEM-owned machine config. The update
+         task still runs and reports update_disabled. Default 1 (on). -->
+    <Property Id="AUTOUPDATE"    Secure="yes" Value="1"/>
 
     <!-- Empty disable=do-not-allow-modify in Add/Remove Programs.
          Customers manage via SCCM, not via the user-facing ARP. -->
     <Property Id="ARPNOMODIFY" Value="1"/>
 
-    <!-- File payload: the agent + the GUI-subsystem launcher, both under
-         C:\Program Files\StepSecurity\. Source paths resolve from
-         $(var.BinaryPath) and $(var.LauncherPath) at build time.
-         schtasks.Install picks the launcher when present (side-by-side
-         layout) so Windows doesn't allocate a console for the agent
-         under /ru INTERACTIVE. -->
+    <!-- File payload. The bootstrap is a second copy of the GUI-subsystem
+         launcher; under its file name it runs in bootstrap mode, resolving
+         state.json to versions\<v>\ (falling back to the seed). The seed is
+         the MSI's own version, copied into versions\ by the adopt-seed CA.
+         dmg-linux sits beside agent.exe because the WSL scan phase looks next
+         to its own executable (wslLinuxBinaryNames in
+         internal/telemetry/wsl_scan.go). -->
     <StandardDirectory Id="$(var.ProgramFiles)">
       <Directory Id="INSTALLFOLDER" Name="StepSecurity">
-        <Component Id="MainBinary" Bitness="always64">
-          <File Id="DMGBinary"
-                Source="$(var.BinaryPath)"
-                Name="stepsecurity-dev-machine-guard.exe"
-                KeyPath="yes"/>
-        </Component>
-        <Component Id="LauncherBinary" Bitness="always64">
-          <File Id="DMGLauncher"
+        <Component Id="BootstrapBinary" Bitness="always64">
+          <File Id="DMGBootstrap"
                 Source="$(var.LauncherPath)"
-                Name="stepsecurity-dev-machine-guard-task.exe"
+                Name="stepsecurity-dev-machine-guard-bootstrap.exe"
                 KeyPath="yes"/>
         </Component>
-        <!-- The Linux build of the same agent, shipped so a Windows host can
-             scan inside its WSL distributions. Nothing is installed into a
-             distribution: the host runs this binary over the distro's /mnt/c
-             mount, which is why it must sit beside the agent (the WSL scan
-             phase looks next to its own executable). It is inert on a machine
-             with no WSL, and never executed by Windows itself.
-
-             Named dmg-linux, matching wslLinuxBinaryNames in
-             internal/telemetry/wsl_scan.go. -->
-        <Component Id="LinuxBinary" Bitness="always64">
-          <File Id="DMGLinuxBinary"
-                Source="$(var.LinuxBinaryPath)"
-                Name="dmg-linux"
-                KeyPath="yes"/>
-        </Component>
+        <Directory Id="SEEDROOT" Name="seed">
+          <Directory Id="SEEDFOLDER" Name="$(var.Version)">
+            <Component Id="SeedAgent" Bitness="always64">
+              <File Id="DMGSeedAgent"
+                    Source="$(var.BinaryPath)"
+                    Name="agent.exe"
+                    KeyPath="yes"/>
+            </Component>
+            <Component Id="SeedLauncher" Bitness="always64">
+              <File Id="DMGSeedLauncher"
+                    Source="$(var.LauncherPath)"
+                    Name="task.exe"
+                    KeyPath="yes"/>
+            </Component>
+            <Component Id="SeedLinuxBinary" Bitness="always64">
+              <File Id="DMGSeedLinuxBinary"
+                    Source="$(var.LinuxBinaryPath)"
+                    Name="dmg-linux"
+                    KeyPath="yes"/>
+            </Component>
+          </Directory>
+        </Directory>
         <!-- Stable registry marker for Intune/SCCM detection rules.
              HKLM\Software\StepSecurity\AgentVersion carries the installed
              MSI's ProductVersion. The path is stable across releases —
              unlike the per-build ProductCode under ARP — so detection
              rules don't need updating when the MSI is rebuilt. Equals
              comparisons let supersedence-driven upgrades distinguish
-             versions even when the binary is at the same path. -->
+             versions even when the binary is at the same path.
+             Self-update never writes it (it writes RunningVersion), so the
+             detection rule stays true and Intune never reinstalls. -->
         <Component Id="VersionRegistry" Bitness="always64">
           <RegistryValue
               Root="HKLM"
@@ -128,9 +151,10 @@
     </StandardDirectory>
 
     <Feature Id="Main" Title="Dev Machine Guard" Level="1">
-      <ComponentRef Id="MainBinary"/>
-      <ComponentRef Id="LauncherBinary"/>
-      <ComponentRef Id="LinuxBinary"/>
+      <ComponentRef Id="BootstrapBinary"/>
+      <ComponentRef Id="SeedAgent"/>
+      <ComponentRef Id="SeedLauncher"/>
+      <ComponentRef Id="SeedLinuxBinary"/>
       <ComponentRef Id="VersionRegistry"/>
     </Feature>
 
@@ -138,7 +162,7 @@
       ================================================================
       Custom Actions
 
-      All four CAs run DEFERRED with Impersonate=no — they execute
+      All CAs run DEFERRED with Impersonate=no — they execute
       during the install script phase (after InstallFiles physically
       writes the .exe to disk) in SYSTEM context. Immediate CAs were
       tried first but failed with MSI error 1721 ("program required
@@ -179,6 +203,24 @@
                   Impersonate="no"
                   Return="check"/>
 
+    <!-- Cleanup / best-effort CAs use Return="ignore": adopt-seed never fails
+         the MSI (the updater converges on its next tick), AUTOUPDATE=0 on a
+         repair must not break the repair, and a failing uninstall must not
+         make the product unremovable (M-19). -->
+    <CustomAction Id="RunConfigureAutoUpdate"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"/>
+
+    <CustomAction Id="RunAdoptSeed"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"/>
+
     <CustomAction Id="RunInstallScheduledTask"
                   BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
                   DllEntry="WixQuietExec64"
@@ -191,7 +233,7 @@
                   DllEntry="WixQuietExec64"
                   Execute="deferred"
                   Impersonate="no"
-                  Return="check"/>
+                  Return="ignore"/>
 
     <!-- SetProperty values now carry the FULL command line (exe path + args).
          [INSTALLFOLDER] and the per-tenant properties are substituted at
@@ -199,41 +241,66 @@
          the resulting string is shipped to the deferred CA via the matching
          property name. -->
 
+    <!-- Directory properties end in a backslash, so a quoted directory
+         argument gets a trailing "." ("…\1.2.3\.") — a bare trailing
+         backslash would escape the closing quote. -->
+
     <SetProperty Id="RunConfigureInline"
-                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" configure --non-interactive --customer-id "[CUSTOMERID]" --api-endpoint "[APIENDPOINT]" --api-key "[APIKEY]" --scan-frequency "[SCANFREQUENCY]"'
+                 Value='"[SEEDFOLDER]agent.exe" configure --non-interactive --customer-id "[CUSTOMERID]" --api-endpoint "[APIENDPOINT]" --api-key "[APIKEY]" --scan-frequency "[SCANFREQUENCY]" --auto-update "[AUTOUPDATE]"'
                  Sequence="execute"
                  Before="RunConfigureInline"
                  Condition="APIKEY AND NOT BOOTSTRAPFILE AND NOT Installed"/>
 
     <SetProperty Id="RunConfigureFromFile"
-                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" configure --non-interactive --from-file "[BOOTSTRAPFILE]"'
+                 Value='"[SEEDFOLDER]agent.exe" configure --non-interactive --from-file "[BOOTSTRAPFILE]" --auto-update "[AUTOUPDATE]"'
                  Sequence="execute"
                  Before="RunConfigureFromFile"
                  Condition="BOOTSTRAPFILE AND NOT Installed"/>
 
+    <!-- AUTOUPDATE=0 on a repair, or an upgrade without credentials, where
+         neither configure CA above runs. -->
+    <SetProperty Id="RunConfigureAutoUpdate"
+                 Value='"[SEEDFOLDER]agent.exe" configure --non-interactive --auto-update=false'
+                 Sequence="execute"
+                 Before="RunConfigureAutoUpdate"
+                 Condition="AUTOUPDATE=&quot;0&quot; AND NOT REMOVE=&quot;ALL&quot; AND NOT (BOOTSTRAPFILE AND NOT Installed) AND NOT (APIKEY AND NOT Installed)"/>
+
+    <SetProperty Id="RunAdoptSeed"
+                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard-bootstrap.exe" adopt-seed --seed-dir "[SEEDFOLDER]."'
+                 Sequence="execute"
+                 Before="RunAdoptSeed"
+                 Condition="NOT REMOVE=&quot;ALL&quot;"/>
+
     <SetProperty Id="RunInstallScheduledTask"
-                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" install --ignore-telemetry-error'
+                 Value='"[SEEDFOLDER]agent.exe" install --ignore-telemetry-error'
                  Sequence="execute"
                  Before="RunInstallScheduledTask"
-                 Condition="NOT Installed"/>
+                 Condition="NOT REMOVE=&quot;ALL&quot;"/>
 
     <SetProperty Id="RunUninstallScheduledTask"
-                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard.exe" uninstall'
+                 Value='"[SEEDFOLDER]agent.exe" uninstall'
                  Sequence="execute"
                  Before="RunUninstallScheduledTask"
-                 Condition="REMOVE=&quot;ALL&quot;"/>
+                 Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"/>
 
     <!--
       InstallExecuteSequence: where each CA fires in the MSI sequence.
 
-      On install (NOT Installed):
-        InstallFiles → RunConfigureFromFile OR RunConfigureInline → RunInstallScheduledTask
-      On uninstall (REMOVE="ALL"):
+      On install, upgrade and repair (NOT REMOVE="ALL"):
+        InstallFiles → RunConfigureFromFile OR RunConfigureInline
+                     → RunConfigureAutoUpdate (AUTOUPDATE=0 without creds)
+                     → RunAdoptSeed → RunInstallScheduledTask
+        install is idempotent and (re)creates all three tasks, so a repair
+        restores a deleted or clobbered task (M-7). adopt-seed runs before it
+        so the first scan the install CA triggers finds state.json.
+      On a real uninstall (REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE):
         RunUninstallScheduledTask → RemoveFiles
-      On major upgrade:
-        The MajorUpgrade element schedules the old version's uninstall
-        first (RunUninstallScheduledTask from the old MSI fires), then
-        the new install path runs.
+        (tasks, running DMG processes, versions\, state\, RunningVersion)
+      On a major upgrade:
+        The old product is removed first (afterInstallInitialize). Its
+        uninstall CA is skipped because UPGRADINGPRODUCTCODE is set, so a
+        failed upgrade that rolls back still has its tasks and update state
+        (M-6). The new product's install CA replaces the tasks.
     -->
     <InstallExecuteSequence>
       <!-- Prefer file-based configure when BOOTSTRAPFILE is provided.
@@ -244,12 +311,18 @@
       <Custom Action="RunConfigureInline"
               After="RunConfigureFromFile"
               Condition="APIKEY AND NOT BOOTSTRAPFILE AND NOT Installed"/>
-      <Custom Action="RunInstallScheduledTask"
+      <Custom Action="RunConfigureAutoUpdate"
               After="RunConfigureInline"
-              Condition="NOT Installed"/>
+              Condition="AUTOUPDATE=&quot;0&quot; AND NOT REMOVE=&quot;ALL&quot; AND NOT (BOOTSTRAPFILE AND NOT Installed) AND NOT (APIKEY AND NOT Installed)"/>
+      <Custom Action="RunAdoptSeed"
+              After="RunConfigureAutoUpdate"
+              Condition="NOT REMOVE=&quot;ALL&quot;"/>
+      <Custom Action="RunInstallScheduledTask"
+              After="RunAdoptSeed"
+              Condition="NOT REMOVE=&quot;ALL&quot;"/>
       <Custom Action="RunUninstallScheduledTask"
               Before="RemoveFiles"
-              Condition="REMOVE=&quot;ALL&quot;"/>
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"/>
     </InstallExecuteSequence>
 
   </Package>

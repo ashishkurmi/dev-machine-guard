@@ -107,6 +107,7 @@ type Config struct {
 	ConfigAPIEndpoint   string // --api-endpoint
 	ConfigAPIKey        string // --api-key (also accepts env var DMG_API_KEY)
 	ConfigScanFrequency string // --scan-frequency (hours)
+	ConfigAutoUpdate    string // --auto-update=<bool>: Windows MSI self-update opt-out ("" = unchanged)
 
 	// IgnoreTelemetryError opts the `install` subcommand into treating an
 	// initial-telemetry POST failure as a warning rather than a fatal exit.
@@ -342,6 +343,14 @@ func Parse(args []string) (*Config, error) {
 			cfg.ConfigScanFrequency = args[i]
 		case strings.HasPrefix(arg, "--scan-frequency="):
 			cfg.ConfigScanFrequency = strings.TrimPrefix(arg, "--scan-frequency=")
+		case arg == "--auto-update":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--auto-update requires a value (true/false)")
+			}
+			cfg.ConfigAutoUpdate = args[i]
+		case strings.HasPrefix(arg, "--auto-update="):
+			cfg.ConfigAutoUpdate = strings.TrimPrefix(arg, "--auto-update=")
 		case arg == "--verbose":
 			cfg.Verbose = true
 		case arg == "--override-gate":
@@ -639,6 +648,7 @@ Non-interactive configure (for MSI / SCCM / Intune deployments):
   --api-endpoint URL            StepSecurity backend URL
   --api-key KEY                 Authentication key (or set DMG_API_KEY env var)
   --scan-frequency HOURS        Scheduled scan frequency
+  --auto-update=BOOL            Windows MSI installs: allow self-update (default true)
   --ignore-telemetry-error      On 'install', treat a failed initial telemetry POST
                                 as a warning instead of a fatal exit (use in MSI
                                 custom actions to avoid rollback on transient network)

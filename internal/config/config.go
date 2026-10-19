@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +95,7 @@ type ConfigFile struct {
 	MaxExecutionDuration  string   `json:"max_execution_duration,omitempty"`
 	UseLegacyNodeScan     *bool    `json:"use_legacy_node_scan,omitempty"`
 	UseLegacyPythonScan   *bool    `json:"use_legacy_python_scan,omitempty"`
+	AutoUpdate            *bool    `json:"auto_update,omitempty"`
 }
 
 // userConfigDir returns ~/.stepsecurity — the per-user config location.
@@ -793,6 +795,7 @@ type NonInteractiveOptions struct {
 	APIKey        string   // --api-key (or DMG_API_KEY env)
 	ScanFrequency string   // --scan-frequency (hours, as string)
 	SearchDirs    []string // --search-dirs (re-used from scan flag; empty = unchanged)
+	AutoUpdate    string   // --auto-update (strconv.ParseBool; empty = unchanged)
 }
 
 // HasAny reports whether the caller supplied any inline value. Used by
@@ -805,6 +808,7 @@ func (o NonInteractiveOptions) HasAny() bool {
 		o.APIEndpoint != "" ||
 		o.APIKey != "" ||
 		o.ScanFrequency != "" ||
+		o.AutoUpdate != "" ||
 		len(o.SearchDirs) > 0
 }
 
@@ -846,6 +850,13 @@ func RunConfigureNonInteractive(opts NonInteractiveOptions) error {
 	}
 	if len(opts.SearchDirs) > 0 {
 		existing.SearchDirs = opts.SearchDirs
+	}
+	if opts.AutoUpdate != "" {
+		v, err := strconv.ParseBool(opts.AutoUpdate)
+		if err != nil {
+			return fmt.Errorf("invalid --auto-update %q (want true/false or 1/0)", opts.AutoUpdate)
+		}
+		existing.AutoUpdate = &v
 	}
 
 	// Validation: an MSI deploy with no creds is almost certainly a bug.

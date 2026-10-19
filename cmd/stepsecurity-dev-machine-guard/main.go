@@ -238,6 +238,7 @@ func main() {
 			APIEndpoint:   cfg.ConfigAPIEndpoint,
 			APIKey:        cfg.ConfigAPIKey,
 			ScanFrequency: cfg.ConfigScanFrequency,
+			AutoUpdate:    cfg.ConfigAutoUpdate,
 		}
 		if opts.APIKey == "" {
 			// Env-var fallback keeps the secret off the msiexec command

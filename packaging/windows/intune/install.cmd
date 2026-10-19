@@ -17,6 +17,7 @@ set "LOG=%LOG_DIR%\install.log"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 REM Forward all args (%*) so MSI public properties like APIKEY, CUSTOMERID,
-REM APIENDPOINT, SCANFREQUENCY pass through from Intune's install command.
+REM APIENDPOINT, SCANFREQUENCY, AUTOUPDATE pass through from Intune's install
+REM command (AUTOUPDATE=0 opts the device out of self-update).
 msiexec /i "%MSI%" /qn /l*v "%LOG%" %*
 exit /b %ERRORLEVEL%

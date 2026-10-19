@@ -154,3 +154,34 @@ func TestNonInteractiveOptions_HasAny(t *testing.T) {
 		t.Error("FromFile alone should be enough")
 	}
 }
+
+func TestRunConfigureNonInteractive_AutoUpdate(t *testing.T) {
+	withHome(t)
+	base := NonInteractiveOptions{CustomerID: "c", APIEndpoint: "https://api.example.com", APIKey: "k"}
+	base.AutoUpdate = "0"
+	if err := RunConfigureNonInteractive(base); err != nil {
+		t.Fatal(err)
+	}
+	if v := loadExisting().AutoUpdate; v == nil || *v {
+		t.Fatalf("AutoUpdate after 0 = %v", v)
+	}
+	// Empty keeps the stored value.
+	if err := RunConfigureNonInteractive(NonInteractiveOptions{AutoUpdate: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if v := loadExisting().AutoUpdate; v == nil || *v {
+		t.Fatalf("AutoUpdate after empty = %v", v)
+	}
+	if err := RunConfigureNonInteractive(NonInteractiveOptions{AutoUpdate: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	if v := loadExisting().AutoUpdate; v == nil || !*v {
+		t.Fatalf("AutoUpdate after true = %v", v)
+	}
+	if err := RunConfigureNonInteractive(NonInteractiveOptions{AutoUpdate: "maybe"}); err == nil {
+		t.Fatal("invalid value accepted")
+	}
+	if !(NonInteractiveOptions{AutoUpdate: "false"}).HasAny() {
+		t.Fatal("HasAny ignores AutoUpdate")
+	}
+}
