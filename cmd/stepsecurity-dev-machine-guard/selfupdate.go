@@ -68,7 +68,9 @@ func resolveDeviceID(ctx context.Context) string {
 // device-id file from a fallback; elsewhere it is the scan's resolution.
 func selfCheckDeviceID(ctx context.Context, exec executor.Executor, system bool, cachePath string) string {
 	if system {
-		return device.SystemID(ctx, exec, cachePath)
+		// Short probe: the smoke test's limit must exceed this (asserted
+		// in selfupdate); a wedged WMI falls through to the SYSTEM cache.
+		return device.SystemID(ctx, exec, cachePath, selfupdate.SelfCheckProbeTimeout)
 	}
 	ctx, cancel := context.WithTimeout(ctx, deviceProbeTimeout)
 	defer cancel()
@@ -127,7 +129,7 @@ func runSelfUpdate(args []string) int {
 	httpClient := selfupdate.NewHTTPClient()
 	// The SYSTEM chain never reads the user-writable device-id file.
 	deviceID := sync.OnceValue(func() string {
-		return device.SystemID(context.Background(), executor.NewReal(), filepath.Join(layout.StateDir(), "device-id"))
+		return device.SystemID(context.Background(), executor.NewReal(), filepath.Join(layout.StateDir(), "device-id"), device.SystemProbeTimeout)
 	})
 	exec := executor.NewReal()
 	machineConfig := config.ConfigFilePath()

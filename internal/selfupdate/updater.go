@@ -23,6 +23,7 @@ const (
 	maxOutbox             = 64 // pending events kept (oldest dropped)
 	maxSendBackoff        = 24 * time.Hour
 	inconclusiveRetry     = 7 * 24 * time.Hour
+	smokeTimeoutLimit     = 3 // consecutive smoke timeouts before quarantine
 	freeSpaceMargin       = 50 << 20
 	runTimeout            = 25 * time.Minute // under the task's 30 min limit
 	smokeReserveMargin    = 30 * time.Second // on top of the smoke timeout
@@ -438,9 +439,13 @@ func (t *tick) health(ctx context.Context) (closed bool, err error) {
 	}
 	// Window over with too few runs to judge: re-smoke, then promote on it.
 	if err := t.d.Smoke(context.WithoutCancel(ctx), filepath.Join(t.L.VersionDir(v), updatestate.AgentFile), v); err != nil {
+		if t.smokeTimedOut(v.String(), err) {
+			return false, nil // probation stays open; re-smoked next tick
+		}
 		t.d.Logf("self-update: re-smoke of %s failed: %v", v, err)
 		return true, t.rollback(ReasonSmokeFailed, time.Time{})
 	}
+	delete(t.st.SmokeTimeouts, v.String())
 	t.confirm("smoke_only")
 	return true, nil
 }
@@ -451,6 +456,26 @@ func probationTicks(window time.Duration) int {
 		return n
 	}
 	return 1
+}
+
+// smokeTimedOut counts a smoke TIMEOUT for v and reports whether it should
+// be retried (true) rather than held against v: only the
+// smokeTimeoutLimit-th consecutive timeout counts as a failure.
+func (t *tick) smokeTimedOut(v string, err error) bool {
+	if !errors.Is(err, ErrSmokeTimeout) {
+		return false
+	}
+	if t.st.SmokeTimeouts == nil {
+		t.st.SmokeTimeouts = map[string]int{}
+	}
+	t.st.SmokeTimeouts[v]++
+	n := t.st.SmokeTimeouts[v]
+	if n < smokeTimeoutLimit {
+		t.d.Logf("self-update: smoke of %s timed out (%d of %d); retrying", v, n, smokeTimeoutLimit)
+		return true
+	}
+	delete(t.st.SmokeTimeouts, v)
+	return false
 }
 
 func (t *tick) confirm(note string) {
@@ -554,6 +579,12 @@ func cloneState(s *updatestate.State) *updatestate.State {
 		c.Dedupe[k] = v
 	}
 	c.Outbox = append([]updatestate.OutboxEvent(nil), s.Outbox...)
+	if s.SmokeTimeouts != nil {
+		c.SmokeTimeouts = make(map[string]int, len(s.SmokeTimeouts))
+		for k, v := range s.SmokeTimeouts {
+			c.SmokeTimeouts[k] = v
+		}
+	}
 	return &c
 }
 
@@ -636,6 +667,10 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 			t.st.LastCheck = time.Time{}
 			return t.finish(context.WithoutCancel(ctx), ExitFailed)
 		}
+		if t.smokeTimedOut(target, err) {
+			t.st.LastCheck = time.Time{} // retry on the next tick
+			return t.finish(ctx, ExitFailed)
+		}
 		t.d.Logf("self-update: smoke of %s failed: %v", target, err)
 		t.st.Quarantine[target] = updatestate.Quarantine{Reason: ReasonSmokeFailed, At: t.now.UTC()}
 		if t.st.PendingSwitch == target {
@@ -644,6 +679,7 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 		t.enqueue(EventHealthFailed, st.Current, target, err.Error(), "")
 		return t.finish(ctx, ExitOK)
 	}
+	delete(t.st.SmokeTimeouts, target)
 	if err := checkpoint("S5.smoked"); err != nil {
 		return t.finish(ctx, ExitFailed)
 	}

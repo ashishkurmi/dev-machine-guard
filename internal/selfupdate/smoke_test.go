@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func TestRunSmoke(t *testing.T) {
 	knobOverrides = map[knob]time.Duration{knobSmokeTimeout: 2 * time.Second}
 	defer func() { knobOverrides = map[knob]time.Duration{} }()
 	start := time.Now()
-	if err := RunSmoke(ctx, exe, mustV("1.20.0")); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if err := RunSmoke(ctx, exe, mustV("1.20.0")); !errors.Is(err, ErrSmokeTimeout) {
 		t.Fatalf("hung self-check: %v", err)
 	}
 	if time.Since(start) > 30*time.Second {
@@ -54,5 +55,13 @@ func TestCheckSelfCheck(t *testing.T) {
 	_, _ = b.Write([]byte("abcdef"))
 	if b.String() != "abcd" {
 		t.Fatalf("limitedBuffer = %q", b.String())
+	}
+}
+
+// FR1-1: the smoke limit exceeds the self-check's worst-case internal wait
+// (its device-id probe) by a clear margin.
+func TestSmokeBudgetExceedsSelfCheckWaits(t *testing.T) {
+	if knobDefaults[knobSmokeTimeout] < SelfCheckProbeTimeout+smokeMargin {
+		t.Fatalf("smoke %s < self-check probe %s + margin %s", knobDefaults[knobSmokeTimeout], SelfCheckProbeTimeout, smokeMargin)
 	}
 }

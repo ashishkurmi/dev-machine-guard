@@ -41,6 +41,9 @@ type State struct {
 	// Outbox holds update events not yet accepted by the backend. Events
 	// are added in the same atomic write as the state change they report.
 	Outbox []OutboxEvent `json:"outbox,omitempty"`
+	// SmokeTimeouts counts consecutive smoke-test timeouts per version; the
+	// third quarantines it (a timeout alone is retried).
+	SmokeTimeouts map[string]int `json:"smoke_timeouts,omitempty"`
 	// PendingSwitch is a staged target whose switch was deferred; its
 	// versions dir is kept and SwitchDeferrals counts for it alone.
 	PendingSwitch string `json:"pending_switch,omitempty"`

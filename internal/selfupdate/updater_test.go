@@ -1096,3 +1096,42 @@ func TestBootstrapRecordThenLandedWrite(t *testing.T) {
 		t.Fatalf("state = %+v", st)
 	}
 }
+
+// FR1-1: a smoke TIMEOUT is retried; only the third consecutive timeout
+// for the target quarantines it.
+func TestSmokeTimeoutsQuarantineOnlyAfterThree(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.smokeErr["1.20.0"] = fmt.Errorf("%w after 60s", ErrSmokeTimeout)
+	for i := 1; i <= 3; i++ {
+		e.tick()
+		_, q := e.state().Quarantine["1.20.0"]
+		if q != (i == 3) {
+			t.Fatalf("after %d timeouts: quarantined=%v", i, q)
+		}
+		e.now = e.now.Add(time.Hour)
+	}
+	if hf := e.lastSent(EventHealthFailed); hf.To != "1.20.0" {
+		t.Fatalf("health_failed = %+v", hf)
+	}
+}
+
+// The end-of-probation re-smoke follows the same rule.
+func TestReSmokeTimeoutsRollBackOnlyAfterThree(t *testing.T) {
+	e := newEnv(t)
+	probationState(t, e)
+	e.smokeErr["1.20.0"] = fmt.Errorf("%w after 60s", ErrSmokeTimeout)
+	e.now = e.now.Add(73 * time.Hour)
+	for i := 1; i <= 3; i++ {
+		e.tick()
+		rolled := e.state().Current == "1.19.0"
+		if rolled != (i == 3) {
+			t.Fatalf("after %d re-smoke timeouts: rolled back=%v", i, rolled)
+		}
+		e.now = e.now.Add(time.Hour)
+	}
+	if rb := e.lastSent(EventRolledBack); rb.Error != ReasonSmokeFailed {
+		t.Fatalf("rollback = %+v", rb)
+	}
+}

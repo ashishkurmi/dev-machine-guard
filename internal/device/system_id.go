@@ -10,9 +10,9 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/executor"
 )
 
-// systemProbeTimeout bounds the hardware probe (the WMI subprocess). The
-// update task isn't latency-sensitive, so it gets more than a scan.
-const systemProbeTimeout = 60 * time.Second
+// SystemProbeTimeout bounds the hardware probe (the WMI subprocess) for the
+// update task, which isn't latency-sensitive.
+const SystemProbeTimeout = 60 * time.Second
 
 // systemProbe is probeSerial; tests stub it.
 var systemProbe = probeSerial
@@ -23,7 +23,9 @@ type systemIDCache struct {
 	Source   string `json:"source"` // "hardware" | "configured"
 }
 
-// SystemID is the device identity for the SYSTEM self-updater. It never
+// SystemID is the device identity for the SYSTEM self-updater. probeTimeout
+// bounds the hardware probe (the self-check passes a short one so its
+// smoke test can't time out on a wedged WMI). It never
 // reads the shared ProgramData device-id file, which users can write (M-9).
 // Order: the configured device_id; the hardware probe (BIOS serial from the
 // registry, then WMI); cachePath (state\device-id: protected, written only
@@ -31,7 +33,7 @@ type systemIDCache struct {
 // a hardware or configured result is cached, and only a hardware result
 // rewrites the shared file, so a probe that fell back to MachineGuid never
 // changes the identity user scans read (U4). "" when nothing is usable.
-func SystemID(ctx context.Context, exec executor.Executor, cachePath string) string {
+func SystemID(ctx context.Context, exec executor.Executor, cachePath string, probeTimeout time.Duration) string {
 	w, canWrite := exec.(idWriter)
 	cache := func(id, source string) {
 		if canWrite && cachePath != "" {
@@ -44,7 +46,10 @@ func SystemID(ctx context.Context, exec executor.Executor, cachePath string) str
 		cache(id, "configured")
 		return id
 	}
-	ctx, cancel := context.WithTimeout(ctx, systemProbeTimeout)
+	if probeTimeout <= 0 {
+		probeTimeout = SystemProbeTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	id, hardware := systemProbe(ctx, exec)
 	if hardware && usableSerial(id) {

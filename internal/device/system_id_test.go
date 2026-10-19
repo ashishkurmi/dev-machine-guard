@@ -6,6 +6,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/config"
 	"github.com/step-security/dev-machine-guard/internal/executor"
@@ -41,7 +42,7 @@ func TestSystemIDHardwareWritesBoth(t *testing.T) {
 	cache := filepath.Join(`C:\Program Files\StepSecurity\state`, "device-id")
 	m := systemMock()
 	stubProbe(t, "HW-SERIAL-1", true)
-	if got := SystemID(context.Background(), m, cache); got != "HW-SERIAL-1" {
+	if got := SystemID(context.Background(), m, cache, SystemProbeTimeout); got != "HW-SERIAL-1" {
 		t.Fatalf("SystemID = %q", got)
 	}
 	if b, _ := m.ReadFile(winIDFile); string(b) != "HW-SERIAL-1\n" {
@@ -60,7 +61,7 @@ func TestSystemIDProbeFailureUsesCache(t *testing.T) {
 	m := systemMock()
 	m.SetFile(cache, []byte(`{"device_id":"HW-CACHED","source":"hardware"}`))
 	stubProbe(t, "guid-1", false) // WMI failed: only MachineGuid
-	if got := SystemID(context.Background(), m, cache); got != "HW-CACHED" {
+	if got := SystemID(context.Background(), m, cache, SystemProbeTimeout); got != "HW-CACHED" {
 		t.Fatalf("SystemID = %q, want the cached hardware id", got)
 	}
 	if b, _ := m.ReadFile(winIDFile); string(b) != "PLANTED-BY-USER\n" {
@@ -76,7 +77,7 @@ func TestSystemIDMachineGuidWritesNothing(t *testing.T) {
 	m := systemMock()
 	m.SetFile(winIDFile, nil)
 	stubProbe(t, "guid-1", false)
-	if got := SystemID(context.Background(), m, cache); got != "guid-1" {
+	if got := SystemID(context.Background(), m, cache, SystemProbeTimeout); got != "guid-1" {
 		t.Fatalf("SystemID = %q", got)
 	}
 	if b, _ := m.ReadFile(winIDFile); len(b) != 0 {
@@ -92,7 +93,29 @@ func TestSystemIDConfiguredWins(t *testing.T) {
 	config.DeviceID = "configured-1"
 	t.Cleanup(func() { config.DeviceID = old })
 	stubProbe(t, "HW-1", true)
-	if got := SystemID(context.Background(), systemMock(), `C:\x\device-id`); got != "configured-1" {
+	if got := SystemID(context.Background(), systemMock(), `C:\x\device-id`, SystemProbeTimeout); got != "configured-1" {
 		t.Fatalf("SystemID = %q", got)
+	}
+}
+
+// FR1-1: a wedged WMI probe is bounded by the caller's timeout, then the
+// SYSTEM cache answers (the self-check passes a short one).
+func TestSystemIDProbeTimeoutFallsBackToCache(t *testing.T) {
+	noConfiguredID(t)
+	cache := `C:\Program Files\StepSecurity\state\device-id`
+	m := systemMock()
+	m.SetFile(cache, []byte(`{"device_id":"HW-CACHED","source":"hardware"}`))
+	old := systemProbe
+	systemProbe = func(ctx context.Context, _ executor.Executor) (string, bool) {
+		<-ctx.Done() // WMI never answers
+		return "guid-1", false
+	}
+	t.Cleanup(func() { systemProbe = old })
+	start := time.Now()
+	if got := SystemID(context.Background(), m, cache, 200*time.Millisecond); got != "HW-CACHED" {
+		t.Fatalf("SystemID = %q", got)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("probe not bounded by the caller's timeout: %s", d)
 	}
 }

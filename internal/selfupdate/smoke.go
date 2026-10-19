@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -11,6 +12,17 @@ import (
 
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
 )
+
+// SelfCheckProbeTimeout bounds the self-check's device-id probe; smokeMargin
+// is the headroom the smoke limit keeps above it (startup, config load).
+const (
+	SelfCheckProbeTimeout = 10 * time.Second
+	smokeMargin           = 30 * time.Second
+)
+
+// ErrSmokeTimeout means the self-check didn't answer within the smoke
+// limit: retried, not held against the version, until it repeats.
+var ErrSmokeTimeout = errors.New("self-check timed out")
 
 // SelfCheck is the `agent self-check` output (spec Contracts: CLI).
 type SelfCheck struct {
@@ -50,7 +62,7 @@ func RunSmoke(ctx context.Context, exe string, want updatestate.Version) error {
 	prepareSmoke(cmd)
 	if err := runSmokeCmd(cmd); err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("self-check timed out after %s", duration(knobSmokeTimeout))
+			return fmt.Errorf("%w after %s", ErrSmokeTimeout, duration(knobSmokeTimeout))
 		}
 		return fmt.Errorf("self-check: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
