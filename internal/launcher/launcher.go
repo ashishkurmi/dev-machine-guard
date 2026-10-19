@@ -23,6 +23,13 @@ const (
 	// ExecFlag opts into the generic-target launch mode used by the
 	// PowerShell loader. See ResolveTarget for the contract.
 	ExecFlag = "--exec"
+
+	// VersionedAgentBinary is the agent's name inside a self-update version
+	// directory (versions\<v>\ and seed\<v>\), where the launcher sits beside
+	// it as VersionedTaskBinary. Default mode falls back to it when the
+	// legacy AgentBinary sibling is absent.
+	VersionedAgentBinary = "agent.exe"
+	VersionedTaskBinary  = "task.exe"
 )
 
 // ResolveTarget returns the child executable's absolute path and the
@@ -39,8 +46,9 @@ const (
 //     send-telemetry` under the launcher's no-console envelope.
 //
 //   - Default (legacy / MSI) mode. argv does not begin with --exec; the
-//     child is the sibling AgentBinary in the launcher's own directory,
-//     and all of argv is forwarded to it. Preserves byte-for-byte
+//     child is the sibling AgentBinary in the launcher's own directory
+//     (or, when that is absent, the sibling VersionedAgentBinary of a
+//     self-update version directory), and all of argv is forwarded to it. Preserves byte-for-byte
 //     compatibility with the launcher's pre-1.11.5 behaviour, which is
 //     what the MSI install layout's scheduled task action uses.
 //
@@ -74,8 +82,14 @@ func ResolveTarget(argv []string) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	agent := filepath.Join(filepath.Dir(me), AgentBinary)
-	if _, err := os.Stat(agent); err != nil {
+	dir := filepath.Dir(me)
+	agent := filepath.Join(dir, AgentBinary)
+	_, err = os.Stat(agent)
+	if err != nil {
+		versioned := filepath.Join(dir, VersionedAgentBinary)
+		if _, verr := os.Stat(versioned); verr == nil {
+			return versioned, argv, nil
+		}
 		return "", nil, err
 	}
 	return agent, argv, nil
