@@ -425,6 +425,9 @@ func (t *tick) rollback(reason string, until time.Time) error {
 		return err
 	}
 	t.setRunning(target)
+	// The quarantined dir is garbage now; a scan still running it keeps it
+	// until a later tick.
+	t.gc()
 	return nil
 }
 

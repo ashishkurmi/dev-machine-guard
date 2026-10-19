@@ -16,9 +16,18 @@ import (
 // DMG_SU_SMOKE_HANG=1 hangs it.
 const envHelper = "DMG_SU_TEST_HELPER"
 
+// envRole selects a helper role registered in helperRoles (the kill matrix
+// registers "updater": one selfupdate.Run tick as a subprocess).
+const envRole = "DMG_SU_TEST_ROLE"
+
+var helperRoles = map[string]func() int{}
+
 func TestMain(m *testing.M) {
 	if os.Getenv(envHelper) == "1" && len(os.Args) > 1 && os.Args[1] == "self-check" {
 		os.Exit(helperSelfCheck())
+	}
+	if f, ok := helperRoles[os.Getenv(envRole)]; ok {
+		os.Exit(f())
 	}
 	os.Exit(m.Run())
 }

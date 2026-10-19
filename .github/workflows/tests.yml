@@ -115,6 +115,24 @@ jobs:
       - name: Test self-update fault injection (selfupdate_faults tag)
         run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
 
+  # Self-update U0 harness on Linux: the trace-driven kill matrix and the
+  # state corruption matrix (portable parts; Windows runs them natively in
+  # test-windows-native).
+  test-selfupdate-linux:
+    name: Test (self-update kill matrix, linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/
+
   # These packages have Windows-only code and Windows-specific behavior whose
   # tests the macOS test job can only cross-compile, not run:
   #   - devicepolicy: the registry managed-policy probe, %APPDATA%
@@ -153,8 +171,10 @@ jobs:
       - run: go test -race -count=1 -run '^TestReal_' ./internal/detector/
       - name: Test scheduled scan console suppression
         run: go test -race -count=1 -run 'Test(IsTaskRegistered|DetectInvocationMethod_Windows|HideWindow)' ./internal/schtasks/ ./internal/telemetry/ ./internal/winproc/
-      - name: Test self-update fault injection (selfupdate_faults tag)
+      - name: Test self-update fault injection + U0 kill matrix (selfupdate_faults tag)
         run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
+      - name: Authenticode against test-signed binaries (verbose, shows skips)
+        run: go test -count=1 -v -run 'TestVerify' ./internal/authenticode/
 
   smoke:
     name: Smoke Tests
