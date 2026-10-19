@@ -33,6 +33,7 @@ var knobEnv = map[knob]string{
 	knobDedupeWindow:    "DMG_TEST_DEDUPE_WINDOW",
 	knobCheckInterval:   "DMG_TEST_CHECK_INTERVAL",
 	knobSmokeTimeout:    "DMG_TEST_SMOKE_TIMEOUT",
+	knobSendBackoff:     "DMG_TEST_SEND_BACKOFF",
 }
 
 // testDuration reads a Go duration knob such as DMG_TEST_PROBATION_WINDOW.

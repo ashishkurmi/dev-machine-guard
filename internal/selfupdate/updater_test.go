@@ -952,3 +952,44 @@ func TestOlderUpdaterKeepsNewerSchemaState(t *testing.T) {
 		t.Fatalf("newer state not preserved: %s", data)
 	}
 }
+
+// D15 test gap (planted bug "GC deletes previous"): with previous, the seed
+// and the running updater all different, GC keeps previous.
+func TestGCKeepsPreviousDistinctFromSeedAndUpdater(t *testing.T) {
+	e := newEnv(t)
+	must(t, os.RemoveAll(filepath.Join(e.L.InstallRoot, "seed")))
+	e.writeSeed("1.17.0")
+	for _, v := range []string{"1.18.0", "1.21.0"} {
+		e.installVersion(v)
+	}
+	e.self = "1.21.0"
+	st := baseState("1.21.0", "1.18.0")
+	st.LastCheck = e.now
+	e.writeState(st)
+	e.tick()
+	if err := updatestate.VerifyVersionDir(e.L.VersionDir(mustV("1.18.0")), mustV("1.18.0")); err != nil {
+		t.Fatalf("GC removed previous: %v", err)
+	}
+	if err := updatestate.VerifyVersionDir(e.L.VersionDir(mustV("1.21.0")), mustV("1.21.0")); err != nil {
+		t.Fatalf("GC removed current: %v", err)
+	}
+}
+
+// D15 test gap (planted bug "dedupe key without the event class"): a new
+// event class for the same target inside the dedupe window is reported.
+func TestDedupeNeverHidesANewEventClass(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.pubErr = errors.New("publisher differs")
+	e.tick()
+	wantEvents(t, e.events(), EventVerifyFailed)
+	e.pubErr = nil
+	e.api.githubDown = true
+	e.now = e.now.Add(7 * time.Hour)
+	e.tick()
+	wantEvents(t, e.events(), EventDownloadFailed)
+	e.now = e.now.Add(7 * time.Hour)
+	e.tick()
+	wantEvents(t, e.events()) // same class, same target, same window: deduped
+}

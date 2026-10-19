@@ -829,7 +829,7 @@ func (t *tick) flush(ctx context.Context) bool {
 			ev.Attempts++
 			backoff := maxSendBackoff
 			if ev.Attempts <= 5 {
-				backoff = time.Duration(1<<(ev.Attempts-1)) * time.Hour
+				backoff = min(time.Duration(1<<(ev.Attempts-1))*duration(knobSendBackoff), maxSendBackoff)
 			}
 			ev.NextAttempt = t.now.Add(backoff).UTC()
 			t.d.Logf("self-update: %s not sent (attempt %d, retry after %s): %v", ev.Event, ev.Attempts, backoff, err)

@@ -188,7 +188,7 @@ func (e *h1Env) tick(fault, trace string) (exit int) {
 		"DMG_TEST_RELEASE_BASE_URL="+e.api.URL()+"/releases",
 		"DMG_TEST_CHECK_INTERVAL=0s", "DMG_TEST_SWITCH_WAIT=0s",
 		"DMG_TEST_DEDUPE_WINDOW=0s", "DMG_TEST_PROBATION_WINDOW=0s",
-		"DMG_TEST_SMOKE_TIMEOUT=60s",
+		"DMG_TEST_SMOKE_TIMEOUT=60s", "DMG_TEST_SEND_BACKOFF=0s",
 		"DMG_FAULT="+fault, "DMG_FAULT_TRACE="+trace,
 	)
 	var out strings.Builder
@@ -337,11 +337,66 @@ func (e *h1Env) sawEvent(event, from, to string) bool {
 	return false
 }
 
+// installDir writes a complete versions\<v> with small payloads.
+func (e *h1Env) installDir(v string) {
+	pv := mustV(v)
+	dir := e.L.VersionDir(pv)
+	must(e.t, os.MkdirAll(dir, 0o755))
+	m := updatestate.Manifest{Version: v, Files: map[string]string{}}
+	for _, f := range []string{updatestate.AgentFile, updatestate.LauncherFile, updatestate.LinuxFile} {
+		b := []byte(f + v)
+		must(e.t, os.WriteFile(filepath.Join(dir, f), b, 0o755))
+		m.Files[f] = sum(b)
+	}
+	must(e.t, updatestate.WriteManifest(dir, m))
+}
+
+func (e *h1Env) writeSeedDir(v string) {
+	dir := e.L.SeedDir(mustV(v))
+	must(e.t, os.MkdirAll(dir, 0o755))
+	for _, f := range []string{updatestate.AgentFile, updatestate.LauncherFile, updatestate.LinuxFile} {
+		must(e.t, os.WriteFile(filepath.Join(dir, f), []byte(f+v), 0o755))
+	}
+}
+
+// holdInstanceMu serializes the global lock target swap below.
+var holdInstanceMu sync.Mutex
+
+// holdInstance takes this install's scan instance mutex in the test
+// process, as a running scan would.
+func (e *h1Env) holdInstance() (release func()) {
+	e.t.Helper()
+	holdInstanceMu.Lock()
+	restore := lock.SetTargetForTest(e.lock)
+	lk, err := lock.Acquire(nil)
+	restore()
+	holdInstanceMu.Unlock()
+	if err != nil {
+		e.t.Fatalf("hold instance mutex: %v", err)
+	}
+	return lk.Release
+}
+
 func scenarios() []scenario {
 	return []scenario{
 		{
 			name:  "update",
 			setup: func(*h1Env) {},
+			converged: func(_ *h1Env, st *updatestate.State) bool {
+				return st.Current == h1Target && st.Probation == nil
+			},
+			event: EventOK, from: h1Base, to: h1Target,
+		},
+		{
+			// previous (1.18.0), the seed (1.17.0) and the updater (N) all
+			// differ, so GC mistakes on previous are visible.
+			name: "update-distinct-previous",
+			setup: func(e *h1Env) {
+				must(e.t, os.RemoveAll(filepath.Join(e.L.InstallRoot, "seed")))
+				e.writeSeedDir("1.17.0")
+				e.installDir("1.18.0")
+				must(e.t, updatestate.Save(e.L.StateFile(), &updatestate.State{Schema: 1, Current: h1Base, Previous: "1.18.0"}))
+			},
 			converged: func(_ *h1Env, st *updatestate.State) bool {
 				return st.Current == h1Target && st.Probation == nil
 			},
@@ -441,9 +496,14 @@ func runFaultCase(t *testing.T, sc scenario, faultTick int, fault string) {
 	e := newH1Env(t)
 	sc.setup(e)
 	quarantinedSeen := false
+	pendingIDs := map[string]bool{} // outbox execution_ids ever persisted (U3)
 	check := func() *updatestate.State {
 		st := e.state()
 		e.assertBootstrapRead()
+		e.assertPointersIntact(st)
+		for _, ev := range st.Outbox {
+			pendingIDs[ev.ExecutionID] = true
+		}
 		if sc.neverCurrent != "" {
 			if _, q := st.Quarantine[sc.neverCurrent]; q {
 				quarantinedSeen = true
@@ -459,8 +519,15 @@ func runFaultCase(t *testing.T, sc scenario, faultTick int, fault string) {
 		e.tick("", "")
 		check()
 	}
+	// The faulted tick also can't deliver events (U3: they must survive).
+	e.api.mu.Lock()
+	e.api.eventStatus = http.StatusServiceUnavailable
+	e.api.mu.Unlock()
 	trace := filepath.Join(t.TempDir(), "fault-trace")
 	code := e.tick(fault, trace)
+	e.api.mu.Lock()
+	e.api.eventStatus = 0
+	e.api.mu.Unlock()
 	cp := fault[:strings.LastIndexByte(fault, ':')]
 	if !slices.Contains(readTrace(trace), cp) {
 		e.dumpLogs()
@@ -472,7 +539,15 @@ func runFaultCase(t *testing.T, sc scenario, faultTick int, fault string) {
 	case strings.HasSuffix(fault, ":hang") && code == 0:
 		t.Fatalf("hang: process was not killed (exit %d)", code)
 	}
-	check()
+	before := check()
+	// U5: a tick while a scan holds the instance mutex never switches.
+	release := e.holdInstance()
+	e.tick("", "")
+	release()
+	if after := check(); after.Current != before.Current && after.Current == h1Target {
+		e.dumpLogs()
+		t.Fatalf("U5: switched to %s while a scan held the instance mutex", after.Current)
+	}
 	for i := 0; i < cleanTicks; i++ {
 		e.tick("", "")
 		st := check()
@@ -482,11 +557,68 @@ func runFaultCase(t *testing.T, sc scenario, faultTick int, fault string) {
 				t.Fatalf("U2/U3: converged without %s %s->%s", sc.event, sc.from, sc.to)
 			}
 			e.assertHygiene(st)
+			e.assertEventsDelivered(pendingIDs)
+			e.assertUniqueExecutionIDs()
 			return
 		}
 	}
 	e.dumpLogs()
 	t.Fatalf("U2: not converged within %d clean ticks after %s: %+v", cleanTicks, fault, e.state())
+}
+
+// assertPointersIntact: current and previous always name a complete
+// version dir, or a seed (GC must never delete what state points at).
+func (e *h1Env) assertPointersIntact(st *updatestate.State) {
+	e.t.Helper()
+	seeds := map[string]bool{}
+	for _, s := range seedVersions(e.L) {
+		seeds[s.String()] = true
+	}
+	for _, v := range []string{st.Current, st.Previous} {
+		if v == "" || seeds[v] {
+			continue
+		}
+		pv, _ := updatestate.ParseVersion(v)
+		if err := updatestate.VersionDirComplete(e.L.VersionDir(pv)); err != nil {
+			e.dumpLogs()
+			e.t.Fatalf("GC removed a pointed-at version %s: %v (state %+v)", v, err, st)
+		}
+	}
+}
+
+// assertEventsDelivered is U3: every event that was ever pending reached
+// the backend (2xx) by convergence.
+func (e *h1Env) assertEventsDelivered(ids map[string]bool) {
+	e.t.Helper()
+	got := map[string]bool{}
+	e.api.mu.Lock()
+	for _, ev := range e.api.events {
+		got[fmt.Sprint(ev["execution_id"])] = true
+	}
+	e.api.mu.Unlock()
+	for id := range ids {
+		if !got[id] {
+			e.dumpLogs()
+			e.t.Fatalf("U3: pending event %s was cleared without a 2xx", id)
+		}
+	}
+}
+
+// assertUniqueExecutionIDs is D9: an execution_id is only ever reused by
+// retries of the same event.
+func (e *h1Env) assertUniqueExecutionIDs() {
+	e.t.Helper()
+	seen := map[string]string{}
+	e.api.mu.Lock()
+	defer e.api.mu.Unlock()
+	for _, ev := range e.api.events {
+		id := fmt.Sprint(ev["execution_id"])
+		body := fmt.Sprint(ev["update_event"], ev["update_from"], ev["update_to"], ev["error_message"])
+		if prev, ok := seen[id]; ok && prev != body {
+			e.t.Fatalf("D9: execution_id %s reused by different events: %q / %q", id, prev, body)
+		}
+		seen[id] = body
+	}
 }
 
 // TestStateCorruptionMatrix is the updater half of the U0 bootstrap matrix:

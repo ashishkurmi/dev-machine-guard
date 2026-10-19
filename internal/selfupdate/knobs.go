@@ -11,6 +11,7 @@ const (
 	knobDedupeWindow                // event dedupe window (24 h)
 	knobCheckInterval               // minimum spacing of S3 target checks (6 h)
 	knobSmokeTimeout                // S5 self-check limit (60 s)
+	knobSendBackoff                 // first retry delay of an unsent event (1 h)
 )
 
 var knobDefaults = map[knob]time.Duration{
@@ -19,6 +20,7 @@ var knobDefaults = map[knob]time.Duration{
 	knobDedupeWindow:    24 * time.Hour,
 	knobCheckInterval:   6 * time.Hour,
 	knobSmokeTimeout:    60 * time.Second,
+	knobSendBackoff:     time.Hour,
 }
 
 // knobOverrides is set by in-package tests only.
