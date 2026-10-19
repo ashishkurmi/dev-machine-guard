@@ -36,6 +36,9 @@ type State struct {
 	// Outbox holds update events not yet accepted by the backend. Events
 	// are added in the same atomic write as the state change they report.
 	Outbox []OutboxEvent `json:"outbox,omitempty"`
+
+	// Extra holds keys this version doesn't know; Save writes them back.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // OutboxEvent is a pending update event (spec Contracts: Update event).
@@ -56,6 +59,8 @@ type Probation struct {
 	OK      int       `json:"ok"`
 	Bad     int       `json:"bad"`
 	SmokeOK bool      `json:"smoke_ok"`
+
+	Extra map[string]json.RawMessage `json:"-"` // unknown keys, kept on Save
 }
 
 type Quarantine struct {
@@ -64,6 +69,8 @@ type Quarantine struct {
 	// Until, when set, ends the quarantine (D5: inconclusive probation).
 	// Zero means permanent.
 	Until time.Time `json:"until,omitzero"`
+
+	Extra map[string]json.RawMessage `json:"-"` // unknown keys, kept on Save
 }
 
 // Updater records which version last ran the updater and how often in a
@@ -71,6 +78,8 @@ type Quarantine struct {
 type Updater struct {
 	Version             string `json:"version"`
 	ConsecutiveFailures int    `json:"consecutive_failures"`
+
+	Extra map[string]json.RawMessage `json:"-"` // unknown keys, kept on Save
 }
 
 // Validate reports why s is not a well-formed schema-1 state. Current is

@@ -1,7 +1,9 @@
 package updatestate
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -217,5 +219,46 @@ func TestSweepTemps(t *testing.T) {
 	}
 	if want := []string{".runs.json.tmp-1", "other.tmp-1", "state.json"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("after sweep %v, want %v", names, want)
+	}
+}
+
+// R-F1-2: a newer schema-1 writer's extra keys (top level and nested)
+// survive Load -> mutate -> Save by this version.
+func TestUnknownFieldsSurviveSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	in := `{"schema":1,"current":"1.20.0","previous":"1.19.0","future_top":{"a":[1,2]},
+	 "probation":{"version":"1.20.0","since":"2026-10-19T00:00:00Z","ok":0,"bad":1,"smoke_ok":true,"future_p":"x"},
+	 "quarantine":{"1.18.0":{"reason":"inconclusive","at":"2026-10-19T00:00:00Z","until":"2026-10-26T00:00:00Z","future_q":7}},
+	 "updater":{"version":"1.19.0","consecutive_failures":0,"future_u":true},
+	 "switch_deferrals":0,"dedupe":{}}`
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, corrupt, err := Load(path)
+	if err != nil || corrupt {
+		t.Fatalf("load: %v corrupt=%v", err, corrupt)
+	}
+	st.SwitchDeferrals = 2
+	st.Probation.Bad = 2
+	if err := Save(path, st); err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	data, _ := os.ReadFile(path)
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(out["future_top"]) != "map[a:[1 2]]" || out["switch_deferrals"] != float64(2) {
+		t.Fatalf("top level: %s", data)
+	}
+	p := out["probation"].(map[string]any)
+	q := out["quarantine"].(map[string]any)["1.18.0"].(map[string]any)
+	u := out["updater"].(map[string]any)
+	if p["future_p"] != "x" || p["bad"] != float64(2) || q["future_q"] != float64(7) || q["until"] != "2026-10-26T00:00:00Z" || u["future_u"] != true {
+		t.Fatalf("nested: %s", data)
+	}
+	again, _, _ := Load(path)
+	if again.Quarantine["1.18.0"].Until.IsZero() {
+		t.Fatal("until lost on reload")
 	}
 }
