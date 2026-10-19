@@ -119,3 +119,16 @@ func TestSystemIDProbeTimeoutFallsBackToCache(t *testing.T) {
 		t.Fatalf("probe not bounded by the caller's timeout: %s", d)
 	}
 }
+
+// FR1-4: a configured id cached earlier is not used once the config no
+// longer carries it.
+func TestSystemIDDropsStaleConfiguredCache(t *testing.T) {
+	noConfiguredID(t)
+	cache := `C:\Program Files\StepSecurity\state\device-id`
+	m := systemMock()
+	m.SetFile(cache, []byte(`{"device_id":"OLD-CONFIGURED","source":"configured"}`))
+	stubProbe(t, "guid-1", false)
+	if got := SystemID(context.Background(), m, cache, SystemProbeTimeout); got != "guid-1" {
+		t.Fatalf("SystemID = %q, want the chain past the stale configured id", got)
+	}
+}

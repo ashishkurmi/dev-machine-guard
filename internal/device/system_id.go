@@ -62,7 +62,9 @@ func SystemID(ctx context.Context, exec executor.Executor, cachePath string, pro
 	if cachePath != "" {
 		if data, err := exec.ReadFile(cachePath); err == nil && len(data) <= 4096 {
 			var c systemIDCache
-			if json.Unmarshal(data, &c) == nil && usableSerial(c.DeviceID) {
+			// A configured id is only valid while the config still has it
+			// (config.DeviceID is empty here, so it was removed).
+			if json.Unmarshal(data, &c) == nil && usableSerial(c.DeviceID) && c.Source == "hardware" {
 				return c.DeviceID
 			}
 		}
