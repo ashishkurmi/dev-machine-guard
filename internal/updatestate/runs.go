@@ -14,11 +14,14 @@ const MaxRunRecords = 10
 // maxRunsSize bounds what ReadRuns reads from the user-writable file.
 const maxRunsSize = 64 << 10
 
-// RunRecord is one bootstrap launch of a version. The bootstrap appends it,
-// the agent sets Started (with its execution_id) right after a successful
-// run-status "started", and the bootstrap finalizes ExitCode,
-// WatchdogKilled and At. A nil ExitCode means not finalized yet.
+// RunRecord is one bootstrap launch of a version. The bootstrap generates
+// RunID, appends the record and passes STEPSEC_RUN_ID to the agent; the
+// agent sets Started right after a successful run-status "started", and the
+// bootstrap finalizes ExitCode, WatchdogKilled and At. Both updates match by
+// RunID, so overlapping launches never touch each other's record. A nil
+// ExitCode means not finalized yet.
 type RunRecord struct {
+	RunID          string    `json:"run_id,omitempty"`
 	Version        string    `json:"version"`
 	ExecutionID    string    `json:"execution_id,omitempty"`
 	Started        bool      `json:"started"`
@@ -31,7 +34,7 @@ type runFile struct {
 	Records []RunRecord `json:"records"`
 }
 
-// ErrNoOpenRun means the run file has no unfinalized record to update.
+// ErrNoOpenRun means the run file has no unfinalized record with that run_id.
 var ErrNoOpenRun = errors.New("updatestate: no open run record")
 
 // ReadRuns returns the newest MaxRunRecords records, oldest first. The file
@@ -88,30 +91,32 @@ func AppendRun(path string, r RunRecord) error {
 	return writeRuns(path, append(ReadRuns(path), r))
 }
 
-// MarkRunStarted sets the started marker on the newest open record.
-func MarkRunStarted(path, executionID string) error {
-	return updateOpenRun(path, func(r *RunRecord) {
-		r.Started = true
-		r.ExecutionID = executionID
-	})
+// MarkRunStarted sets the started marker on the open record runID.
+func MarkRunStarted(path, runID string) error {
+	return updateOpenRun(path, runID, func(r *RunRecord) { r.Started = true })
 }
 
-// FinalizeRun closes the newest open record.
-func FinalizeRun(path string, exitCode int, watchdogKilled bool, at time.Time) error {
-	return updateOpenRun(path, func(r *RunRecord) {
+// FinalizeRun closes the open record runID.
+func FinalizeRun(path, runID string, exitCode int, watchdogKilled bool, at time.Time) error {
+	return updateOpenRun(path, runID, func(r *RunRecord) {
 		r.ExitCode = &exitCode
 		r.WatchdogKilled = watchdogKilled
 		r.At = at.UTC()
 	})
 }
 
-func updateOpenRun(path string, fn func(*RunRecord)) error {
-	recs := ReadRuns(path)
-	if len(recs) == 0 || ClassifyRun(recs[len(recs)-1]) != RunOpen {
+func updateOpenRun(path, runID string, fn func(*RunRecord)) error {
+	if runID == "" {
 		return ErrNoOpenRun
 	}
-	fn(&recs[len(recs)-1])
-	return writeRuns(path, recs)
+	recs := ReadRuns(path)
+	for i := range recs {
+		if recs[i].RunID == runID && ClassifyRun(recs[i]) == RunOpen {
+			fn(&recs[i])
+			return writeRuns(path, recs)
+		}
+	}
+	return ErrNoOpenRun
 }
 
 // RunVerdict is the health reading of one run record (spec §4).

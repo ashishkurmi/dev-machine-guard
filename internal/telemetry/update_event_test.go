@@ -124,23 +124,26 @@ func TestStartedMarkerOnlyAfterAcceptedStarted(t *testing.T) {
 	}
 
 	runs := filepath.Join(t.TempDir(), "runs", "1.20.0.json")
-	if err := updatestate.AppendRun(runs, updatestate.RunRecord{Version: "1.20.0", At: time.Now()}); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{"run-a", "run-b"} {
+		if err := updatestate.AppendRun(runs, updatestate.RunRecord{RunID: id, Version: "1.20.0", At: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv(EnvRunRecord, runs)
-	if err := markRunStarted("exec-9"); err != nil {
+	t.Setenv(EnvRunID, "run-a")
+	if err := markRunStarted(); err != nil {
 		t.Fatal(err)
 	}
 	recs := updatestate.ReadRuns(runs)
-	if len(recs) != 1 || !recs[0].Started || recs[0].ExecutionID != "exec-9" {
+	if len(recs) != 2 || !recs[0].Started || recs[1].Started {
 		t.Fatalf("records = %+v", recs)
 	}
 	t.Setenv(EnvRunRecord, "relative.json")
-	if err := markRunStarted("e"); err == nil {
+	if err := markRunStarted(); err == nil {
 		t.Fatal("relative run record path accepted")
 	}
 	t.Setenv(EnvRunRecord, "")
-	if err := markRunStarted("e"); err != nil {
+	if err := markRunStarted(); err != nil {
 		t.Fatalf("unset env: %v", err)
 	}
 }

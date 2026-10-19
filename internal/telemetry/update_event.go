@@ -125,19 +125,21 @@ func postUpdateEventOnce(ctx context.Context, client *http.Client, endpoint stri
 // Env set by the bootstrap for scan runs (spec Contracts: Run record).
 const (
 	EnvRunRecord         = "STEPSEC_RUN_RECORD"
+	EnvRunID             = "STEPSEC_RUN_ID"
 	EnvBootstrapVersion  = "STEPSEC_BOOTSTRAP_VERSION"
 	EnvBootstrapFallback = "STEPSEC_BOOTSTRAP_FALLBACK"
 )
 
-// markRunStarted sets the started marker in the bootstrap's run record right
-// after run-status "started" was accepted. Best-effort.
-func markRunStarted(executionID string) error {
-	path := os.Getenv(EnvRunRecord)
-	if path == "" {
+// markRunStarted sets the started marker on this launch's record
+// (STEPSEC_RUN_ID) in the bootstrap's run file right after run-status
+// "started" was accepted. Best-effort.
+func markRunStarted() error {
+	path, runID := os.Getenv(EnvRunRecord), os.Getenv(EnvRunID)
+	if path == "" || runID == "" {
 		return nil
 	}
 	if !filepath.IsAbs(path) || !strings.EqualFold(filepath.Ext(path), ".json") {
 		return fmt.Errorf("%s=%q is not an absolute .json path", EnvRunRecord, path)
 	}
-	return updatestate.MarkRunStarted(path, executionID)
+	return updatestate.MarkRunStarted(path, runID)
 }

@@ -570,7 +570,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	// Report "started" now that we have a device_id. Once the backend has
 	// it, mark the bootstrap's run record (self-update health, spec §4).
 	if reportRunStatus(ctx, log, executionID, deviceID, runStatusStarted, "", invocationMethod) {
-		if err := markRunStarted(executionID); err != nil {
+		if err := markRunStarted(); err != nil {
 			log.Debug("run record: %v", err)
 		}
 	}
