@@ -73,6 +73,7 @@ func writeRuns(path string, recs []RunRecord) error {
 	if err != nil {
 		return err
 	}
+	// #nosec G301 -- runs\ is shared by the user scan and the SYSTEM updater.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

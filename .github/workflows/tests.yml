@@ -113,7 +113,7 @@ jobs:
           go-version-file: go.mod
       - run: make test
       - name: Test self-update fault injection (selfupdate_faults tag)
-        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/
+        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
 
   # These packages have Windows-only code and Windows-specific behavior whose
   # tests the macOS test job can only cross-compile, not run:
@@ -130,6 +130,7 @@ jobs:
   #     depends on
   #   - updatestate: MoveFileEx state replace, LockFileEx, protected DACLs
   #   - selfupdate: native arch (IsWow64Process2), WinHTTP machine proxy
+  #   - authenticode: WinVerifyTrust against a test-signed copy (elevated runner)
   #   - detector TestReal_*: the Kiro CLI registry reader against a scratch
   #     HKCU key, and skills junction folding over real junctions (the rest of
   #     the detector suite assumes a POSIX host, hence the -run filter)
@@ -148,12 +149,12 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
-      - run: go test -race -count=1 ./internal/devicepolicy/ ./internal/secureuserfile/ ./internal/detector/credentials/ ./internal/safepath/ ./internal/executor/ ./internal/updatestate/ ./internal/selfupdate/
+      - run: go test -race -count=1 ./internal/devicepolicy/ ./internal/secureuserfile/ ./internal/detector/credentials/ ./internal/safepath/ ./internal/executor/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
       - run: go test -race -count=1 -run '^TestReal_' ./internal/detector/
       - name: Test scheduled scan console suppression
         run: go test -race -count=1 -run 'Test(IsTaskRegistered|DetectInvocationMethod_Windows|HideWindow)' ./internal/schtasks/ ./internal/telemetry/ ./internal/winproc/
       - name: Test self-update fault injection (selfupdate_faults tag)
-        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/
+        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
 
   smoke:
     name: Smoke Tests

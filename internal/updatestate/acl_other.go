@@ -11,6 +11,7 @@ func EnsureProtectedDir(path string) (fixed bool, err error) {
 	if err != nil || exists {
 		return false, err
 	}
+	// #nosec G301 -- versions\ and state\ are world-readable by design (Users RX).
 	if err := os.Mkdir(path, 0o755); err != nil && !os.IsExist(err) {
 		return false, err
 	}

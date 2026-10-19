@@ -19,16 +19,6 @@ eeSlkFm5SRHOBXhWIAAAAZc3RlcHNlY3VyaXR5LW1kbS1jaGVja3N1bQAAAAAAAAAGc2hh
 NTEyAAAAUwAAAAtzc2gtZWQyNTUxOQAAAEA54k4Rj3+JfaX1jh5KQF2RaWrtSxeQBDPCBt
 1ONaiZ63fUUNmX2tH3KkkJo4Ul/v/GhTS+zCZI/tT8FWeGjG4D
 -----END SSH SIGNATURE-----`
-
-	// Payload fixtures for the update-flow tests (selfupdate_test.go).
-	fixturePayload         = "poc-new-binary-payload\n"
-	fixturePayloadChecksum = "83aff4e3d909750027b906bfc78a11f22b11b82c045be1dcf8ee320f469621b4"
-	fixturePayloadSig      = `-----BEGIN SSH SIGNATURE-----
-U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg/Kt3yZGpXyx/faQ3F1uo1wzs7q
-eeSlkFm5SRHOBXhWIAAAAZc3RlcHNlY3VyaXR5LW1kbS1jaGVja3N1bQAAAAAAAAAGc2hh
-NTEyAAAAUwAAAAtzc2gtZWQyNTUxOQAAAED/6oSFt0xYTqzYcwemQ4GQ8bZlHSOo4L1t0A
-kmHXZoiG6RbdQlYusI4+laaYjXNr0gvXIViYBO0v3vwgdBK3wI
------END SSH SIGNATURE-----`
 )
 
 func TestVerifySSHSig(t *testing.T) {

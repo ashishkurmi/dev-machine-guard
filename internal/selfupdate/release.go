@@ -274,7 +274,7 @@ func (c *Client) downloadURL(ctx context.Context, assetURL, dst, want string) er
 	if resp.ContentLength > maxAssetBytes {
 		return fmt.Errorf("%w: %s exceeds the size limit", ErrDownload, assetURL)
 	}
-	// #nosec G304 -- dst is inside the updater's own staging directory.
+	// #nosec G302 G304 -- dst is inside the updater's own staging directory; release executables are 0755.
 	f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
 		return err
