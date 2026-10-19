@@ -155,10 +155,11 @@ jobs:
         run: go test -race -count=1 -run 'Test(IsTaskRegistered|DetectInvocationMethod_Windows|HideWindow)' ./internal/schtasks/ ./internal/telemetry/ ./internal/winproc/
       - name: Test self-update fault injection (selfupdate_faults tag)
         run: go test -race -count=1 -tags selfupdate_faults ./internal/faultinject/ ./internal/updatestate/
-      - name: Test launcher bootstrap mode (job objects, bootstrap matrix)
+      - name: Test launcher bootstrap mode and self-update tasks
         run: |
           go test -race -count=1 ./internal/launcher/
           go test -race -count=1 -tags selfupdate_faults ./internal/launcher/
+          go test -race -count=1 -run 'Test(UpdateTask|ResolveBootstrapRoot|BuildCreateArgs_Bootstrap|InstallUpdateTask|Uninstall_)' ./internal/schtasks/
 
   smoke:
     name: Smoke Tests
