@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -545,8 +544,10 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 	}
 	defer l.Release()
 
-	if err := b.copySeed(v, seedDir); err != nil {
+	if note, err := b.Layout.CopySeedVersion(v, b.Now()); err != nil {
 		b.logf("adopt-seed: copying seed %s: %v", v, err)
+	} else if note != "" {
+		b.logf("adopt-seed: %s", note)
 	}
 	if err := updatestate.VerifyVersionDir(b.Layout.VersionDir(v), v); err != nil {
 		b.logf("adopt-seed: versions\\%s unusable (%v); state left unchanged", v, err)
@@ -573,79 +574,6 @@ func seedComplete(dir string) bool {
 		}
 	}
 	return true
-}
-
-// copySeed copies the seed into versions\<v> through a staging dir, writes
-// its manifest (so the updater treats it as a verified version) and renames
-// it into place. A dir that already verifies is kept (immutable); anything
-// else at that path is moved to trash first.
-func (b *Bootstrap) copySeed(v updatestate.Version, seedDir string) error {
-	dst := b.Layout.VersionDir(v)
-	if _, err := os.Lstat(dst); err == nil {
-		if updatestate.VerifyVersionDir(dst, v) == nil {
-			return nil
-		}
-		trash := filepath.Join(b.Layout.VersionsDir(), updatestate.TrashPrefix+v.String()+"-"+strconv.FormatInt(b.Now().UnixNano(), 36))
-		if err := os.Rename(dst, trash); err != nil {
-			return fmt.Errorf("moving unverifiable %s aside: %w", dst, err)
-		}
-		b.logf("adopt-seed: moved unverifiable %s to %s", dst, trash)
-		_ = os.RemoveAll(trash)
-	}
-	staging, err := b.Layout.StagingDir(v)
-	if err != nil {
-		return err
-	}
-	done := false
-	defer func() {
-		if !done {
-			_ = os.RemoveAll(staging)
-		}
-	}()
-	m := updatestate.Manifest{Version: v.String(), Files: map[string]string{}}
-	for _, name := range updatestate.VersionFiles {
-		dstFile := filepath.Join(staging, name)
-		if err := copyFile(filepath.Join(seedDir, name), dstFile); err != nil {
-			return err
-		}
-		sum, err := updatestate.FileSHA256(dstFile)
-		if err != nil {
-			return err
-		}
-		m.Files[name] = sum
-	}
-	if err := updatestate.WriteManifest(staging, m); err != nil {
-		return err
-	}
-	if err := faultinject.Point("adopt.copied"); err != nil {
-		return err
-	}
-	if err := os.Rename(staging, dst); err != nil {
-		return err
-	}
-	done = true
-	b.logf("adopt-seed: copied seed %s into %s", v, dst)
-	return nil
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src) // #nosec G304 -- MSI-owned seed payload
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755) // #nosec G304 G302 -- fresh staging dir
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(out, in)
-	if err == nil {
-		err = out.Sync()
-	}
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	return err
 }
 
 // adoptState sets current = seed when there is no state yet, when current
@@ -685,29 +613,12 @@ func (b *Bootstrap) adoptState(seed updatestate.Version) {
 		b.logf("adopt-seed: state has fields this build can't round-trip (%v); left unchanged", err)
 		return
 	}
-	old := st.Current
-	cur, _ := updatestate.ParseVersion(old)
-	switch {
-	case !updatestate.VersionDirUsable(b.Layout.VersionDir(cur)):
-		st.Current = s
-		if st.Probation != nil && st.Probation.Version == old {
-			st.Probation = nil
-		}
-		if st.Previous == s {
-			st.Previous = ""
-		}
-		b.logf("adopt-seed: current %s unusable; current = seed %s", old, s)
-	case updatestate.Compare(seed, cur) <= 0:
+	changed, why := b.Layout.AdoptSeedRule(st, seed, b.Now())
+	if why != "" {
+		b.logf("adopt-seed: %s", why)
+	}
+	if !changed {
 		return
-	default:
-		// Only an unexpired quarantine of the seed's own version blocks it
-		// (R-B-6); a D5 "until" in the past has ended.
-		if q, ok := st.Quarantine[s]; ok && (q.Until.IsZero() || b.Now().Before(q.Until)) {
-			b.logf("adopt-seed: seed %s is quarantined; current %s kept", s, old)
-			return
-		}
-		st.Previous, st.Current, st.Probation = old, s, nil
-		b.logf("adopt-seed: seed %s newer than current %s; current = seed", s, old)
 	}
 	if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
 		b.logf("adopt-seed: writing state: %v", err)

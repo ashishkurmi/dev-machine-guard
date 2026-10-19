@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/step-security/dev-machine-guard/internal/launcher"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1197,5 +1199,58 @@ func TestProbationSeqWithFreshTarget(t *testing.T) {
 	}
 	if e.state().Current != "1.19.0" {
 		t.Fatalf("not rolled back: %+v", e.state())
+	}
+}
+
+// D25/R-C2-15: an MSI pushed a newer seed but its adopt-seed CA timed out
+// on the update lock; the next updater tick adopts it and reports it.
+func TestUpdaterAdoptsNewerSeed(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	st := baseState("1.19.0", "")
+	st.LastCheck = e.now // no target check this tick
+	e.writeState(st)
+	e.writeSeed("1.21.0")
+	// The MSI's adopt-seed CA runs while an update tick holds the lock and
+	// gives up after its bounded wait.
+	held, err := updatestate.AcquireLock(e.L.LockFile())
+	must(t, err)
+	b := launcher.NewBootstrap(filepath.Join(e.L.InstallRoot, "stepsecurity-dev-machine-guard-bootstrap.exe"), func() bool { return true })
+	b.Layout, b.Out, b.AdoptLockWait, b.LockPoll = e.L, io.Discard, 200*time.Millisecond, 20*time.Millisecond
+	b.SetRunningVersion = nil
+	if code := b.AdoptSeed([]string{"--seed-dir", e.L.SeedDir(mustV("1.21.0"))}); code != 0 {
+		t.Fatalf("adopt-seed = %d", code)
+	}
+	held.Release()
+	if got := e.state(); got.Current != "1.19.0" {
+		t.Fatalf("adopt-seed adopted despite the held lock: %+v", got)
+	}
+	e.tick()
+	got := e.state()
+	if got.Current != "1.21.0" || got.Previous != "1.19.0" || got.Probation != nil {
+		t.Fatalf("seed not adopted: %+v", got)
+	}
+	if err := updatestate.VerifyVersionDir(e.L.VersionDir(mustV("1.21.0")), mustV("1.21.0")); err != nil {
+		t.Fatalf("versions\\1.21.0: %v", err)
+	}
+	ok := e.lastSent(EventOK)
+	if ok.From != "1.19.0" || ok.To != "1.21.0" || ok.Error != "seed_adopted" {
+		t.Fatalf("event = %+v", ok)
+	}
+}
+
+func TestUpdaterIgnoresOlderSeed(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.20.0")
+	e.self = "1.20.0"
+	st := baseState("1.20.0", "")
+	st.LastCheck = e.now
+	e.writeState(st)
+	e.tick() // seed is 1.19.0 (newEnv)
+	if got := e.state(); got.Current != "1.20.0" {
+		t.Fatalf("older seed adopted: %+v", got)
+	}
+	if ev := e.lastSentOrNil(EventOK); ev != nil {
+		t.Fatalf("event sent: %+v", ev)
 	}
 }

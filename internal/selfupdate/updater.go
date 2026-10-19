@@ -170,6 +170,9 @@ func Run(ctx context.Context, d *Deps) int {
 	if err := checkpoint("S2.evaluated"); err != nil {
 		return t.finish(ctx, ExitFailed)
 	}
+	if err := t.adoptNewerSeed(); err != nil {
+		return t.finish(ctx, ExitFailed)
+	}
 
 	return t.update(ctx, closed)
 }
@@ -301,6 +304,44 @@ func (t *tick) reportUpdaterFailure() {
 			fmt.Sprintf("updater %s failed %d times in a row; running the %s updater", u.Version, u.ConsecutiveFailures, t.d.Self),
 			EventUpdaterFailed+":"+u.Version)
 	}
+}
+
+// adoptNewerSeed does what the MSI's adopt-seed would, for a newer seed
+// that adopt-seed couldn't adopt (it gives up after a bounded wait for the
+// update lock): with no probation open and the seed newer than current and
+// not quarantined, copy it into versions\<seed> and make it current in one
+// write that also carries update_ok (error_message seed_adopted). The copy
+// and the pointer rule are updatestate's, shared with adopt-seed.
+func (t *tick) adoptNewerSeed() error {
+	seed, ok := t.L.FindSeed()
+	cur, err := updatestate.ParseVersion(t.st.Current)
+	if !ok || err != nil || t.st.Probation != nil || updatestate.Compare(seed, cur) <= 0 || t.quarantined(seed.String()) {
+		return nil
+	}
+	note, err := t.L.CopySeedVersion(seed, t.now)
+	if err != nil {
+		t.d.Logf("self-update: copying seed %s: %v", seed, err)
+		return nil // retried next tick; the seed stays the bootstrap's fallback
+	}
+	if note != "" {
+		t.d.Logf("self-update: %s", note)
+	}
+	if err := updatestate.VerifyVersionDir(t.L.VersionDir(seed), seed); err != nil {
+		t.d.Logf("self-update: versions\\%s unusable after copying the seed: %v", seed, err)
+		return nil
+	}
+	next := cloneState(t.st)
+	changed, why := t.L.AdoptSeedRule(next, seed, t.now)
+	if !changed {
+		return nil
+	}
+	enqueueTo(next, t.now, t.dedupeWindow(), EventOK, t.st.Current, seed.String(), "seed_adopted", "")
+	t.d.Logf("self-update: %s", why)
+	if err := t.save(next, "adopt"); err != nil {
+		return err
+	}
+	t.setRunning(seed.String())
+	return nil
 }
 
 // keep is the set of version dirs GC must not touch.
