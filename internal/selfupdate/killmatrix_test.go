@@ -502,9 +502,12 @@ func TestStateCorruptionMatrix(t *testing.T) {
 		{"missing", func(e *h1Env) { must(t, os.Remove(e.L.StateFile())) }, EventStateCorrupt},
 		{"empty", func(e *h1Env) { must(t, os.WriteFile(e.L.StateFile(), nil, 0o644)) }, EventStateCorrupt},
 		{"garbage", func(e *h1Env) { must(t, os.WriteFile(e.L.StateFile(), []byte("\x00{nope"), 0o644)) }, EventStateCorrupt},
-		{"unknown schema", func(e *h1Env) {
-			must(t, os.WriteFile(e.L.StateFile(), []byte(`{"schema":2,"current":"1.19.0"}`), 0o644))
-		}, EventStateCorrupt},
+		{"higher schema (read, not rebuilt)", func(e *h1Env) {
+			must(t, os.WriteFile(e.L.StateFile(), []byte(`{"schema":2,"current":"1.19.0","v2":true}`), 0o644))
+		}, ""},
+		{"current dir missing the launcher", func(e *h1Env) {
+			must(t, os.Remove(filepath.Join(e.L.VersionDir(mustV(h1Base)), updatestate.LauncherFile)))
+		}, ""},
 		{"huge", func(e *h1Env) {
 			must(t, os.WriteFile(e.L.StateFile(), []byte(`{"schema":1,"current":"1.19.0","pad":"`+strings.Repeat("x", 2<<20)+`"}`), 0o644))
 		}, EventStateCorrupt},

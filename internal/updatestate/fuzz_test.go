@@ -28,7 +28,9 @@ func FuzzDecodeState(f *testing.F) {
 			t.Fatalf("saved state reloads corrupt=%v err=%v", corrupt, err)
 		}
 		a, _ := json.Marshal(got)
-		st.Schema = SchemaVersion
+		if st.Schema < SchemaVersion {
+			st.Schema = SchemaVersion
+		}
 		if st.Quarantine == nil {
 			st.Quarantine = map[string]Quarantine{}
 		}

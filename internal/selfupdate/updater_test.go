@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -922,5 +923,32 @@ func TestDeferralCounterIsPerTarget(t *testing.T) {
 	}
 	if st := e.state(); st.SwitchDeferrals != 1 || st.PendingSwitch != "1.20.0" {
 		t.Fatalf("deferral state: %d %q", st.SwitchDeferrals, st.PendingSwitch)
+	}
+}
+
+// D15 design fix: during a probation the updater is the OLDER previous; a
+// newer schema written by the probation version must not make it rebuild
+// on the seed or drop the newer fields.
+func TestOlderUpdaterKeepsNewerSchemaState(t *testing.T) {
+	e := newEnv(t)
+	probationState(t, e)
+	since := e.now.Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	body := `{"schema":2,"current":"1.20.0","previous":"1.19.0","future":{"k":[1]},
+	 "probation":{"version":"1.20.0","since":"` + since + `","ok":0,"bad":0,"smoke_ok":true,"p2":"x"},
+	 "quarantine":{"1.18.5":{"reason":"bad_runs","at":"` + since + `","q2":1}},"last_check":"` + since + `"}`
+	must(t, os.WriteFile(e.L.StateFile(), []byte(body), 0o644))
+	e.addRun("1.20.0", false, 2)
+	e.tick()
+	if got := e.events(); slices.Contains(got, EventStateCorrupt) {
+		t.Fatalf("rebuilt a newer-schema state: %v", got)
+	}
+	var out map[string]any
+	data, _ := os.ReadFile(e.L.StateFile())
+	_ = json.Unmarshal(data, &out)
+	p, _ := out["probation"].(map[string]any)
+	q, _ := out["quarantine"].(map[string]any)["1.18.5"].(map[string]any)
+	if out["schema"] != float64(2) || out["current"] != "1.20.0" || fmt.Sprint(out["future"]) != "map[k:[1]]" ||
+		p == nil || p["p2"] != "x" || p["bad"] != float64(1) || q == nil || q["q2"] != float64(1) {
+		t.Fatalf("newer state not preserved: %s", data)
 	}
 }

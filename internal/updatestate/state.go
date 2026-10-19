@@ -11,7 +11,9 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/faultinject"
 )
 
-// SchemaVersion is the only state.json schema this package reads or writes.
+// SchemaVersion is the state.json schema this package writes. A file with a
+// higher schema is read for its known fields and written back with its own
+// schema number and unknown keys intact.
 const SchemaVersion = 1
 
 // maxStateSize bounds what Load reads; anything larger is corrupt.
@@ -102,7 +104,9 @@ type Updater struct {
 // required; the other version fields are optional but strict when set.
 func (s *State) Validate() error {
 	switch {
-	case s.Schema != SchemaVersion:
+	case s.Schema < SchemaVersion:
+		// A higher schema is read for the fields this version knows; the
+		// rest is preserved (frozen read contract, D3/D15).
 		return fmt.Errorf("unsupported schema %d", s.Schema)
 	case !validVersion(s.Current):
 		return fmt.Errorf("invalid current %q", s.Current)
@@ -212,7 +216,9 @@ func Save(path string, st *State) error { return SaveCheckpointed(path, st, "") 
 // new state is already in place, as a late write error would be.
 func SaveCheckpointed(path string, st *State, prefix string) error {
 	out := *st
-	out.Schema = SchemaVersion
+	if out.Schema < SchemaVersion {
+		out.Schema = SchemaVersion
+	}
 	out.Generation = st.Generation + 1
 	if out.Quarantine == nil {
 		out.Quarantine = map[string]Quarantine{}

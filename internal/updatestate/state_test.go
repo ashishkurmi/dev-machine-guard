@@ -68,26 +68,26 @@ func TestLoadMissing(t *testing.T) {
 
 func TestLoadCorrupt(t *testing.T) {
 	cases := map[string]string{
-		"empty":            ``,
-		"garbage":          "\x00\xffnot json",
-		"truncated":        `{"schema":1,"current":"1.2.3"`,
-		"array":            `[]`,
-		"null":             `null`,
-		"schema 0":         `{"current":"1.2.3"}`,
-		"schema 2":         `{"schema":2,"current":"1.2.3"}`,
-		"no current":       `{"schema":1}`,
-		"bad current":      `{"schema":1,"current":"..\\..\\evil"}`,
-		"prerelease":       `{"schema":1,"current":"1.2.3-rc.1"}`,
-		"bad previous":     `{"schema":1,"current":"1.2.3","previous":"x"}`,
-		"bad probation":    `{"schema":1,"current":"1.2.3","probation":{"version":""}}`,
-		"neg probation":    `{"schema":1,"current":"1.2.3","probation":{"version":"1.2.3","bad":-1}}`,
-		"bad quarantine":   `{"schema":1,"current":"1.2.3","quarantine":{"../x":{}}}`,
-		"bad updater":      `{"schema":1,"current":"1.2.3","updater":{"version":"v1"}}`,
-		"neg deferrals":    `{"schema":1,"current":"1.2.3","switch_deferrals":-1}`,
-		"bad time":         `{"schema":1,"current":"1.2.3","dedupe":{"k":"yesterday"}}`,
-		"wrong type":       `{"schema":"1","current":"1.2.3"}`,
-		"trailing garbage": `{"schema":1,"current":"1.2.3"} x`,
-		"oversize":         `{"schema":1,"current":"1.2.3","pad":"` + strings.Repeat("a", maxStateSize) + `"}`,
+		"empty":                ``,
+		"garbage":              "\x00\xffnot json",
+		"truncated":            `{"schema":1,"current":"1.2.3"`,
+		"array":                `[]`,
+		"null":                 `null`,
+		"schema 0":             `{"current":"1.2.3"}`,
+		"schema 2 bad current": `{"schema":2,"current":"x"}`,
+		"no current":           `{"schema":1}`,
+		"bad current":          `{"schema":1,"current":"..\\..\\evil"}`,
+		"prerelease":           `{"schema":1,"current":"1.2.3-rc.1"}`,
+		"bad previous":         `{"schema":1,"current":"1.2.3","previous":"x"}`,
+		"bad probation":        `{"schema":1,"current":"1.2.3","probation":{"version":""}}`,
+		"neg probation":        `{"schema":1,"current":"1.2.3","probation":{"version":"1.2.3","bad":-1}}`,
+		"bad quarantine":       `{"schema":1,"current":"1.2.3","quarantine":{"../x":{}}}`,
+		"bad updater":          `{"schema":1,"current":"1.2.3","updater":{"version":"v1"}}`,
+		"neg deferrals":        `{"schema":1,"current":"1.2.3","switch_deferrals":-1}`,
+		"bad time":             `{"schema":1,"current":"1.2.3","dedupe":{"k":"yesterday"}}`,
+		"wrong type":           `{"schema":"1","current":"1.2.3"}`,
+		"trailing garbage":     `{"schema":1,"current":"1.2.3"} x`,
+		"oversize":             `{"schema":1,"current":"1.2.3","pad":"` + strings.Repeat("a", maxStateSize) + `"}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -304,5 +304,30 @@ func TestDirectoryAtStatePathIsCorrupt(t *testing.T) {
 	}
 	if recs := ReadRuns(path); recs != nil {
 		t.Fatalf("ReadRuns(dir) = %v", recs)
+	}
+}
+
+// D15: a newer schema is read for its known fields and written back with
+// its schema number and everything else intact, never treated as corrupt.
+func TestHigherSchemaIsReadAndPreserved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	in := `{"schema":2,"current":"1.20.0","previous":"1.19.0","new_v2":{"x":1},
+	 "probation":{"version":"1.20.0","since":"2026-10-19T00:00:00Z","ok":0,"bad":0,"smoke_ok":true,"v2_p":true}}`
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, corrupt, err := Load(path)
+	if err != nil || corrupt || st == nil || st.Current != "1.20.0" || st.Schema != 2 {
+		t.Fatalf("Load = %+v corrupt=%v err=%v", st, corrupt, err)
+	}
+	st.Probation.Bad = 1
+	if err := Save(path, st); err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	data, _ := os.ReadFile(path)
+	_ = json.Unmarshal(data, &out)
+	if out["schema"] != float64(2) || fmt.Sprint(out["new_v2"]) != "map[x:1]" || out["probation"].(map[string]any)["v2_p"] != true {
+		t.Fatalf("schema-2 state not preserved: %s", data)
 	}
 }
