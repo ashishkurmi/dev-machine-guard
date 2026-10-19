@@ -456,32 +456,27 @@ func (t *tick) quarantined(v string) bool {
 	return ok && (q.Until.IsZero() || t.now.Before(q.Until))
 }
 
-// save writes next with the given checkpoint prefix. After any error the
-// state on disk may be old or new, so it is re-read; t.st becomes whatever
-// is on disk, and an error is returned only if next did not land.
+// saveState is updatestate.SaveCheckpointed; tests make it fail.
+var saveState = updatestate.SaveCheckpointed
+
+// save writes next with the given checkpoint prefix. On success t.st
+// becomes next. After an error the write may still have landed (a late
+// failure): a re-read decides by generation. If it landed, t.st becomes the
+// state on disk; if not, t.st is left as it was and the error returned.
 func (t *tick) save(next *updatestate.State, prefix string) error {
-	err := updatestate.SaveCheckpointed(t.L.StateFile(), next, prefix)
+	want := next.Generation + 1
+	err := saveState(t.L.StateFile(), next, prefix)
 	if err == nil {
 		t.st = next
 		return nil
 	}
 	t.d.Logf("self-update: state write (%s): %v", prefix, err)
-	disk, _, lerr := updatestate.Load(t.L.StateFile())
-	if lerr == nil && disk != nil {
+	if disk, _, lerr := updatestate.Load(t.L.StateFile()); lerr == nil && disk != nil && disk.Generation == want {
 		normalize(disk)
 		t.st = disk
-		if disk.Current == next.Current && sameProbation(disk.Probation, next.Probation) {
-			return nil
-		}
+		return nil
 	}
 	return err
-}
-
-func sameProbation(a, b *updatestate.Probation) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Version == b.Version && a.Since.Equal(b.Since)
 }
 
 func (t *tick) setRunning(v string) {
@@ -739,13 +734,19 @@ func (t *tick) checkFreeSpace() error {
 }
 
 // finish persists the state (with any new events), sends the outbox and
-// persists again without the delivered events.
+// persists again without the delivered events. Both writes have fault
+// checkpoints (persist.*, final.*).
 func (t *tick) finish(ctx context.Context, code int) int {
-	if err := t.save(t.st, ""); err != nil {
+	if err := t.save(t.st, "persist"); err != nil {
+		// The tick's events are not on disk: send them now (same
+		// execution_ids) rather than lose them; the save is retried by later
+		// ticks.
+		t.d.Logf("self-update: state not written; sending this tick's events directly")
+		t.flush(ctx)
 		return ExitFailed
 	}
 	if t.flush(ctx) {
-		if err := t.save(t.st, ""); err != nil {
+		if err := t.save(t.st, "final"); err != nil {
 			return ExitFailed
 		}
 	}

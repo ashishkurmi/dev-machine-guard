@@ -683,3 +683,65 @@ func TestUpdaterFailedOnlyAfterReachingBackend(t *testing.T) {
 		t.Fatalf("not reported once the backend answered: %v", got)
 	}
 }
+
+// failingSaves makes every state write fail without touching the disk
+// (landed=false) or write and then fail (landed=true), like a late error.
+func failingSaves(t *testing.T, landed bool) {
+	t.Helper()
+	old := saveState
+	saveState = func(path string, st *updatestate.State, prefix string) error {
+		if landed {
+			if err := old(path, st, prefix); err != nil {
+				return err
+			}
+		}
+		return errors.New("injected state write failure")
+	}
+	t.Cleanup(func() { saveState = old })
+}
+
+// R-C2-1: a tick whose state write never lands still reports its events
+// (sent directly) instead of dropping them.
+func TestUnlandedWriteSendsEventsDirectly(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.pubErr = errors.New("publisher differs")
+	failingSaves(t, false)
+	if code := e.tick(); code != ExitFailed {
+		t.Fatalf("tick = %d, want ExitFailed when state can't be written", code)
+	}
+	wantEvents(t, e.events(), EventVerifyFailed)
+}
+
+func TestSwitchWriteFailureReported(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	failingSaves(t, false)
+	e.tick()
+	got := e.events()
+	if !slices.Contains(got, EventSwitchFailed) || slices.Contains(got, EventOK) {
+		t.Fatalf("events = %v, want update_switch_failed and no update_ok", got)
+	}
+	if st := e.state(); st.Current != "1.19.0" {
+		t.Fatalf("current moved: %s", st.Current)
+	}
+}
+
+// A write that landed but returned an error (late failure) is recognised
+// by its generation: the switch counts, and no false switch_failed is sent.
+func TestLandedWriteWithErrorIsNotAFailure(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	failingSaves(t, true)
+	e.tick()
+	got := e.events()
+	if slices.Contains(got, EventSwitchFailed) || !slices.Contains(got, EventOK) {
+		t.Fatalf("events = %v, want update_ok only", got)
+	}
+	if st := e.state(); st.Current != "1.20.0" {
+		t.Fatalf("current = %s", st.Current)
+	}
+}

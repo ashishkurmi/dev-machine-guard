@@ -31,6 +31,9 @@ type State struct {
 
 	// Additive fields (schema 1 readers ignore them).
 
+	// Generation is incremented by every Save. After a write error, a
+	// re-read showing the expected generation proves the write landed.
+	Generation uint64 `json:"generation,omitempty"`
 	// LastCheck is when the updater last asked latest-binary for a target.
 	LastCheck time.Time `json:"last_check,omitzero"`
 	// Outbox holds update events not yet accepted by the backend. Events
@@ -190,7 +193,8 @@ var checkpoint = faultinject.Point
 // either the old or the new state.
 func Save(path string, st *State) error { return SaveCheckpointed(path, st, "") }
 
-// SaveCheckpointed is Save with fault checkpoints <prefix>.state-temp (temp
+// SaveCheckpointed writes st with Generation+1 (and sets st.Generation on
+// success). It is Save with fault checkpoints <prefix>.state-temp (temp
 // file durable, target untouched) and <prefix>.state-renamed (target
 // replaced), e.g. prefix "S6", "rollback" or "adopt". An empty prefix
 // disables them. An injected error at state-renamed is returned although the
@@ -198,6 +202,7 @@ func Save(path string, st *State) error { return SaveCheckpointed(path, st, "") 
 func SaveCheckpointed(path string, st *State, prefix string) error {
 	out := *st
 	out.Schema = SchemaVersion
+	out.Generation = st.Generation + 1
 	if out.Quarantine == nil {
 		out.Quarantine = map[string]Quarantine{}
 	}
@@ -216,5 +221,9 @@ func SaveCheckpointed(path string, st *State, prefix string) error {
 		afterTemp = func() error { return checkpoint(prefix + ".state-temp") }
 		afterRename = func() error { return checkpoint(prefix + ".state-renamed") }
 	}
-	return writeAtomic(path, append(data, '\n'), afterTemp, afterRename)
+	if err := writeAtomic(path, append(data, '\n'), afterTemp, afterRename); err != nil {
+		return err
+	}
+	st.Generation = out.Generation
+	return nil
 }
