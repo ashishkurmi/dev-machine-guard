@@ -59,19 +59,34 @@ func decodeRuns(data []byte) []RunRecord {
 			out = append(out, r)
 		}
 	}
-	if len(out) > MaxRunRecords {
-		out = out[len(out)-MaxRunRecords:]
-	}
+	out = trimRuns(out)
 	if len(out) == 0 {
 		return nil
 	}
 	return out
 }
 
-func writeRuns(path string, recs []RunRecord) error {
-	if len(recs) > MaxRunRecords {
-		recs = recs[len(recs)-MaxRunRecords:]
+// trimRuns keeps at most MaxRunRecords, evicting the oldest closed records
+// first: an open record (its launch still running) is never dropped, or
+// that launch's marker and finalize would find nothing. Order is kept.
+func trimRuns(recs []RunRecord) []RunRecord {
+	excess := len(recs) - MaxRunRecords
+	if excess <= 0 {
+		return recs
 	}
+	out := make([]RunRecord, 0, len(recs))
+	for _, r := range recs {
+		if excess > 0 && ClassifyRun(r) != RunOpen {
+			excess--
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func writeRuns(path string, recs []RunRecord) error {
+	recs = trimRuns(recs)
 	data, err := json.Marshal(runFile{Records: recs})
 	if err != nil {
 		return err

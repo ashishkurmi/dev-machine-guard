@@ -191,3 +191,33 @@ func TestClassifyRun(t *testing.T) {
 		}
 	}
 }
+
+// D17: trimming to the last MaxRunRecords evicts the oldest CLOSED records
+// first; a record still open (its launch is running) is never evicted, so
+// its own finalize/marker still finds it.
+func TestTrimNeverEvictsOpenRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "1.19.0.json")
+	at := time.Date(2026, 10, 19, 1, 0, 0, 0, time.UTC)
+	if err := AppendRun(path, RunRecord{RunID: "long-running", Version: "1.19.0"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < MaxRunRecords+3; i++ {
+		id := fmt.Sprintf("r%d", i)
+		if err := AppendRun(path, RunRecord{RunID: id, Version: "1.19.0"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := FinalizeRun(path, id, 0, false, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recs := ReadRuns(path)
+	if len(recs) != MaxRunRecords || recs[0].RunID != "long-running" || recs[len(recs)-1].RunID != fmt.Sprintf("r%d", MaxRunRecords+2) {
+		t.Fatalf("kept %d records: first %q last %q", len(recs), recs[0].RunID, recs[len(recs)-1].RunID)
+	}
+	if err := MarkRunStarted(path, "long-running"); err != nil {
+		t.Fatalf("open record evicted: %v", err)
+	}
+	if err := FinalizeRun(path, "long-running", 0, false, at); err != nil {
+		t.Fatalf("open record evicted: %v", err)
+	}
+}
