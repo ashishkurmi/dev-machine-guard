@@ -64,8 +64,10 @@ func ReadManifest(dir string) (*Manifest, error) {
 // ErrIncomplete means a version directory lacks a file or its manifest.
 var ErrIncomplete = errors.New("updatestate: version directory incomplete")
 
-// VersionDirComplete is the cheap check: every VersionFiles entry and the
-// manifest exist as regular files. It does not hash.
+// VersionDirComplete is the updater's cheap integrity check: every
+// VersionFiles entry and the manifest exist as regular files. It does not
+// hash. (VersionDirUsable is the bootstrap's narrower launchability check:
+// agent and launcher only, no manifest.)
 func VersionDirComplete(dir string) error {
 	for _, name := range append([]string{ManifestName}, VersionFiles...) {
 		fi, err := os.Lstat(filepath.Join(dir, name))

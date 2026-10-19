@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -220,31 +219,14 @@ func normalize(st *updatestate.State) {
 	}
 }
 
-// seedVersions lists MSI seed versions that hold an agent and launcher,
-// oldest first.
+// seedVersions is the MSI seed the bootstrap would fall back to
+// (updatestate.Layout.FindSeed: the newest seed\<v> with an agent and a
+// launcher), as a slice for the keep set.
 func seedVersions(L updatestate.Layout) []updatestate.Version {
-	entries, err := os.ReadDir(filepath.Join(L.InstallRoot, "seed"))
-	if err != nil {
-		return nil
+	if v, ok := L.FindSeed(); ok {
+		return []updatestate.Version{v}
 	}
-	var out []updatestate.Version
-	for _, e := range entries {
-		v, err := updatestate.ParseVersion(e.Name())
-		if err != nil || !e.IsDir() {
-			continue
-		}
-		ok := true
-		for _, f := range []string{updatestate.AgentFile, updatestate.LauncherFile} {
-			if fi, err := os.Lstat(filepath.Join(L.SeedDir(v), f)); err != nil || !fi.Mode().IsRegular() {
-				ok = false
-			}
-		}
-		if ok {
-			out = append(out, v)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return updatestate.Compare(out[i], out[j]) < 0 })
-	return out
+	return nil
 }
 
 func (t *tick) dedupeWindow() time.Duration { return duration(knobDedupeWindow) }
