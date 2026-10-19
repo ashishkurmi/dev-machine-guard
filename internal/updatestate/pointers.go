@@ -214,3 +214,8 @@ func ResolveRunVersion(l Layout, st *State) (Version, string) {
 	}
 	return chain[0].Version, chain[0].Reason
 }
+
+// RunLockFile is the lock beside runs\<v>.json that every read-modify-write
+// of that file takes (R-B-2): the bootstrap's AppendRun/FinalizeRun and the
+// agent's MarkRunStarted, so overlapping scan tasks never lose a record.
+func (l Layout) RunLockFile(v Version) string { return l.RunFile(v) + ".lock" }

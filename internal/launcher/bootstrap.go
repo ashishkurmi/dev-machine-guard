@@ -70,8 +70,11 @@ const (
 	// defaultUpdateDeadline stays under the update task's 30 min
 	// ExecutionTimeLimit so a hung updater is recorded as a failure.
 	defaultUpdateDeadline = 25 * time.Minute
-	maxConfigSize         = 1 << 20
-	maxLogSize            = 1 << 20
+	// defaultRunLockWait bounds the wait for a run-record lock; past it the
+	// bookkeeping is skipped and the scan still runs.
+	defaultRunLockWait = 5 * time.Second
+	maxConfigSize      = 1 << 20
+	maxLogSize         = 1 << 20
 )
 
 // IsBootstrapBinary reports whether exePath is the bootstrap's file name.
@@ -99,6 +102,7 @@ type Bootstrap struct {
 	AdoptLockWait  time.Duration // adopt-seed: bounded wait for the update lock
 	RecordLockWait time.Duration // update: wait to record the updater result
 	LockPoll       time.Duration
+	RunLockWait    time.Duration // run-record lock; 0 means defaultRunLockWait
 	UpdateDeadline time.Duration
 
 	log io.Writer
@@ -291,7 +295,10 @@ func (b *Bootstrap) Run(args []string) int {
 		}
 		runFile := layout.RunFile(c.Version)
 		runID := b.NewRunID()
-		if err := updatestate.AppendRun(runFile, updatestate.RunRecord{RunID: runID, Version: c.Version.String()}); err != nil {
+		runLock := layout.RunLockFile(c.Version)
+		if err := b.withRunLock(runLock, func() error {
+			return updatestate.AppendRun(runFile, updatestate.RunRecord{RunID: runID, Version: c.Version.String()})
+		}); err != nil {
 			// Never block a scan on bookkeeping: launch without a run id,
 			// so the agent skips the started marker.
 			b.logf("run record %s: %v; launching without one", runFile, err)
@@ -308,7 +315,7 @@ func (b *Bootstrap) Run(args []string) int {
 		})
 		if !res.Started {
 			b.logf("starting %s: %v", c.Dir, res.Err)
-			b.finalize(runFile, runID, ExitCannotStart, false)
+			b.finalize(runLock, runFile, runID, ExitCannotStart, false)
 			startReason = ReasonStartFailed + ":" + c.Version.String()
 			continue
 		}
@@ -316,18 +323,45 @@ func (b *Bootstrap) Run(args []string) int {
 		if res.Killed {
 			code = ExitKilled
 		}
-		b.finalize(runFile, runID, code, res.Killed)
+		b.finalize(runLock, runFile, runID, code, res.Killed)
 		return code
 	}
 	return ExitCannotStart
 }
 
-func (b *Bootstrap) finalize(runFile, runID string, code int, killed bool) {
+func (b *Bootstrap) finalize(runLock, runFile, runID string, code int, killed bool) {
 	if runID == "" {
 		return
 	}
-	if err := updatestate.FinalizeRun(runFile, runID, code, killed, b.Now()); err != nil {
+	if err := b.withRunLock(runLock, func() error {
+		return updatestate.FinalizeRun(runFile, runID, code, killed, b.Now())
+	}); err != nil {
 		b.logf("finalizing run record %s: %v", runFile, err)
+	}
+}
+
+// withRunLock runs fn holding the run-record lock (R-B-2), waiting at most
+// RunLockWait. It returns an error, without running fn, when the lock can't
+// be taken; callers skip the bookkeeping and never block the scan.
+func (b *Bootstrap) withRunLock(path string, fn func() error) error {
+	wait := b.RunLockWait
+	if wait <= 0 {
+		wait = defaultRunLockWait
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return err
+	}
+	deadline := b.Now().Add(wait)
+	for {
+		l, err := updatestate.AcquireLock(path)
+		if err == nil {
+			defer l.Release()
+			return fn()
+		}
+		if !errors.Is(err, updatestate.ErrLocked) || !b.Now().Before(deadline) {
+			return fmt.Errorf("run-record lock %s: %w", path, err)
+		}
+		b.Sleep(b.LockPoll)
 	}
 }
 
