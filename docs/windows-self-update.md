@@ -83,10 +83,12 @@ the state on disk.
 
 ## Health, rollback and quarantine
 
-A new version is on probation until its scans prove it. Each scan launch
-is classified:
+A new version is on probation until its scans prove it. The bootstrap
+numbers every launch, and the probation counts launches numbered after
+the switch (so clock changes can't hide runs). Each is classified:
 
-- **Healthy:** the scan reached the backend (run-status `started`).
+- **Healthy:** the scan reached the backend (run-status `started`) and
+  didn't crash or get killed by the watchdog.
 - **Bad:** a crash (a Go panic, recovered or not, exits 2), a watchdog
   kill, or an exit before `started` with any other code (including
   "couldn't start the agent", 70).
