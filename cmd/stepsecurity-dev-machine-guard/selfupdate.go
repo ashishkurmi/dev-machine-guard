@@ -202,19 +202,25 @@ func newUpdateLog(path string) func(string, ...any) {
 	}
 }
 
-// parseBootstrapFallback splits STEPSEC_BOOTSTRAP_FALLBACK=<reason>[:<version>]
-// on the first ':'. to is the version the bootstrap actually ran (the
-// suffix when it is a strict x.y.z, else self); from is the version
-// state.json named.
-func parseBootstrapFallback(env, named, self string) (reason, from, to string) {
-	reason, ran, _ := strings.Cut(env, ":")
-	to = self
-	if v, _, _ := strings.Cut(ran, ":"); v != "" {
+// parseBootstrapFallback reads STEPSEC_BOOTSTRAP_FALLBACK=<reason>[:<version>]
+// as dmg-boot writes it: the reason is the part before the first ':', and
+// the suffix names the version that was missing or failed to start. Spec
+// §7: update_from = the version state.json named (the suffix, else named,
+// state.json's current); update_to = the version actually run (ran, from
+// STEPSEC_BOOTSTRAP_VERSION, else self).
+func parseBootstrapFallback(env, named, ran, self string) (reason, from, to string) {
+	reason, suffix, _ := strings.Cut(env, ":")
+	from = named
+	if v, _, _ := strings.Cut(suffix, ":"); v != "" {
 		if pv, err := updatestate.ParseVersion(v); err == nil {
-			to = pv.String()
+			from = pv.String()
 		}
 	}
-	return reason, named, to
+	to = self
+	if pv, err := updatestate.ParseVersion(ran); err == nil {
+		to = pv.String()
+	}
+	return reason, from, to
 }
 
 // reportBootstrapFallback sends update_pointer_invalid when the bootstrap
@@ -230,7 +236,7 @@ func reportBootstrapFallback() {
 	if st, _, err := updatestate.Load(updatestate.MSILayout().StateFile()); err == nil && st != nil {
 		named = st.Current
 	}
-	reason, from, to := parseBootstrapFallback(env, named, buildinfo.Version)
+	reason, from, to := parseBootstrapFallback(env, named, os.Getenv(telemetry.EnvBootstrapVersion), buildinfo.Version)
 	ctx, cancel := context.WithTimeout(context.Background(), deviceProbeTimeout)
 	defer cancel()
 	err := telemetry.PostUpdateEvent(ctx, nil, telemetry.UpdateEvent{
