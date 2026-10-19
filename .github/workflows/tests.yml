@@ -114,6 +114,8 @@ jobs:
       - run: make test
       - name: Test self-update fault injection (selfupdate_faults tag)
         run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
+      - name: Test bootstrap fault checkpoints (selfupdate_faults tag)
+        run: go test -race -count=1 -tags selfupdate_faults ./internal/launcher/
 
   # Self-update U0 harness on Linux: the trace-driven kill matrix and the
   # state corruption matrix (portable parts; Windows runs them natively in
@@ -175,6 +177,11 @@ jobs:
         run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
       - name: Authenticode against test-signed binaries (verbose, shows skips)
         run: go test -count=1 -v -run 'TestVerify|TestForgedBag|TestTrustData' ./internal/authenticode/
+      - name: Test launcher bootstrap mode and self-update tasks
+        run: |
+          go test -race -count=1 ./internal/launcher/
+          go test -race -count=1 -tags selfupdate_faults ./internal/launcher/
+          go test -race -count=1 -run 'Test(UpdateTask|ResolveBootstrapRoot|BuildCreateArgs_Bootstrap|InstallUpdateTask|Uninstall_|TerminateUnder|WaitForInstanceMutex|StopProcess)' ./internal/schtasks/
 
   smoke:
     name: Smoke Tests
