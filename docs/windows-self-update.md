@@ -30,10 +30,12 @@ HKLM\Software\StepSecurity\RunningVersion        version currently selected
 - `versions\` and `state\` are owned by SYSTEM with a protected ACL:
   SYSTEM and Administrators full control, Users read and execute. The
   updater re-applies it on every run and reports any drift.
-- The MSI never touches `versions\` or `state\`, and the updater never
-  touches the bootstrap, the seed or `AgentVersion`. A repair or upgrade
-  can't undo a self-update. An MSI only moves `current` forward to its
-  own seed, never back.
+- The updater never touches the bootstrap, the seed or `AgentVersion`.
+  The MSI touches `versions\` and `state\` only through two custom
+  actions: on install, upgrade and repair, `adopt-seed` copies the seed
+  into `versions\<seed>` and moves `current` forward to it if the seed is
+  newer (never back), and a real uninstall removes both directories. A
+  repair or upgrade therefore can't undo a self-update.
 
 ## Tasks
 
@@ -81,28 +83,63 @@ the state on disk.
 
 ## Health, rollback and quarantine
 
-A new version is on probation until its scans prove it:
+A new version is on probation until its scans prove it. Each scan launch
+is classified:
 
-- **Healthy run:** the scan reached the backend (`started`). One healthy
-  run confirms the version.
-- **Bad run:** a crash, a watchdog kill, or an exit before `started` with
-  an unexpected code. Two bad runs in a row roll back to the previous
-  version.
-- **Neutral run:** offline, or skipped because another scan was running.
-  These neither confirm nor count against the version.
+- **Healthy:** the scan reached the backend (run-status `started`).
+- **Bad:** a crash (for example a Go panic, exit 2), a watchdog kill, or
+  an exit before `started` with any code other than 0 or 1 (including
+  "couldn't start the agent").
+- **Neutral:** an exit 0 or 1 before `started` (offline, or skipped
+  because another scan was running), or a launch whose bootstrap died
+  without recording an outcome (shutdown, logoff, the task time limit).
 
-If no scan runs within 72 hours, the version is confirmed on its
-self-check alone. After six or more runs with no healthy one, it rolls
-back with a 7-day quarantine. Any other rollback quarantines the version
-permanently on that device, so it is never staged again. A fix ships as a
-new version.
+Outcome:
+
+- One healthy run confirms the version (`update_confirmed`).
+- Two bad runs with no healthy one roll back to the previous version
+  (`update_rolled_back`, reason `bad_runs`).
+- The probation window ends after 72 hours, or after 72 hourly update
+  runs, whichever comes first. If by then there were six or more runs and
+  none was healthy, the version rolls back (`inconclusive`) with a 7-day
+  quarantine. With fewer runs, the version is self-checked again: a pass
+  confirms it (`update_confirmed`, `smoke_only`), a failure rolls it back
+  (`smoke_failed`).
+
+Every other rollback, and a failed pre-switch self-check, quarantines the
+version permanently on that device, so it is never staged again. A fix
+ships as a new version.
 
 ## Turning it off
 
-Install with `AUTOUPDATE=0` to keep the device on the MSI's version. The
-update task still runs and reports `update_disabled`, so the backend
-shows how far behind the device is. See the packaging README for
-re-enabling.
+Install with `AUTOUPDATE=0` to stop taking new targets. The device stays
+on whatever version is current at that moment, which may be a
+self-updated version newer than the MSI's. The update task keeps
+running (health checks and rollback still apply) and reports
+`update_disabled` with the target it isn't taking, so the backend shows
+how far behind the device is.
+
+To go back to the MSI's own version, either re-enable self-update and
+let the tenant's target bring it there, or uninstall and reinstall the
+MSI (a fresh install starts from the seed). See the packaging README for
+the `AUTOUPDATE` values and re-enabling.
+
+## Version floor
+
+The updater refuses any target older than the first release that
+contains it (`minWindowsSelfUpdateVersion`, currently 1.19.0) and
+reports `update_refused_floor`. A version below the floor has no updater
+and would leave the device stuck. To put devices on an older release,
+deploy that release's MSI instead.
+
+## Device identity
+
+Update events are sent under the device id the SYSTEM updater resolves:
+the configured `device_id`, else the hardware serial (BIOS registry,
+then WMI), else its own cached hardware id, else `MachineGuid`. It never
+trusts the user-writable `C:\ProgramData\StepSecurity\device-id` file,
+and only a hardware result is written back to it, so a transient probe
+failure never changes the id the scans report.
 
 ## Events
 
@@ -118,9 +155,12 @@ they apply:
 `update_pointer_invalid`, `update_acl_drift`, `update_state_corrupt`,
 `update_updater_failed`.
 
-Events are saved in `state.json` in the same write as the change they
-report and are retried until the backend accepts them. Repeated failures
-are reported at most once per day per target.
+Each event is saved in `state.json` in the same write as the change it
+reports, then sent. An event the backend rejects as invalid (HTTP 400 or
+422) is dropped; any other failure is retried with a backoff of 1 hour,
+doubling up to 24 hours. Up to 64 events are kept; beyond that the
+oldest are dropped and counted. Repeated failures and refusals for the
+same target are reported at most once per day.
 
 ## Existing fleets
 

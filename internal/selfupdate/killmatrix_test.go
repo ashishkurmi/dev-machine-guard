@@ -2,7 +2,7 @@
 
 package selfupdate
 
-// U0 (harness-design.md §2): the trace-driven kill matrix. A clean run of
+// U0: the trace-driven kill matrix. A clean run of
 // each scenario under DMG_FAULT_TRACE lists every checkpoint the updater
 // passes, per tick. Then, for every traced (tick, checkpoint) and every
 // action in {kill, err, hang, diskfull}, a fresh install is driven to that

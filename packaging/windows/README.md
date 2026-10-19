@@ -88,10 +88,13 @@ has no default value:
 
 | `AUTOUPDATE` | Effect (install, upgrade and repair) |
 |--------------|--------------------------------------|
-| `0` | `configure --auto-update=false`: `"auto_update": false` in the SYSTEM-owned machine config |
-| `1` | `configure --auto-update=true`: turns self-update back on |
+| `0`, `f`, `F`, `false`, `FALSE`, `False` | `"auto_update": false` in the SYSTEM-owned machine config |
+| `1`, `t`, `T`, `true`, `TRUE`, `True` | `"auto_update": true`: turns self-update back on |
 | unset | the setting is left as it is (a fresh install uses the default: on) |
-| anything else | ignored with an error in the MSI log (`--auto-update must be true or false`); the install does not fail |
+| any other value | not applied; `configure` logs `--auto-update must be true or false` in the MSI log and the install continues |
+
+Any non-empty value runs `configure --non-interactive --auto-update=<value>`,
+which accepts exactly the values Go's `strconv.ParseBool` accepts.
 
 ```cmd
 msiexec /i stepsecurity-dev-machine-guard-<version>-x64.msi /qn ^
@@ -154,9 +157,11 @@ higher `Version`. Windows Installer treats the install as a Major
 Upgrade: silent removal of the old version followed by install of the
 new one, atomically. The old version's uninstall custom action is
 **skipped** during an upgrade (`REMOVE="ALL" AND NOT
-UPGRADINGPRODUCTCODE`), so tasks and self-update state survive an upgrade
-that fails and rolls back; the new version's `install` replaces the
-tasks. SCCM admins use the **supersedence** flow to point the new
+UPGRADINGPRODUCTCODE`), so a successful upgrade keeps the self-update
+state, and the new version's `install` replaces the tasks. Known gap: if
+an upgrade fails late and Windows Installer rolls it back, the scan tasks
+may be missing and adopt-seed's change to `state.json` is not undone;
+re-running the install (or a repair) restores the tasks. SCCM admins use the **supersedence** flow to point the new
 Application at the old one — no scripting required.
 
 An MSI upgrade never downgrades a self-updated device: if the device
@@ -167,9 +172,10 @@ Devices on an MSI older than the first self-updating release need **one
 more MSI push** (the first bootstrap MSI); after that they update
 themselves.
 
-The per-tenant `config.json` is **not** touched by upgrades — it lives
-under `C:\ProgramData\StepSecurity\` which MSI doesn't manage. Tenants
-stay configured across version bumps.
+The per-tenant `config.json` in `C:\ProgramData\StepSecurity\` is not an
+MSI component, so an upgrade never removes it and tenants stay configured
+across version bumps. It is rewritten only when the upgrade passes
+credentials (`configure`) or `AUTOUPDATE`.
 
 ## Detection method
 
