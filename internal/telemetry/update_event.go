@@ -65,6 +65,14 @@ func PostUpdateEvent(ctx context.Context, client *http.Client, ev UpdateEvent) e
 	if ev.DeviceID == "" {
 		return errors.New("no device id")
 	}
+	// agent-api requires install_channel and, for a rollback, update_from;
+	// such an event can never be accepted, so it is reported as rejected.
+	if ev.InstallChannel != "msi" && ev.InstallChannel != "loader" {
+		return fmt.Errorf("%w: install_channel %q", ErrUpdateEventRejected, ev.InstallChannel)
+	}
+	if ev.Event == "update_rolled_back" && ev.From == "" {
+		return fmt.Errorf("%w: update_rolled_back without update_from", ErrUpdateEventRejected)
+	}
 	if len(ev.Error) > updateEventMaxError {
 		ev.Error = ev.Error[:updateEventMaxError]
 	}

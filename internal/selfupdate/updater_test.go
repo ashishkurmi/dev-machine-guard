@@ -606,3 +606,39 @@ func TestGCKeepsPointersAndSweepsLeftovers(t *testing.T) {
 		t.Fatalf("versions = %v", names)
 	}
 }
+
+// D9: every event gets its own execution_id; a retried event (carried in
+// the outbox to a later tick) keeps its id.
+func TestEventExecutionIDs(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.drift = []string{"versions"}
+	e.sendErr = errors.New("backend down")
+	e.tick()
+	pending := e.state().Outbox
+	if len(pending) != 2 {
+		t.Fatalf("outbox = %+v", pending)
+	}
+	if pending[0].ExecutionID == pending[1].ExecutionID || pending[0].ExecutionID == "" {
+		t.Fatalf("events share an execution_id: %+v", pending)
+	}
+	e.sendErr = nil
+	e.now = e.now.Add(time.Hour)
+	e.tick()
+	ids := map[string]bool{}
+	for _, ev := range e.all {
+		ids[ev.ExecutionID] = true
+		if ev.Event == EventRolledBack && ev.From == "" {
+			t.Fatal("update_rolled_back without update_from")
+		}
+	}
+	for _, p := range pending {
+		if !ids[p.ExecutionID] {
+			t.Fatalf("retry of %s used a new execution_id", p.Event)
+		}
+	}
+	if len(ids) != len(e.all) {
+		t.Fatalf("delivered events reuse ids: %+v", e.all)
+	}
+}

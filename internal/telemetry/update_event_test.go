@@ -99,6 +99,18 @@ func TestPostUpdateEventRetriesAndRejects(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("4xx retried: %d", calls.Load())
 	}
+	calls.Store(0)
+	for _, bad := range []UpdateEvent{
+		{ExecutionID: "e", DeviceID: "d", Event: "update_ok"},
+		{ExecutionID: "e", DeviceID: "d", InstallChannel: "msi", Event: "update_rolled_back", To: "1.19.0"},
+	} {
+		if err := PostUpdateEvent(context.Background(), srv.Client(), bad); !errors.Is(err, ErrUpdateEventRejected) {
+			t.Fatalf("%+v: %v", bad, err)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatal("invalid event reached the backend")
+	}
 	ev.DeviceID = ""
 	if err := PostUpdateEvent(context.Background(), srv.Client(), ev); err == nil {
 		t.Fatal("event without device id posted")
