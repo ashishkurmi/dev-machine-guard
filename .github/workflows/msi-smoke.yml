@@ -216,14 +216,20 @@ jobs:
             Check ($u.Task.Triggers.BootTrigger.Delay -eq 'PT15M') "update task at boot + 15 min"
           }
           function AssertProtected($dir) {
+            # Exact: protected DACL, owner SYSTEM, and exactly these three
+            # explicit ACEs. Any extra ACE (e.g. Users:Modify) fails (R-B-3).
             $acl = Get-Acl $dir
-            Check ($acl.Owner -match 'SYSTEM') "$dir owner SYSTEM ($($acl.Owner))"
+            Check ($acl.Owner -eq 'NT AUTHORITY\SYSTEM') "$dir owner SYSTEM ($($acl.Owner))"
             Check $acl.AreAccessRulesProtected "$dir DACL protected (inheritance off)"
-            $rules = $acl.Access | ForEach-Object { "$($_.IdentityReference)=$($_.FileSystemRights)" }
-            Check ($rules -contains 'NT AUTHORITY\SYSTEM=FullControl') "$dir SYSTEM full"
-            Check ($rules -contains 'BUILTIN\Administrators=FullControl') "$dir Administrators full"
-            Check ($rules -contains 'BUILTIN\Users=ReadAndExecute, Synchronize') "$dir Users read/execute ($($rules -join '; '))"
-            Check (-not ($acl.Access | Where-Object { $_.IsInherited })) "$dir has no inherited ACEs"
+            $got = @($acl.Access | ForEach-Object {
+              "$($_.AccessControlType)|$($_.IdentityReference)|$($_.FileSystemRights)|$($_.InheritanceFlags)|$($_.IsInherited)"
+            } | Sort-Object)
+            $want = @(
+              'Allow|BUILTIN\Administrators|FullControl|ContainerInherit, ObjectInherit|False',
+              'Allow|BUILTIN\Users|ReadAndExecute, Synchronize|ContainerInherit, ObjectInherit|False',
+              'Allow|NT AUTHORITY\SYSTEM|FullControl|ContainerInherit, ObjectInherit|False'
+            ) | Sort-Object
+            Check (($got -join "`n") -eq ($want -join "`n")) "$dir DACL is exactly SYSTEM F, Administrators F, Users RX:`n  got: $($got -join '; ')"
           }
           '@ | Set-Content -Path "$env:RUNNER_TEMP\dmg-assert.ps1"
 
