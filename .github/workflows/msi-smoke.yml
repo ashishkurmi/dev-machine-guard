@@ -340,7 +340,7 @@ jobs:
           Check ($code -eq 0) "msiexec /fa exit 0 ($code)"
           $s = State
           Check ($s.current -eq "99.0.0" -and $s.previous -eq $ver) "repair kept current 99.0.0 (got $($s.current)/$($s.previous))"
-          Check (AutoUpdate -eq 'false') "repair left auto_update false (got $(AutoUpdate))"
+          Check ((AutoUpdate) -eq 'false') "repair left auto_update false (got $(AutoUpdate))"
           AssertTasks
           Done
 
@@ -356,7 +356,7 @@ jobs:
             "INSTALLED_MSI=dist\dmg-smoke-next.msi" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
           # Unset AUTOUPDATE against a false baseline: must stay false (R-B-8).
-          Check (AutoUpdate -eq 'false') "upgrade without AUTOUPDATE left auto_update false (got $(AutoUpdate))"
+          Check ((AutoUpdate) -eq 'false') "upgrade without AUTOUPDATE left auto_update false (got $(AutoUpdate))"
           Check (UsableDir "$root\seed\$next") "seed\$next installed"
           Check (-not (Test-Path "$root\seed\$env:MSI_VERSION")) "old seed removed"
           Check (UsableDir "$root\versions\$next") "versions\$next adopted"
@@ -382,14 +382,14 @@ jobs:
           # properties, so it is /i with REINSTALL=ALL REINSTALLMODE=omus.
           $code = Msi @("/i", $env:INSTALLED_MSI, "/qn", "REINSTALL=ALL", "REINSTALLMODE=omus", "AUTOUPDATE=1") "dist\dmg-reenable.log"
           Check ($code -eq 0) "reinstall with AUTOUPDATE=1 exit 0 ($code)"
-          Check (AutoUpdate -eq 'true') "AUTOUPDATE=1 re-enabled auto_update (got $(AutoUpdate))"
+          Check ((AutoUpdate) -eq 'true') "AUTOUPDATE=1 re-enabled auto_update (got $(AutoUpdate))"
           Check ((State).current -eq "99.0.0") "reinstall kept current 99.0.0"
 
           # Any other value: logged as a warning in the MSI log, no failure,
           # setting unchanged.
           $code = Msi @("/i", $env:INSTALLED_MSI, "/qn", "REINSTALL=ALL", "REINSTALLMODE=omus", "AUTOUPDATE=maybe") "dist\dmg-badvalue.log"
           Check ($code -eq 0) "reinstall with AUTOUPDATE=maybe exit 0 ($code)"
-          Check (AutoUpdate -eq 'true') "AUTOUPDATE=maybe left auto_update true (got $(AutoUpdate))"
+          Check ((AutoUpdate) -eq 'true') "AUTOUPDATE=maybe left auto_update true (got $(AutoUpdate))"
           $warned = Select-String -Path "dist\dmg-badvalue.log" -Pattern 'auto-update must be true or false' -SimpleMatch -Quiet
           Check $warned "AUTOUPDATE=maybe: configure's rejection is in the MSI log"
           Done
@@ -439,7 +439,7 @@ jobs:
           $code = Msi @("/i", "dist\dmg-smoke.msi", "/qn", "CUSTOMERID=ci-smoke", "APIENDPOINT=https://api.invalid.example", "APIKEY=ci-test-fake-api-key") "dist\dmg-fresh.log"
           Check ($code -eq 0) "fresh install exit 0 ($code)"
           Check (Test-Path "$data\config.json") "config written"
-          Check (AutoUpdate -ne 'false') "unset AUTOUPDATE: auto_update not written false (got '$(AutoUpdate)', missing = on)"
+          Check ((AutoUpdate) -ne 'false') "unset AUTOUPDATE: auto_update not written false (got '$(AutoUpdate)', missing = on)"
           $code = Msi @("/x", "dist\dmg-smoke.msi", "/qn") "dist\dmg-fresh-uninstall.log"
           Check ($code -eq 0) "uninstall exit 0 ($code)"
           Done
