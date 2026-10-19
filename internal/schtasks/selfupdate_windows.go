@@ -82,10 +82,9 @@ func terminateUnder(root string, log *progress.Logger) error {
 		if qerr := windows.QueryFullProcessImageName(h, 0, &buf[0], &n); qerr == nil {
 			img := windows.UTF16ToString(buf[:n])
 			if strings.HasPrefix(strings.ToLower(img), prefix) {
-				if terr := windows.TerminateProcess(h, 1); terr != nil {
-					errs = append(errs, fmt.Errorf("terminating %s (pid %d): %w", img, pe.ProcessID, terr))
+				if serr := stopProcess(h); serr != nil {
+					errs = append(errs, fmt.Errorf("terminating %s (pid %d): %w", img, pe.ProcessID, serr))
 				} else {
-					_, _ = windows.WaitForSingleObject(h, 5000)
 					log.Progress("Stopped running DMG process %s (pid %d)", img, pe.ProcessID)
 				}
 			}
@@ -93,6 +92,21 @@ func terminateUnder(root string, log *progress.Logger) error {
 		_ = windows.CloseHandle(h)
 	}
 	return errors.Join(errs...)
+}
+
+// stopProcess terminates the process and waits up to 5 s for it to exit.
+// A process that is already exiting (for example killed by its kill-on-close
+// job when its parent bootstrap died) rejects TerminateProcess with
+// ACCESS_DENIED; what counts is whether it is gone, so that is not an error.
+func stopProcess(h windows.Handle) error {
+	terr := windows.TerminateProcess(h, 1)
+	if ev, _ := windows.WaitForSingleObject(h, 5000); ev == windows.WAIT_OBJECT_0 {
+		return nil
+	}
+	if terr != nil {
+		return terr
+	}
+	return errors.New("still running 5 s after TerminateProcess")
 }
 
 // deleteRunningVersionPlatform removes HKLM\Software\StepSecurity\RunningVersion

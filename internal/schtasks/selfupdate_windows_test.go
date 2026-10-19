@@ -142,3 +142,21 @@ func TestWaitForInstanceMutex(t *testing.T) {
 		t.Fatalf("wait not bounded: %s", el)
 	}
 }
+
+// A process that is already exiting (here: exited, handle still open) makes
+// TerminateProcess fail with ACCESS_DENIED. That happens in uninstall when
+// killing the bootstrap first makes its job kill the launcher and agent;
+// stopProcess must count it as stopped, not as an error.
+func TestStopProcess_AlreadyExitingIsStopped(t *testing.T) {
+	cmd := startSleeper(t, os.Args[0])
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(cmd.Process.Pid)) // #nosec G115 -- test pid
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(h)
+	_ = cmd.Process.Kill()
+	_, _ = cmd.Process.Wait()
+	if err := stopProcess(h); err != nil {
+		t.Fatalf("stopProcess on an exited process: %v", err)
+	}
+}

@@ -216,6 +216,19 @@ var (
 	deleteRunningVerReg = deleteRunningVersionPlatform
 )
 
+// removeAllRetry retries RemoveAll briefly: an image whose process was just
+// terminated (or an AV scanner's handle) can keep a file locked for a moment.
+func removeAllRetry(dir string) error {
+	var err error
+	for i := 0; i < 5; i++ {
+		if err = os.RemoveAll(dir); err == nil {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return err
+}
+
 // uninstallBootstrap is the MSI bootstrap uninstall (spec §5): delete all 3
 // tasks, stop running DMG processes, then remove versions\, state\ and the
 // RunningVersion value. ProgramData is left alone (M-8 is out of scope).
@@ -232,7 +245,7 @@ func uninstallBootstrap(ctx context.Context, exec executor.Executor, log *progre
 	}
 	layout := updatestate.Layout{InstallRoot: root}
 	for _, dir := range []string{layout.VersionsDir(), layout.StateDir()} {
-		if err := os.RemoveAll(dir); err != nil {
+		if err := removeAllRetry(dir); err != nil {
 			errs = append(errs, fmt.Errorf("removing %s: %w", dir, err))
 		} else {
 			log.Debug("removed %s", dir)

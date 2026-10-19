@@ -181,7 +181,7 @@ jobs:
         run: |
           go test -race -count=1 ./internal/launcher/
           go test -race -count=1 -tags selfupdate_faults ./internal/launcher/
-          go test -race -count=1 -run 'Test(UpdateTask|ResolveBootstrapRoot|BuildCreateArgs_Bootstrap|InstallUpdateTask|Uninstall_|TerminateUnder|WaitForInstanceMutex)' ./internal/schtasks/
+          go test -race -count=1 -run 'Test(UpdateTask|ResolveBootstrapRoot|BuildCreateArgs_Bootstrap|InstallUpdateTask|Uninstall_|TerminateUnder|WaitForInstanceMutex|StopProcess)' ./internal/schtasks/
 
   smoke:
     name: Smoke Tests
