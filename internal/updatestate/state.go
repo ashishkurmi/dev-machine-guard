@@ -123,6 +123,12 @@ func decodeState(data []byte) (*State, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
+	if s.Quarantine == nil {
+		s.Quarantine = map[string]Quarantine{}
+	}
+	if s.Dedupe == nil {
+		s.Dedupe = map[string]time.Time{}
+	}
 	return &s, nil
 }
 

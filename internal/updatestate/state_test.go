@@ -262,3 +262,26 @@ func TestUnknownFieldsSurviveSave(t *testing.T) {
 		t.Fatal("until lost on reload")
 	}
 }
+
+// R-F1-3: a valid state that omits or nulls the maps loads with empty,
+// writable maps.
+func TestLoadNeverReturnsNilMaps(t *testing.T) {
+	for _, body := range []string{
+		`{"schema":1,"current":"1.2.3"}`,
+		`{"schema":1,"current":"1.2.3","quarantine":null,"dedupe":null}`,
+	} {
+		path := filepath.Join(t.TempDir(), "state.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		st, corrupt, err := Load(path)
+		if err != nil || corrupt || st == nil {
+			t.Fatalf("%s: %v corrupt=%v", body, err, corrupt)
+		}
+		if st.Quarantine == nil || st.Dedupe == nil {
+			t.Fatalf("%s: nil maps", body)
+		}
+		st.Quarantine["1.2.4"] = Quarantine{Reason: "x"}
+		st.Dedupe["k"] = time.Now()
+	}
+}
