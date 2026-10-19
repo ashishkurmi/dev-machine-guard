@@ -50,6 +50,16 @@ func (u Updater) MarshalJSON() ([]byte, error) {
 	return encodeKeepingUnknown(plain(u), u.Extra)
 }
 
+func (o *OutboxEvent) UnmarshalJSON(b []byte) error {
+	type plain OutboxEvent
+	return decodeKeepingUnknown(b, (*plain)(o), &o.Extra)
+}
+
+func (o OutboxEvent) MarshalJSON() ([]byte, error) {
+	type plain OutboxEvent
+	return encodeKeepingUnknown(plain(o), o.Extra)
+}
+
 // decodeKeepingUnknown decodes b into dst (a struct pointer) and stores the
 // keys no field claims in *extra. Matching is case-insensitive, as in
 // encoding/json.

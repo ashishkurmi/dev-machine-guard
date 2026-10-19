@@ -230,6 +230,7 @@ func TestUnknownFieldsSurviveSave(t *testing.T) {
 	 "probation":{"version":"1.20.0","since":"2026-10-19T00:00:00Z","ok":0,"bad":1,"smoke_ok":true,"future_p":"x"},
 	 "quarantine":{"1.18.0":{"reason":"inconclusive","at":"2026-10-19T00:00:00Z","until":"2026-10-26T00:00:00Z","future_q":7}},
 	 "updater":{"version":"1.19.0","consecutive_failures":0,"future_u":true},
+	 "outbox":[{"execution_id":"e1","update_event":"update_ok","at":"2026-10-19T00:00:00Z","future_o":{"k":1}}],
 	 "switch_deferrals":0,"dedupe":{}}`
 	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
 		t.Fatal(err)
@@ -254,6 +255,10 @@ func TestUnknownFieldsSurviveSave(t *testing.T) {
 	p := out["probation"].(map[string]any)
 	q := out["quarantine"].(map[string]any)["1.18.0"].(map[string]any)
 	u := out["updater"].(map[string]any)
+	o := out["outbox"].([]any)[0].(map[string]any)
+	if fmt.Sprint(o["future_o"]) != "map[k:1]" || o["execution_id"] != "e1" {
+		t.Fatalf("outbox entry: %s", data)
+	}
 	if p["future_p"] != "x" || p["bad"] != float64(2) || q["future_q"] != float64(7) || q["until"] != "2026-10-26T00:00:00Z" || u["future_u"] != true {
 		t.Fatalf("nested: %s", data)
 	}

@@ -49,6 +49,8 @@ type OutboxEvent struct {
 	To          string    `json:"update_to,omitempty"`
 	Error       string    `json:"error_message,omitempty"`
 	At          time.Time `json:"at"`
+
+	Extra map[string]json.RawMessage `json:"-"` // unknown keys, kept on Save
 }
 
 // Probation tracks a newly switched-to version until it is confirmed or
