@@ -83,21 +83,25 @@ signed release into `versions\<v>\` and switches `state.json` to it; the
 next scan runs it, and a version that fails its health check is rolled
 back. Self-update never changes `AgentVersion` or the ProductCode.
 
-Self-update is on by default. To opt a device out, pass `AUTOUPDATE=0`:
+Self-update is on by default. The `AUTOUPDATE` property controls it and
+has no default value:
+
+| `AUTOUPDATE` | Effect (install, upgrade and repair) |
+|--------------|--------------------------------------|
+| `0` | `configure --auto-update=false`: `"auto_update": false` in the SYSTEM-owned machine config |
+| `1` | `configure --auto-update=true`: turns self-update back on |
+| unset | the setting is left as it is (a fresh install uses the default: on) |
 
 ```cmd
 msiexec /i stepsecurity-dev-machine-guard-<version>-x64.msi /qn ^
   BOOTSTRAPFILE="C:\ProgramData\StepSecurity\bootstrap.json" AUTOUPDATE=0
 ```
 
-This writes `"auto_update": false` into the SYSTEM-owned machine config
-(on install, upgrade and repair). The update task keeps running and
-reports `update_disabled` with the version it is not taking. The default
-`AUTOUPDATE=1` writes nothing, so a later MSI run without `AUTOUPDATE=0`
-does **not** turn self-update back on; re-enable it with
-`stepsecurity-dev-machine-guard.exe configure --non-interactive
---auto-update=true` (as an administrator) or by redeploying
-`BOOTSTRAPFILE` without `auto_update`.
+An opted-out device's update task keeps running and reports
+`update_disabled` with the version it is not taking. To re-enable,
+redeploy with `AUTOUPDATE=1`, or repair in place with
+`msiexec /i <msi> /qn REINSTALL=ALL REINSTALLMODE=omus AUTOUPDATE=1`
+(`msiexec /f` ignores properties, so a plain `/f` repair can't change it).
 
 ## How tenants pass credentials
 

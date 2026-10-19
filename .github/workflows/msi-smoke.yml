@@ -146,6 +146,7 @@ jobs:
             "APIENDPOINT=https://api.invalid.example",
             "APIKEY=ci-test-fake-api-key",
             "SCANFREQUENCY=4",
+            "AUTOUPDATE=0",
             "/l*v", "dist\dmg-install.log"
           ) -Wait -PassThru
           Write-Host "msiexec exit: $($p.ExitCode)"
@@ -260,10 +261,10 @@ jobs:
           $av = (Get-ItemProperty -Path 'HKLM:\Software\StepSecurity' -Name AgentVersion -ErrorAction SilentlyContinue).AgentVersion
           Check ($av -eq $ver) "AgentVersion = $ver ($av)"
 
-          # 4. Machine-wide config with our values; AUTOUPDATE defaults on.
+          # 4. Machine-wide config with our values; installed with AUTOUPDATE=0.
           $content = Get-Content $cfg -Raw
           Check ($content -match '"customer_id"\s*:\s*"ci-smoke"' -and $content -match '"api_key"\s*:\s*"ci-test-fake-api-key"') "config written with expected values"
-          Check ($content -notmatch '"auto_update"\s*:\s*false') "config not opted out of self-update (AUTOUPDATE default)"
+          Check ($content -match '"auto_update"\s*:\s*false') "AUTOUPDATE=0 wrote auto_update false"
 
           # 5. config.json ACL hardening: Users R, Admins + SYSTEM F.
           $acl = & icacls $cfg | Out-String
@@ -320,8 +321,11 @@ jobs:
           # And a deleted scan task, which the repair must restore.
           schtasks /delete /tn $tasks[0] /f | Out-Null
 
-          $code = Msi @("/fa", $env:INSTALLED_MSI, "/qn") "dist\dmg-repair.log"
-          Check ($code -eq 0) "msiexec /fa exit 0 ($code)"
+          # msiexec /f ignores public properties, so the repair that also sets
+          # AUTOUPDATE=1 is a reinstall: /i with REINSTALL=ALL ('a' = all files, like /fa).
+          $code = Msi @("/i", $env:INSTALLED_MSI, "/qn", "REINSTALL=ALL", "REINSTALLMODE=amus", "AUTOUPDATE=1") "dist\dmg-repair.log"
+          Check ($code -eq 0) "repair (REINSTALL=ALL) exit 0 ($code)"
+          Check ((Get-Content "$data\config.json" -Raw) -match '"auto_update"\s*:\s*true') "repair with AUTOUPDATE=1 re-enabled auto_update"
           $s = State
           Check ($s.current -eq "99.0.0" -and $s.previous -eq $ver) "repair kept current 99.0.0 (got $($s.current)/$($s.previous))"
           AssertTasks
@@ -335,6 +339,7 @@ jobs:
           $next = $env:MSI_NEXT_VERSION
           $code = Msi @("/i", "dist\dmg-smoke-next.msi", "/qn") "dist\dmg-upgrade.log"
           Check ($code -eq 0) "upgrade msiexec exit 0 ($code)"
+          Check ((Get-Content "$data\config.json" -Raw) -match '"auto_update"\s*:\s*true') "upgrade without AUTOUPDATE left auto_update unchanged (true)"
           if ($code -eq 0) {
             "INSTALLED_MSI=dist\dmg-smoke-next.msi" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }

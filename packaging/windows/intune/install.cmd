@@ -20,6 +20,6 @@ REM /norestart: never let a quiet install reboot a developer machine; a
 REM reboot-required result is returned as 3010 for Intune to handle.
 REM Forward all args (%*) so MSI public properties like APIKEY, CUSTOMERID,
 REM APIENDPOINT, SCANFREQUENCY, AUTOUPDATE pass through from Intune's install
-REM command (AUTOUPDATE=0 opts the device out of self-update).
+REM command (AUTOUPDATE=0 opts the device out of self-update, AUTOUPDATE=1 back in).
 msiexec /i "%MSI%" /qn /norestart /l*v "%LOG%" %*
 exit /b %ERRORLEVEL%
