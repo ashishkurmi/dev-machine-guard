@@ -832,3 +832,19 @@ func TestQuarantineUntilClamped(t *testing.T) {
 		t.Fatalf("until not clamped: %v", u)
 	}
 }
+
+// D15/R-C2-5: six runs with no started marker are inconclusive even when
+// one of them was Bad; that is not a smoke-only promotion.
+func TestInconclusiveCountsBadRuns(t *testing.T) {
+	e := newEnv(t)
+	probationState(t, e)
+	e.addRun("1.20.0", false, 0xC0000005)
+	for i := 0; i < 5; i++ {
+		e.addRun("1.20.0", false, 1)
+	}
+	e.now = e.now.Add(73 * time.Hour)
+	e.tick()
+	if rb := e.lastSentOrNil(EventRolledBack); rb == nil || rb.Error != ReasonInconclusive {
+		t.Fatalf("want an inconclusive rollback, got %v (events %v)", rb, e.events())
+	}
+}

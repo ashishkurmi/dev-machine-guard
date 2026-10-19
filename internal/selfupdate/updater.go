@@ -401,7 +401,8 @@ func (t *tick) health(ctx context.Context) (closed bool, err error) {
 		return true, t.rollback(ReasonBadRuns, time.Time{})
 	case t.now.Sub(p.Since) < window && p.Ticks < probationTicks(window):
 		return false, nil
-	case neutral >= inconclusiveMinRuns:
+	case neutral+bad >= inconclusiveMinRuns:
+		// ≥6 runs and none Healthy (D5): scans don't start on this version.
 		return true, t.rollback(ReasonInconclusive, t.now.Add(inconclusiveRetry).UTC())
 	}
 	// Window over with too few runs to judge: re-smoke, then promote on it.
