@@ -28,6 +28,24 @@ type State struct {
 	Updater         Updater               `json:"updater"`
 	SwitchDeferrals int                   `json:"switch_deferrals"`
 	Dedupe          map[string]time.Time  `json:"dedupe"`
+
+	// Additive fields (schema 1 readers ignore them).
+
+	// LastCheck is when the updater last asked latest-binary for a target.
+	LastCheck time.Time `json:"last_check,omitzero"`
+	// Outbox holds update events not yet accepted by the backend. Events
+	// are added in the same atomic write as the state change they report.
+	Outbox []OutboxEvent `json:"outbox,omitempty"`
+}
+
+// OutboxEvent is a pending update event (spec Contracts: Update event).
+type OutboxEvent struct {
+	ExecutionID string    `json:"execution_id"`
+	Event       string    `json:"update_event"`
+	From        string    `json:"update_from,omitempty"`
+	To          string    `json:"update_to,omitempty"`
+	Error       string    `json:"error_message,omitempty"`
+	At          time.Time `json:"at"`
 }
 
 // Probation tracks a newly switched-to version until it is confirmed or
@@ -43,6 +61,9 @@ type Probation struct {
 type Quarantine struct {
 	Reason string    `json:"reason"`
 	At     time.Time `json:"at"`
+	// Until, when set, ends the quarantine (D5: inconclusive probation).
+	// Zero means permanent.
+	Until time.Time `json:"until,omitzero"`
 }
 
 // Updater records which version last ran the updater and how often in a

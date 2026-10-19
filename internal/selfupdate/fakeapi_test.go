@@ -40,10 +40,8 @@ type fakeAPI struct {
 }
 
 // newFakeAPI serves over TLS (srv.Client trusts it) so the HTTPS-only mirror
-// rule holds; newFakeAPIPlain serves plain HTTP for subprocess tests.
+// rule holds.
 func newFakeAPI(t testing.TB) *fakeAPI { return startFakeAPI(t, true) }
-
-func newFakeAPIPlain(t testing.TB) *fakeAPI { return startFakeAPI(t, false) }
 
 func startFakeAPI(t testing.TB, useTLS bool) *fakeAPI {
 	f := &fakeAPI{
@@ -161,19 +159,6 @@ func (f *fakeAPI) runStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	f.events = append(f.events, body)
 	w.WriteHeader(http.StatusOK)
-}
-
-// eventNames lists the update_event of every accepted update post.
-func (f *fakeAPI) eventNames() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []string
-	for _, e := range f.events {
-		if e["status"] == "update" {
-			out = append(out, fmt.Sprint(e["update_event"]))
-		}
-	}
-	return out
 }
 
 func (f *fakeAPI) client(arch string) *Client {

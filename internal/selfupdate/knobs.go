@@ -21,7 +21,13 @@ var knobDefaults = map[knob]time.Duration{
 	knobSmokeTimeout:    60 * time.Second,
 }
 
+// knobOverrides is set by in-package tests only.
+var knobOverrides = map[knob]time.Duration{}
+
 func duration(k knob) time.Duration {
+	if d, ok := knobOverrides[k]; ok {
+		return d
+	}
 	if d, ok := testDuration(k); ok {
 		return d
 	}
