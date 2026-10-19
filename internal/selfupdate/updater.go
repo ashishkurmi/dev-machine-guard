@@ -256,7 +256,7 @@ func enqueueTo(st *updatestate.State, now time.Time, window time.Duration, event
 }
 
 // sweep is S1: temp/staging/trash cleanup, GC, ACLs, device id, dedupe and
-// quarantine expiry, updater-failure report. Never fatal.
+// quarantine expiry. Never fatal.
 func (t *tick) sweep(ctx context.Context) {
 	updatestate.SweepTemps(t.L.StateFile())
 	if t.d.EnsureACLs != nil {
@@ -283,6 +283,12 @@ func (t *tick) sweep(ctx context.Context) {
 			delete(t.st.Quarantine, v)
 		}
 	}
+}
+
+// reportUpdaterFailure runs only after this tick reached latest-binary: a
+// fallback updater that can reach the backend shows the primary's failures
+// were its own, not an outage. Otherwise the counter waits for a later tick.
+func (t *tick) reportUpdaterFailure() {
 	if u := t.st.Updater; u.ConsecutiveFailures >= updaterFailureLimit && u.Version != "" && u.Version != t.d.Self.String() {
 		t.enqueue(EventUpdaterFailed, u.Version, t.d.Self.String(),
 			fmt.Sprintf("updater %s failed %d times in a row; running the %s updater", u.Version, u.ConsecutiveFailures, t.d.Self),
@@ -520,6 +526,7 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 		t.enqueue(EventCheckFailed, st.Current, "", err.Error(), EventCheckFailed)
 		return t.finish(ctx, ExitFailed)
 	}
+	t.reportUpdaterFailure()
 	if err := checkpoint("S3.target"); err != nil {
 		return t.finish(ctx, ExitFailed)
 	}

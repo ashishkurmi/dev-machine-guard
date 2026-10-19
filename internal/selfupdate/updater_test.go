@@ -572,7 +572,6 @@ func TestACLDriftAndUpdaterFailureReported(t *testing.T) {
 	e.installVersion("1.20.0")
 	st := baseState("1.20.0", "")
 	st.Updater = updatestate.Updater{Version: "1.20.0", ConsecutiveFailures: 3}
-	st.LastCheck = e.now
 	e.writeState(st)
 	e.drift = []string{"versions"}
 	e.tick()
@@ -654,5 +653,32 @@ func TestMissingLinuxFieldsReportVerifyFailed(t *testing.T) {
 	wantEvents(t, e.events(), EventVerifyFailed)
 	if len(e.api.githubHits) != 0 {
 		t.Fatalf("downloaded before verification: %v", e.api.githubHits)
+	}
+}
+
+// D11: the fallback updater reports update_updater_failed only on a tick
+// where it reached latest-binary itself; during an outage the primary's
+// failures prove nothing.
+func TestUpdaterFailedOnlyAfterReachingBackend(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.20.0")
+	st := baseState("1.20.0", "")
+	st.Updater = updatestate.Updater{Version: "1.20.0", ConsecutiveFailures: 3}
+	e.writeState(st)
+	e.api.metaStatus = 503
+	e.tick()
+	if got := e.events(); slices.Contains(got, EventUpdaterFailed) {
+		t.Fatalf("reported during an outage: %v", got)
+	}
+	e.api.metaStatus = 0
+	e.now = e.now.Add(time.Hour) // no target check due: still not reported
+	e.tick()
+	if got := e.events(); slices.Contains(got, EventUpdaterFailed) {
+		t.Fatalf("reported without reaching the backend: %v", got)
+	}
+	e.now = e.now.Add(6 * time.Hour)
+	e.tick()
+	if got := e.events(); !slices.Contains(got, EventUpdaterFailed) {
+		t.Fatalf("not reported once the backend answered: %v", got)
 	}
 }
