@@ -3,6 +3,8 @@
 package authenticode
 
 import (
+	"bytes"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"unsafe"
@@ -32,26 +34,88 @@ func newTrustData(file *windows.WinTrustFileInfo) *windows.WinTrustData {
 	return data
 }
 
-// winVerifyTrust runs WINTRUST_ACTION_GENERIC_VERIFY_V2 on path with no UI
-// and no revocation checks (offline devices must not fail). Chain building
-// may still fetch missing roots through Windows root auto-update.
-func winVerifyTrust(path string) error {
+var (
+	modwintrust                        = windows.NewLazySystemDLL("wintrust.dll")
+	procWTHelperProvDataFromStateData  = modwintrust.NewProc("WTHelperProvDataFromStateData")
+	procWTHelperGetProvSignerFromChain = modwintrust.NewProc("WTHelperGetProvSignerFromChain")
+)
+
+// cryptProviderCert is the head of CRYPT_PROVIDER_CERT.
+type cryptProviderCert struct {
+	_     uint32 // cbStruct
+	pCert *windows.CertContext
+}
+
+// cryptProviderSgnr is CRYPT_PROVIDER_SGNR (wintrust.h).
+type cryptProviderSgnr struct {
+	_                uint32           // cbStruct
+	_                windows.Filetime // sftVerifyAsOf
+	csCertChain      uint32
+	pasCertChain     *cryptProviderCert
+	_                uint32         // dwSignerType
+	_                unsafe.Pointer // psSigner
+	_                uint32         // dwError
+	csCounterSigners uint32
+	_                unsafe.Pointer // pasCounterSigners
+	_                unsafe.Pointer // pChainContext
+}
+
+// verifyTrusted runs WINTRUST_ACTION_GENERIC_VERIFY_V2 on path (no UI, no
+// revocation) and, while the state data is still open, reads the primary
+// signer's validated chain: the leaf certificate's subject and the
+// countersigner count. Chain building may still fetch missing roots through
+// Windows root auto-update.
+func verifyTrusted(path string) (*trustedSigner, error) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	file := &windows.WinTrustFileInfo{FilePath: p}
 	file.Size = uint32(unsafe.Sizeof(*file))
 	data := newTrustData(file)
 	verr := windows.WinVerifyTrustEx(windows.InvalidHWND, &windows.WINTRUST_ACTION_GENERIC_VERIFY_V2, data)
-	data.StateAction = windows.WTD_STATEACTION_CLOSE
-	_ = windows.WinVerifyTrustEx(windows.InvalidHWND, &windows.WINTRUST_ACTION_GENERIC_VERIFY_V2, data)
-	if verr == nil {
-		return nil
+	defer func() {
+		data.StateAction = windows.WTD_STATEACTION_CLOSE
+		_ = windows.WinVerifyTrustEx(windows.InvalidHWND, &windows.WINTRUST_ACTION_GENERIC_VERIFY_V2, data)
+	}()
+	if verr != nil {
+		var errno windows.Errno
+		if errors.As(verr, &errno) && (uint32(errno) == trustENoSignature || uint32(errno) == trustESubjectFormUnk) {
+			return nil, fmt.Errorf("%w: %s", ErrUnsigned, path)
+		}
+		return nil, fmt.Errorf("%w: %s: %w", ErrUntrusted, path, verr)
 	}
-	var errno windows.Errno
-	if errors.As(verr, &errno) && (uint32(errno) == trustENoSignature || uint32(errno) == trustESubjectFormUnk) {
-		return fmt.Errorf("%w: %s", ErrUnsigned, path)
+	return validatedSigner(data.StateData, path)
+}
+
+func validatedSigner(state windows.Handle, path string) (*trustedSigner, error) {
+	if err := procWTHelperProvDataFromStateData.Find(); err != nil {
+		return nil, err
 	}
-	return fmt.Errorf("%w: %s: %w", ErrUntrusted, path, verr)
+	provData, _, _ := procWTHelperProvDataFromStateData.Call(uintptr(state))
+	if provData == 0 {
+		return nil, fmt.Errorf("%w: %s: no provider data", ErrUntrusted, path)
+	}
+	sg, _, _ := procWTHelperGetProvSignerFromChain.Call(provData, 0, 0, 0)
+	if sg == 0 {
+		return nil, fmt.Errorf("%w: %s: no signer in provider data", ErrUntrusted, path)
+	}
+	// Pointer returned by wintrust, valid until WTD_STATEACTION_CLOSE.
+	sgnr := *(**cryptProviderSgnr)(unsafe.Pointer(&sg))
+	if sgnr.csCertChain == 0 || sgnr.pasCertChain == nil || sgnr.pasCertChain.pCert == nil {
+		return nil, fmt.Errorf("%w: %s: signer has no certificate chain", ErrUntrusted, path)
+	}
+	leaf := sgnr.pasCertChain.pCert
+	der := bytes.Clone(unsafe.Slice(leaf.EncodedCert, leaf.Length))
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: leaf certificate: %w", ErrUntrusted, path, err)
+	}
+	return &trustedSigner{subject: cert.Subject.String(), counterSigners: int(sgnr.csCounterSigners)}, nil
+}
+
+// winVerifyTrust reports only whether path verifies.
+func winVerifyTrust(path string) error {
+	_, err := verifyTrusted(path)
+	return err
 }

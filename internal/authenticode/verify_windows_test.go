@@ -3,9 +3,17 @@
 package authenticode
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,7 +134,7 @@ func TestVerifyUnsignedWindows(t *testing.T) {
 	// The test binary is unsigned, so without a pin no update is allowed.
 	if testPinnedSubject() == "" {
 		self, _ := os.Executable()
-		if err := samePublisher(copyExe(t), self, func(string) (*Signature, error) { return &Signature{Subject: "CN=x"}, nil }, Inspect, ""); !errors.Is(err, ErrNoPublisher) {
+		if err := samePublisher(copyExe(t), self, func(string) (*Signature, error) { return &Signature{Subject: "CN=x"}, nil }, ownSubject, ""); !errors.Is(err, ErrNoPublisher) {
 			t.Fatalf("unsigned self: %v, want ErrNoPublisher", err)
 		}
 	}
@@ -187,7 +195,7 @@ func TestVerifySignedWindows(t *testing.T) {
 	if err := SamePublisher(wrong, self); !errors.Is(err, ErrPublisherMismatch) {
 		t.Fatalf("wrong publisher: %v, want ErrPublisherMismatch", err)
 	}
-	if err := samePublisher(good, copyExe(t), Verify, Inspect, a.subject); err != nil {
+	if err := samePublisher(good, copyExe(t), Verify, ownSubject, a.subject); err != nil {
 		t.Fatalf("pinned subject: %v", err)
 	}
 }
@@ -202,5 +210,132 @@ func TestTrustDataDisablesRevocation(t *testing.T) {
 	}
 	if d.UIChoice != windows.WTD_UI_NONE || d.StateAction != windows.WTD_STATEACTION_VERIFY {
 		t.Fatalf("data = %+v", d)
+	}
+}
+
+// rewriteBag inserts extra into the PKCS#7 certificate bag of a signed PE
+// (before or after the existing certs). The bag is outside the Authenticode
+// digest, so the signature itself still verifies.
+func rewriteBag(t *testing.T, path string, extra *x509.Certificate, before bool) *x509.Certificate {
+	t.Helper()
+	img, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lfanew := binary.LittleEndian.Uint32(img[0x3c:])
+	opt := int(lfanew) + 24
+	ddOff := opt + 96
+	if binary.LittleEndian.Uint16(img[opt:]) == 0x20b {
+		ddOff = opt + 112
+	}
+	entry := ddOff + imageDirectoryEntrySec*8
+	off := binary.LittleEndian.Uint32(img[entry:])
+	blob, err := peSignature(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci contentInfo
+	if _, err := asn1.Unmarshal(blob, &ci); err != nil {
+		t.Fatal(err)
+	}
+	var sd signedData
+	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
+		t.Fatal(err)
+	}
+	certs, err := x509.ParseCertificates(sd.Certificates.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var si signerInfo
+	if _, err := asn1.Unmarshal(sd.SignerInfos.Bytes, &si); err != nil {
+		t.Fatal(err)
+	}
+	leaf := findSigner(certs, si.SID)[0]
+	if extra == nil {
+		return leaf
+	}
+	bag := sd.Certificates.Bytes
+	if before {
+		bag = append(append([]byte{}, extra.Raw...), bag...)
+	} else {
+		bag = append(append([]byte{}, bag...), extra.Raw...)
+	}
+	sd.Certificates = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: bag}
+	sdDER, err := asn1.Marshal(sd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: sdDER})
+	der, err := asn1.Marshal(contentInfo{ContentType: oidSignedData, Content: asn1.RawValue{FullBytes: inner}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wc := make([]byte, 8+len(der))
+	binary.LittleEndian.PutUint32(wc[0:], uint32(len(wc)))
+	binary.LittleEndian.PutUint16(wc[4:], 0x0200)
+	binary.LittleEndian.PutUint16(wc[6:], winCertTypePKCSSigned)
+	copy(wc[8:], der)
+	for len(wc)%8 != 0 {
+		wc = append(wc, 0)
+	}
+	out := append(img[:off:off], wc...)
+	binary.LittleEndian.PutUint32(out[entry+4:], uint32(len(wc)))
+	if err := os.WriteFile(path, out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return leaf
+}
+
+func makeLookalikeWin(t *testing.T, leaf *x509.Certificate, cn string) *x509.Certificate {
+	t.Helper()
+	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := &x509.Certificate{RawSubject: leaf.RawIssuer, PublicKey: &other.PublicKey, SerialNumber: big.NewInt(1)}
+	tmpl := &x509.Certificate{SerialNumber: leaf.SerialNumber, Subject: pkix.Name{CommonName: cn},
+		NotBefore: leaf.NotBefore, NotAfter: leaf.NotAfter, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, leaf.PublicKey, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := x509.ParseCertificate(der)
+	return c
+}
+
+// R-C1-1: a timestamped binary signed by publisher B whose bag also carries
+// a forged look-alike of B's cert with A's subject must fail a pin on A's
+// subject, wherever the forgery sits; and the subject Verify reports for a
+// clean file comes from the chain WinVerifyTrust validated.
+func TestForgedBagFailsPublisherPin(t *testing.T) {
+	requireElevated(t)
+	const tsa = "http://timestamp.digicert.com"
+	a := newTestCert(t, "DMG Test Publisher A")
+	b := newTestCert(t, "DMG Test Publisher B")
+	clean := copyExe(t)
+	if !b.sign(t, clean, tsa) {
+		t.Skip("timestamp server unreachable")
+	}
+	ts, err := verifyTrusted(clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("validated subject %q, countersigners %d", ts.subject, ts.counterSigners)
+	if ts.subject != b.subject {
+		t.Fatalf("provider subject %q, want %q", ts.subject, b.subject)
+	}
+	for _, before := range []bool{true, false} {
+		f := copyExe(t)
+		b.sign(t, f, tsa)
+		leaf := rewriteBag(t, f, nil, false)
+		rewriteBag(t, f, makeLookalikeWin(t, leaf, strings.TrimPrefix(a.subject, "CN=")), before)
+		if tsF, err := verifyTrusted(f); err == nil && tsF.subject != b.subject {
+			t.Fatalf("before=%v: WinVerifyTrust validated %q, the forged subject", before, tsF.subject)
+		}
+		if err := samePublisher(f, "", Verify, ownSubject, a.subject); err == nil {
+			t.Fatalf("before=%v: forged bag passed the publisher pin", before)
+		} else {
+			t.Logf("before=%v: refused: %v", before, err)
+		}
 	}
 }

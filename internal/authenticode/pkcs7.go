@@ -2,6 +2,7 @@ package authenticode
 
 import (
 	"bytes"
+	"crypto/sha1" // #nosec G505 -- key identifiers are SHA-1 by definition (RFC 5280 4.2.1.2)
 	"crypto/x509"
 	"debug/pe"
 	"encoding/asn1"
@@ -27,7 +28,9 @@ var (
 )
 
 // Inspect reads the primary signature of a PE file without checking trust:
-// the leaf signer subject and whether it carries a timestamp.
+// the bag's signer subject and whether it carries a timestamp. It is not a
+// publisher decision (the bag is outside the signed digest); Verify uses it
+// only to reject an ambiguous signer and to spot RFC 3161 timestamps.
 func Inspect(path string) (*Signature, error) {
 	blob, err := peSignature(path)
 	if err != nil {
@@ -135,10 +138,14 @@ func parseSignedData(der []byte) (*Signature, error) {
 	if _, err := asn1.Unmarshal(sd.SignerInfos.Bytes, &si); err != nil {
 		return nil, errMalformedSignedData
 	}
-	leaf := findSigner(certs, si.SID)
-	if leaf == nil {
+	matches := findSigner(certs, si.SID)
+	switch {
+	case len(matches) == 0:
 		return nil, fmt.Errorf("%w: signer certificate not embedded", errMalformedSignedData)
+	case len(matches) > 1:
+		return nil, fmt.Errorf("%w: %d certificates match the signer", ErrAmbiguousSigner, len(matches))
 	}
+	leaf := matches[0]
 	sig := &Signature{Subject: leaf.Subject.String()}
 	rest := si.UnsignedAttrs.Bytes
 	for len(rest) > 0 {
@@ -154,14 +161,19 @@ func parseSignedData(der []byte) (*Signature, error) {
 	return sig, nil
 }
 
-func findSigner(certs []*x509.Certificate, sid asn1.RawValue) *x509.Certificate {
+// findSigner returns every certificate matching the signer id: by
+// issuer+serial, or for a key-id SID by the SKI extension or (as Windows
+// does) the SHA-1 of the public key, so a look-alike can't hide.
+func findSigner(certs []*x509.Certificate, sid asn1.RawValue) []*x509.Certificate {
+	var out []*x509.Certificate
 	if sid.Class == asn1.ClassContextSpecific && sid.Tag == 0 {
 		for _, c := range certs {
-			if bytes.Equal(c.SubjectKeyId, sid.Bytes) {
-				return c
+			keyID := sha1.Sum(publicKeyBits(c))
+			if bytes.Equal(c.SubjectKeyId, sid.Bytes) || bytes.Equal(keyID[:], sid.Bytes) {
+				out = append(out, c)
 			}
 		}
-		return nil
+		return out
 	}
 	var ias issuerAndSerial
 	if _, err := asn1.Unmarshal(sid.FullBytes, &ias); err != nil || ias.Serial == nil {
@@ -169,8 +181,20 @@ func findSigner(certs []*x509.Certificate, sid asn1.RawValue) *x509.Certificate 
 	}
 	for _, c := range certs {
 		if bytes.Equal(c.RawIssuer, ias.Issuer.FullBytes) && c.SerialNumber.Cmp(ias.Serial) == 0 {
-			return c
+			out = append(out, c)
 		}
 	}
-	return nil
+	return out
+}
+
+// publicKeyBits is the subjectPublicKey BIT STRING content of c.
+func publicKeyBits(c *x509.Certificate) []byte {
+	var spki struct {
+		Algorithm asn1.RawValue
+		PublicKey asn1.BitString
+	}
+	if _, err := asn1.Unmarshal(c.RawSubjectPublicKeyInfo, &spki); err != nil {
+		return nil
+	}
+	return spki.PublicKey.Bytes
 }

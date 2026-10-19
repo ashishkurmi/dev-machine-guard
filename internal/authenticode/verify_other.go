@@ -2,4 +2,4 @@
 
 package authenticode
 
-func winVerifyTrust(string) error { return ErrUnsupported }
+func verifyTrusted(string) (*trustedSigner, error) { return nil, ErrUnsupported }

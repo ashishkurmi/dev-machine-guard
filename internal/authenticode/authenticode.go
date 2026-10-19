@@ -4,9 +4,12 @@
 // no publisher is hard-coded and a Trusted Signing certificate rotation
 // (same subject, new key) keeps working.
 //
-// Trust (chain, digest) comes from WinVerifyTrust on Windows. The signer
-// subject and the timestamp are read from the PE's PKCS#7 blob in Go, which
-// is portable and testable everywhere.
+// Trust (chain, digest) AND the signer subject come from WinVerifyTrust: the
+// subject is read from the leaf of the chain it validated (provider data),
+// never from the PE's certificate bag, which lies outside the signed digest
+// and can carry look-alike certificates. The bag is still parsed in Go to
+// reject an ambiguous signer (two certs with the signer's issuer+serial) and
+// to recognise an RFC 3161 timestamp WinVerifyTrust doesn't count.
 package authenticode
 
 import (
@@ -27,6 +30,9 @@ var (
 	// ErrNoPublisher means the running updater has no signer to compare
 	// against (an unsigned dev build) and no test pin is configured.
 	ErrNoPublisher = errors.New("authenticode: running updater is unsigned; refusing updates")
+	// ErrAmbiguousSigner means the certificate bag holds more than one
+	// certificate matching the signer's issuer+serial (or key id).
+	ErrAmbiguousSigner = errors.New("authenticode: signer certificate is ambiguous")
 	// ErrUnsupported is returned off Windows, where WinVerifyTrust is absent.
 	ErrUnsupported = errors.New("authenticode: verification is only supported on Windows")
 )
@@ -37,20 +43,41 @@ type Signature struct {
 	Timestamped bool
 }
 
-// Verify checks path with WinVerifyTrust (revocation off) and requires a
-// timestamped signature.
+// trustedSigner is what WinVerifyTrust validated: the leaf subject of the
+// primary signer's chain and its countersigner (timestamp) count.
+type trustedSigner struct {
+	subject        string
+	counterSigners int
+}
+
+// Verify checks path with WinVerifyTrust (revocation off), takes the
+// subject from the validated chain and requires a timestamped signature.
 func Verify(path string) (*Signature, error) {
-	if err := winVerifyTrust(path); err != nil {
-		return nil, err
-	}
-	sig, err := Inspect(path)
+	ts, err := verifyTrusted(path)
 	if err != nil {
 		return nil, err
 	}
-	if !sig.Timestamped {
+	bag, err := Inspect(path)
+	if err != nil {
+		return nil, err // includes ErrAmbiguousSigner
+	}
+	// Countersigners are what WinVerifyTrust counted; an RFC 3161 token is
+	// only recognised in the bag (its validity is WinVerifyTrust's job).
+	timestamped := ts.counterSigners > 0 || bag.Timestamped
+	if !timestamped {
 		return nil, fmt.Errorf("%w: %s", ErrNotTimestamped, path)
 	}
-	return sig, nil
+	return &Signature{Subject: ts.subject, Timestamped: true}, nil
+}
+
+// ownSubject is the subject of the running updater's own signature, from
+// WinVerifyTrust like any candidate (no timestamp requirement).
+func ownSubject(self string) (string, error) {
+	ts, err := verifyTrusted(self)
+	if err != nil {
+		return "", err
+	}
+	return ts.subject, nil
 }
 
 // SamePublisher verifies candidate and checks that its leaf subject equals
@@ -58,26 +85,24 @@ func Verify(path string) (*Signature, error) {
 // pin the expected subject instead (DMG_TEST_AUTHENTICODE_SUBJECT). An
 // unsigned self with no pin refuses every candidate.
 func SamePublisher(candidate, self string) error {
-	return samePublisher(candidate, self, Verify, Inspect, testPinnedSubject())
+	return samePublisher(candidate, self, Verify, ownSubject, testPinnedSubject())
 }
 
-func samePublisher(candidate, self string, verify, inspect func(string) (*Signature, error), pin string) error {
+func samePublisher(candidate, self string, verify func(string) (*Signature, error), own func(string) (string, error), pin string) error {
 	got, err := verify(candidate)
 	if err != nil {
 		return err
 	}
 	want := pin
 	if want == "" {
-		// Our own image only supplies the expected subject; it is already
-		// running, so re-checking its trust adds nothing.
-		own, err := inspect(self)
+		subject, err := own(self)
 		switch {
 		case errors.Is(err, ErrUnsigned):
 			return ErrNoPublisher
 		case err != nil:
-			return fmt.Errorf("authenticode: read own signature: %w", err)
+			return fmt.Errorf("authenticode: own signature: %w", err)
 		}
-		want = own.Subject
+		want = subject
 	}
 	if want == "" || got.Subject != want {
 		return fmt.Errorf("%w: %q, want %q", ErrPublisherMismatch, got.Subject, want)

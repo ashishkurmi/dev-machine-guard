@@ -185,23 +185,65 @@ func TestSamePublisher(t *testing.T) {
 			return &Signature{Subject: subject, Timestamped: true}, nil
 		}
 	}
+	own := func(subject string, err error) func(string) (string, error) {
+		return func(string) (string, error) { return subject, err }
+	}
 	a := "CN=StepSecurity Inc"
-	if err := samePublisher("c", "s", sig(a, nil), sig(a, nil), ""); err != nil {
+	if err := samePublisher("c", "s", sig(a, nil), own(a, nil), ""); err != nil {
 		t.Fatalf("same subject: %v", err)
 	}
-	if err := samePublisher("c", "s", sig("CN=Evil", nil), sig(a, nil), ""); !errors.Is(err, ErrPublisherMismatch) {
+	if err := samePublisher("c", "s", sig("CN=Evil", nil), own(a, nil), ""); !errors.Is(err, ErrPublisherMismatch) {
 		t.Fatalf("other subject: %v", err)
 	}
-	if err := samePublisher("c", "s", sig(a, nil), sig("", ErrUnsigned), ""); !errors.Is(err, ErrNoPublisher) {
+	if err := samePublisher("c", "s", sig(a, nil), own("", ErrUnsigned), ""); !errors.Is(err, ErrNoPublisher) {
 		t.Fatalf("unsigned self: %v", err)
 	}
-	if err := samePublisher("c", "s", sig(a, nil), sig("", ErrUnsigned), a); err != nil {
+	if err := samePublisher("c", "s", sig(a, nil), own("", ErrUnsigned), a); err != nil {
 		t.Fatalf("unsigned self with pin: %v", err)
 	}
-	if err := samePublisher("c", "s", sig(a, nil), sig(a, nil), "CN=Pinned"); !errors.Is(err, ErrPublisherMismatch) {
+	if err := samePublisher("c", "s", sig(a, nil), own(a, nil), "CN=Pinned"); !errors.Is(err, ErrPublisherMismatch) {
 		t.Fatalf("pin must win over own subject: %v", err)
 	}
-	if err := samePublisher("c", "s", sig("", ErrNotTimestamped), sig(a, nil), ""); !errors.Is(err, ErrNotTimestamped) {
+	if err := samePublisher("c", "s", sig("", ErrNotTimestamped), own(a, nil), ""); !errors.Is(err, ErrNotTimestamped) {
 		t.Fatalf("candidate error not propagated: %v", err)
+	}
+}
+
+// makeLookalike is a certificate with leaf's issuer, serial and public key
+// but another subject, signed by an unrelated key (so it never chains).
+func makeLookalike(t *testing.T, leaf *x509.Certificate, cn string) *x509.Certificate {
+	t.Helper()
+	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := &x509.Certificate{RawSubject: leaf.RawIssuer, PublicKey: &other.PublicKey, SerialNumber: big.NewInt(1)}
+	tmpl := &x509.Certificate{
+		SerialNumber: leaf.SerialNumber,
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    leaf.NotBefore, NotAfter: leaf.NotAfter,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, leaf.PublicKey, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// R-C1-1 (belt and braces): a bag with a look-alike of the signer, before
+// or after the real one, is rejected rather than resolved by bag order.
+func TestInspectRejectsAmbiguousSigner(t *testing.T) {
+	leaf := makeCert(t, "Evil Corp", 9)
+	fake := makeLookalike(t, leaf, "StepSecurity Inc")
+	for _, bag := range [][]*x509.Certificate{{fake, leaf}, {leaf, fake}} {
+		p := writePE(t, buildSignedData(t, leaf, bag, oidRFC3161CounterSign))
+		if sig, err := Inspect(p); !errors.Is(err, ErrAmbiguousSigner) {
+			t.Fatalf("bag %s,%s: Inspect = %+v, %v; want ErrAmbiguousSigner", bag[0].Subject, bag[1].Subject, sig, err)
+		}
 	}
 }
