@@ -281,12 +281,15 @@
 
     <!-- AUTOUPDATE=0|1 writes auto_update:false|true on install, upgrade
          and repair (after the credential CAs, which merge into the same
-         file). configure parses 0/1 as booleans. Unset: no CA runs. -->
+         file); configure parses 0/1 (and true/false) as booleans. Unset: no
+         CA runs. Any other value: configure rejects it, WixQuietExec logs
+         the error to the MSI log, and Return="ignore" keeps the MSI going
+         with the setting unchanged. -->
     <SetProperty Id="RunConfigureAutoUpdate"
                  Value='"[SEEDFOLDER]stepsecurity-dev-machine-guard.exe" configure --non-interactive --auto-update=[AUTOUPDATE]'
                  Sequence="execute"
                  Before="RunConfigureAutoUpdate"
-                 Condition="(AUTOUPDATE=&quot;0&quot; OR AUTOUPDATE=&quot;1&quot;) AND NOT REMOVE=&quot;ALL&quot;"/>
+                 Condition="AUTOUPDATE AND NOT REMOVE=&quot;ALL&quot;"/>
 
     <SetProperty Id="RunAdoptSeed"
                  Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard-bootstrap.exe" adopt-seed --seed-dir "[SEEDFOLDER]."'
@@ -311,7 +314,7 @@
 
       On install, upgrade and repair (NOT REMOVE="ALL"):
         InstallFiles → RunConfigureFromFile OR RunConfigureInline
-                     → RunConfigureAutoUpdate (AUTOUPDATE=0|1)
+                     → RunConfigureAutoUpdate (AUTOUPDATE set)
                      → RunAdoptSeed → RunInstallScheduledTask
         install is idempotent and (re)creates all three tasks, so a repair
         restores a deleted or clobbered task (M-7). adopt-seed runs before it
@@ -336,7 +339,7 @@
               Condition="APIKEY AND NOT BOOTSTRAPFILE AND NOT Installed"/>
       <Custom Action="RunConfigureAutoUpdate"
               After="RunConfigureInline"
-              Condition="(AUTOUPDATE=&quot;0&quot; OR AUTOUPDATE=&quot;1&quot;) AND NOT REMOVE=&quot;ALL&quot;"/>
+              Condition="AUTOUPDATE AND NOT REMOVE=&quot;ALL&quot;"/>
       <Custom Action="RunAdoptSeed"
               After="RunConfigureAutoUpdate"
               Condition="NOT REMOVE=&quot;ALL&quot;"/>

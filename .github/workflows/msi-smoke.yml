@@ -172,6 +172,12 @@ jobs:
           }
           function Done { if ($script:fail) { exit 1 }; exit 0 }
           function State { Get-Content "$root\state\state.json" -Raw | ConvertFrom-Json }
+          # auto_update in the machine config: 'true', 'false' or '' (missing).
+          function AutoUpdate {
+            $c = Get-Content "$data\config.json" -Raw | ConvertFrom-Json
+            if ($null -eq $c.auto_update) { return '' }
+            return "$($c.auto_update)".ToLower()
+          }
           function TaskXml($name) { [xml](schtasks /query /tn $name /xml | Out-String) }
           function UsableDir($d) { (Test-Path "$d\stepsecurity-dev-machine-guard.exe") -and (Test-Path "$d\stepsecurity-dev-machine-guard-task.exe") -and (Test-Path "$d\dmg-linux") }
           function Msi($argList, $log) {
@@ -314,7 +320,7 @@ jobs:
           DmgProcesses
           Done
 
-      - name: Repair keeps current and restores tasks (M-7)
+      - name: SCCM-style repair keeps current, restores tasks, leaves AUTOUPDATE alone (M-7)
         timeout-minutes: 8
         shell: pwsh
         run: |
@@ -329,17 +335,16 @@ jobs:
           # And a deleted scan task, which the repair must restore.
           schtasks /delete /tn $tasks[0] /f | Out-Null
 
-          # msiexec /f ignores public properties, so the repair that also sets
-          # AUTOUPDATE=1 is a reinstall: /i with REINSTALL=ALL ('a' = all files, like /fa).
-          $code = Msi @("/i", $env:INSTALLED_MSI, "/qn", "REINSTALL=ALL", "REINSTALLMODE=amus", "AUTOUPDATE=1") "dist\dmg-repair.log"
-          Check ($code -eq 0) "repair (REINSTALL=ALL) exit 0 ($code)"
-          Check ((Get-Content "$data\config.json" -Raw) -match '"auto_update"\s*:\s*true') "repair with AUTOUPDATE=1 re-enabled auto_update"
+          # Exactly what SCCM issues for a repair.
+          $code = Msi @("/fa", $env:INSTALLED_MSI, "/qn") "dist\dmg-repair.log"
+          Check ($code -eq 0) "msiexec /fa exit 0 ($code)"
           $s = State
           Check ($s.current -eq "99.0.0" -and $s.previous -eq $ver) "repair kept current 99.0.0 (got $($s.current)/$($s.previous))"
+          Check (AutoUpdate -eq 'false') "repair left auto_update false (got $(AutoUpdate))"
           AssertTasks
           Done
 
-      - name: Major upgrade N to N+1 keeps tasks and never downgrades
+      - name: Major upgrade N to N+1 keeps tasks, never downgrades, leaves AUTOUPDATE alone
         timeout-minutes: 8
         shell: pwsh
         run: |
@@ -347,10 +352,11 @@ jobs:
           $next = $env:MSI_NEXT_VERSION
           $code = Msi @("/i", "dist\dmg-smoke-next.msi", "/qn") "dist\dmg-upgrade.log"
           Check ($code -eq 0) "upgrade msiexec exit 0 ($code)"
-          Check ((Get-Content "$data\config.json" -Raw) -match '"auto_update"\s*:\s*true') "upgrade without AUTOUPDATE left auto_update unchanged (true)"
           if ($code -eq 0) {
             "INSTALLED_MSI=dist\dmg-smoke-next.msi" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
+          # Unset AUTOUPDATE against a false baseline: must stay false (R-B-8).
+          Check (AutoUpdate -eq 'false') "upgrade without AUTOUPDATE left auto_update false (got $(AutoUpdate))"
           Check (UsableDir "$root\seed\$next") "seed\$next installed"
           Check (-not (Test-Path "$root\seed\$env:MSI_VERSION")) "old seed removed"
           Check (UsableDir "$root\versions\$next") "versions\$next adopted"
@@ -365,6 +371,27 @@ jobs:
           $ranUninstall = Select-String -Path "dist\dmg-upgrade.log" -Pattern 'Doing action: RunUninstallScheduledTask' -SimpleMatch -Quiet
           Check (-not $ranUninstall) "old uninstall CA not run during the upgrade"
           AssertTasks
+          Done
+
+      - name: Re-enable self-update with AUTOUPDATE=1 (README command); bad values only warn
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          . "$env:RUNNER_TEMP\dmg-assert.ps1"
+          # The in-place repair the README documents: msiexec /f ignores
+          # properties, so it is /i with REINSTALL=ALL REINSTALLMODE=omus.
+          $code = Msi @("/i", $env:INSTALLED_MSI, "/qn", "REINSTALL=ALL", "REINSTALLMODE=omus", "AUTOUPDATE=1") "dist\dmg-reenable.log"
+          Check ($code -eq 0) "reinstall with AUTOUPDATE=1 exit 0 ($code)"
+          Check (AutoUpdate -eq 'true') "AUTOUPDATE=1 re-enabled auto_update (got $(AutoUpdate))"
+          Check ((State).current -eq "99.0.0") "reinstall kept current 99.0.0"
+
+          # Any other value: logged as a warning in the MSI log, no failure,
+          # setting unchanged.
+          $code = Msi @("/i", $env:INSTALLED_MSI, "/qn", "REINSTALL=ALL", "REINSTALLMODE=omus", "AUTOUPDATE=maybe") "dist\dmg-badvalue.log"
+          Check ($code -eq 0) "reinstall with AUTOUPDATE=maybe exit 0 ($code)"
+          Check (AutoUpdate -eq 'true') "AUTOUPDATE=maybe left auto_update true (got $(AutoUpdate))"
+          $warned = Select-String -Path "dist\dmg-badvalue.log" -Pattern 'auto-update must be true or false' -SimpleMatch -Quiet
+          Check $warned "AUTOUPDATE=maybe: configure's rejection is in the MSI log"
           Done
 
       - name: Uninstall MSI
@@ -402,6 +429,21 @@ jobs:
           # is out of scope). This mirrors docs/deploying-via-sccm.md.
           Done
 
+      - name: Fresh install with AUTOUPDATE unset defaults to on
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          . "$env:RUNNER_TEMP\dmg-assert.ps1"
+          # ProgramData survives uninstall; start from no machine config.
+          Remove-Item "$data\config.json" -Force -ErrorAction SilentlyContinue
+          $code = Msi @("/i", "dist\dmg-smoke.msi", "/qn", "CUSTOMERID=ci-smoke", "APIENDPOINT=https://api.invalid.example", "APIKEY=ci-test-fake-api-key") "dist\dmg-fresh.log"
+          Check ($code -eq 0) "fresh install exit 0 ($code)"
+          Check (Test-Path "$data\config.json") "config written"
+          Check (AutoUpdate -ne 'false') "unset AUTOUPDATE: auto_update not written false (got '$(AutoUpdate)', missing = on)"
+          $code = Msi @("/x", "dist\dmg-smoke.msi", "/qn") "dist\dmg-fresh-uninstall.log"
+          Check ($code -eq 0) "uninstall exit 0 ($code)"
+          Done
+
       - name: Upload install logs on failure
         if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -411,6 +453,9 @@ jobs:
             dist/dmg-install.log
             C:/Program Files/StepSecurity/state/update.log
             dist/dmg-repair.log
+            dist/dmg-reenable.log
+            dist/dmg-badvalue.log
+            dist/dmg-fresh.log
             dist/dmg-upgrade.log
             dist/dmg-uninstall.log
           if-no-files-found: ignore

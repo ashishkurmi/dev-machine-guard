@@ -91,6 +91,7 @@ has no default value:
 | `0` | `configure --auto-update=false`: `"auto_update": false` in the SYSTEM-owned machine config |
 | `1` | `configure --auto-update=true`: turns self-update back on |
 | unset | the setting is left as it is (a fresh install uses the default: on) |
+| anything else | ignored with an error in the MSI log (`--auto-update must be true or false`); the install does not fail |
 
 ```cmd
 msiexec /i stepsecurity-dev-machine-guard-<version>-x64.msi /qn ^
