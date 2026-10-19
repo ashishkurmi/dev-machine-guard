@@ -134,9 +134,15 @@ func TestVerifySignatures(t *testing.T) {
 	if err := c.VerifySignatures(rel2); !errors.Is(err, ErrVerify) {
 		t.Fatalf("missing signature: err = %v", err)
 	}
-	rel2.Assets[1].Checksum = "nothex"
-	if err := c.VerifySignatures(rel2); !errors.Is(err, ErrVerify) {
-		t.Fatalf("non-sha checksum: err = %v", err)
+	// A non-hex checksum carrying a signature over itself must be refused by
+	// the sha256 shape check, not by anything later.
+	for _, bad := range []string{"nothex", strings.Repeat("a", 63), strings.Repeat("zz", 32)} {
+		rel3, _ := c.Latest(context.Background())
+		rel3.Assets[1].Checksum = bad
+		rel3.Assets[1].Signed = f.signer.transport(bad)
+		if err := c.VerifySignatures(rel3); !errors.Is(err, ErrVerify) || !strings.Contains(err.Error(), "is not a sha256") {
+			t.Fatalf("checksum %q: err = %v, want the sha256 shape error", bad, err)
+		}
 	}
 }
 
