@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/step-security/dev-machine-guard/internal/faultinject"
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
 )
@@ -33,6 +35,7 @@ const (
 	exitUsage = 64
 
 	EnvRunRecord         = "STEPSEC_RUN_RECORD"
+	EnvRunID             = "STEPSEC_RUN_ID"
 	EnvBootstrapVersion  = "STEPSEC_BOOTSTRAP_VERSION"
 	EnvBootstrapFallback = "STEPSEC_BOOTSTRAP_FALLBACK"
 
@@ -91,6 +94,7 @@ type Bootstrap struct {
 	Getenv   func(string) string
 	Environ  func() []string
 	Out      io.Writer
+	NewRunID func() string
 
 	AdoptLockWait  time.Duration // adopt-seed: bounded wait for the update lock
 	RecordLockWait time.Duration // update: wait to record the updater result
@@ -112,6 +116,7 @@ func NewBootstrap(exePath string, isSystem func() bool) *Bootstrap {
 		Getenv:         os.Getenv,
 		Environ:        os.Environ,
 		Out:            os.Stdout,
+		NewRunID:       uuid.NewString,
 		AdoptLockWait:  60 * time.Second,
 		RecordLockWait: 30 * time.Second,
 		LockPoll:       500 * time.Millisecond,
@@ -156,7 +161,7 @@ func (b *Bootstrap) openUpdateLog() func() {
 	if fi, err := os.Stat(path); err == nil && fi.Size() > maxLogSize {
 		flags |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(path, flags, 0o644) // #nosec G304 -- fixed path in the protected state dir
+	f, err := os.OpenFile(path, flags, 0o600) // #nosec G304 -- fixed path in the protected state dir
 	if err != nil {
 		return func() {}
 	}
@@ -181,7 +186,7 @@ func installDirArg(args []string) string {
 
 // childEnv is the bootstrap's environment with our variables replaced.
 func (b *Bootstrap) childEnv(set map[string]string) []string {
-	ours := []string{EnvRunRecord, EnvBootstrapVersion, EnvBootstrapFallback}
+	ours := []string{EnvRunRecord, EnvRunID, EnvBootstrapVersion, EnvBootstrapFallback}
 	var env []string
 	for _, kv := range b.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
@@ -287,20 +292,22 @@ func (b *Bootstrap) Run(args []string) int {
 			reason = startReason
 		}
 		runFile := layout.RunFile(c.Version)
-		if err := updatestate.AppendRun(runFile, updatestate.RunRecord{Version: c.Version.String()}); err != nil {
+		runID := b.NewRunID()
+		if err := updatestate.AppendRun(runFile, updatestate.RunRecord{RunID: runID, Version: c.Version.String()}); err != nil {
 			b.logf("run record %s: %v", runFile, err)
 		}
 		env := b.childEnv(map[string]string{
 			EnvRunRecord:         runFile,
+			EnvRunID:             runID,
 			EnvBootstrapVersion:  c.Version.String(),
 			EnvBootstrapFallback: reason,
 		})
-		res := b.Spawn(filepath.Join(c.Dir, VersionedTaskBinary), args, env, deadline, func() {
+		res := b.Spawn(filepath.Join(c.Dir, updatestate.LauncherFile), args, env, deadline, func() {
 			checkpointLogged(b, "boot.launched")
 		})
 		if !res.Started {
 			b.logf("starting %s: %v", c.Dir, res.Err)
-			b.finalize(runFile, ExitCannotStart, false)
+			b.finalize(runFile, runID, ExitCannotStart, false)
 			startReason = ReasonStartFailed + ":" + c.Version.String()
 			continue
 		}
@@ -308,14 +315,14 @@ func (b *Bootstrap) Run(args []string) int {
 		if res.Killed {
 			code = ExitKilled
 		}
-		b.finalize(runFile, code, res.Killed)
+		b.finalize(runFile, runID, code, res.Killed)
 		return code
 	}
 	return ExitCannotStart
 }
 
-func (b *Bootstrap) finalize(runFile string, code int, killed bool) {
-	if err := updatestate.FinalizeRun(runFile, code, killed, b.Now()); err != nil {
+func (b *Bootstrap) finalize(runFile, runID string, code int, killed bool) {
+	if err := updatestate.FinalizeRun(runFile, runID, code, killed, b.Now()); err != nil {
 		b.logf("finalizing run record %s: %v", runFile, err)
 	}
 }
@@ -359,7 +366,7 @@ func (b *Bootstrap) Update() int {
 			reason = ReasonNoUpdater
 		} else if v, why := b.Layout.CheckVersionDir(pick); why != "" {
 			reason = why
-		} else if p.Updater.Version == pick && p.Updater.ConsecutiveFailures >= UpdaterFailureThreshold {
+		} else if p.UpdaterVersion == pick && p.UpdaterFailures >= UpdaterFailureThreshold {
 			reason = ReasonUpdaterFailed + ":" + pick
 		} else {
 			primary = &updatestate.RunChoice{Version: v, Dir: b.Layout.VersionDir(v)}
@@ -382,7 +389,7 @@ func (b *Bootstrap) Update() int {
 		if !isPrimary {
 			b.logf("updater fallback to seed %s (%s)", c.Version, c.Reason)
 		}
-		agent := filepath.Join(c.Dir, VersionedAgentBinary)
+		agent := filepath.Join(c.Dir, updatestate.AgentFile)
 		res := b.Spawn(agent, []string{"self-update", "--system"}, b.childEnv(nil), b.UpdateDeadline, func() {
 			checkpointLogged(b, "boot.launched")
 		})
@@ -414,24 +421,24 @@ func (b *Bootstrap) recordUpdater(version string, code int) {
 		return
 	}
 	defer l.Release()
-	err = updatestate.PatchCheckpointed(b.Layout.StateFile(), "boot", func(s *updatestate.State) error {
-		switch {
-		case code == 0:
-			s.Updater = updatestate.Updater{Version: version}
-		case s.Updater.Version == version:
-			s.Updater.ConsecutiveFailures++
-		default:
-			s.Updater = updatestate.Updater{Version: version, ConsecutiveFailures: 1}
-		}
-		return nil
-	})
-	if err != nil {
+	path := b.Layout.StateFile()
+	st, corrupt, err := updatestate.Load(path)
+	if err != nil || corrupt || st == nil {
+		b.logf("not recording updater result (state missing, corrupt or unreadable: %v)", err)
+		return
+	}
+	switch {
+	case code == 0:
+		st.Updater.Version, st.Updater.ConsecutiveFailures = version, 0
+	case st.Updater.Version == version:
+		st.Updater.ConsecutiveFailures++
+	default:
+		st.Updater.Version, st.Updater.ConsecutiveFailures = version, 1
+	}
+	if err := updatestate.SaveCheckpointed(path, st, "boot"); err != nil {
 		b.logf("recording updater result: %v", err)
 	}
 }
-
-// errNoChange aborts a state patch that has nothing to write.
-var errNoChange = errors.New("no change")
 
 // AdoptSeed is `adopt-seed --seed-dir <dir>` (SYSTEM, MSI custom action):
 // protect versions\ and state\, copy the seed into versions\<seed> if
@@ -465,7 +472,7 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 		b.logf("adopt-seed: seed dir %q is not %q", seedDir, b.Layout.SeedDir(v))
 		return 0
 	}
-	if !complete(seedDir) {
+	if !seedComplete(seedDir) {
 		b.logf("adopt-seed: seed %s is incomplete", seedDir)
 		return 0
 	}
@@ -491,8 +498,8 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 	if err := b.copySeed(v, seedDir); err != nil {
 		b.logf("adopt-seed: copying seed %s: %v", v, err)
 	}
-	if !complete(b.Layout.VersionDir(v)) {
-		b.logf("adopt-seed: versions\\%s unusable; state left unchanged", v)
+	if err := updatestate.VerifyVersionDir(b.Layout.VersionDir(v), v); err != nil {
+		b.logf("adopt-seed: versions\\%s unusable (%v); state left unchanged", v, err)
 		return 0
 	}
 	b.adoptState(v)
@@ -507,20 +514,32 @@ func samePath(a, b string) bool {
 	return a == b
 }
 
-// copySeed copies the seed into versions\<v> through a staging dir and an
-// atomic rename. A complete existing dir is kept (immutable); an incomplete
-// one is moved to trash first.
+// seedComplete reports whether dir holds every updatestate.VersionFiles entry.
+func seedComplete(dir string) bool {
+	for _, name := range updatestate.VersionFiles {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil || !fi.Mode().IsRegular() {
+			return false
+		}
+	}
+	return true
+}
+
+// copySeed copies the seed into versions\<v> through a staging dir, writes
+// its manifest (so the updater treats it as a verified version) and renames
+// it into place. A dir that already verifies is kept (immutable); anything
+// else at that path is moved to trash first.
 func (b *Bootstrap) copySeed(v updatestate.Version, seedDir string) error {
 	dst := b.Layout.VersionDir(v)
 	if _, err := os.Lstat(dst); err == nil {
-		if complete(dst) {
+		if updatestate.VerifyVersionDir(dst, v) == nil {
 			return nil
 		}
 		trash := filepath.Join(b.Layout.VersionsDir(), updatestate.TrashPrefix+v.String()+"-"+strconv.FormatInt(b.Now().UnixNano(), 36))
 		if err := os.Rename(dst, trash); err != nil {
-			return fmt.Errorf("moving incomplete %s aside: %w", dst, err)
+			return fmt.Errorf("moving unverifiable %s aside: %w", dst, err)
 		}
-		b.logf("adopt-seed: moved incomplete %s to %s", dst, trash)
+		b.logf("adopt-seed: moved unverifiable %s to %s", dst, trash)
 		_ = os.RemoveAll(trash)
 	}
 	staging, err := b.Layout.StagingDir(v)
@@ -533,17 +552,20 @@ func (b *Bootstrap) copySeed(v updatestate.Version, seedDir string) error {
 			_ = os.RemoveAll(staging)
 		}
 	}()
-	entries, err := os.ReadDir(seedDir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if !e.Type().IsRegular() {
-			continue
-		}
-		if err := copyFile(filepath.Join(seedDir, e.Name()), filepath.Join(staging, e.Name())); err != nil {
+	m := updatestate.Manifest{Version: v.String(), Files: map[string]string{}}
+	for _, name := range updatestate.VersionFiles {
+		dstFile := filepath.Join(staging, name)
+		if err := copyFile(filepath.Join(seedDir, name), dstFile); err != nil {
 			return err
 		}
+		sum, err := updatestate.FileSHA256(dstFile)
+		if err != nil {
+			return err
+		}
+		m.Files[name] = sum
+	}
+	if err := updatestate.WriteManifest(staging, m); err != nil {
+		return err
 	}
 	if err := faultinject.Point("adopt.copied"); err != nil {
 		return err
@@ -576,33 +598,35 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// adoptState sets current = seed when current is missing, invalid or
-// unusable, or older than the seed (and the seed is not quarantined). An
-// MSI never downgrades a self-updated device.
+// adoptState sets current = seed when the state is missing or corrupt, when
+// current is unusable, or when the seed is newer than current (and not
+// quarantined). An MSI never downgrades a self-updated device. A higher
+// schema is left alone. Called with the update lock held.
 func (b *Bootstrap) adoptState(seed updatestate.Version) {
 	path := b.Layout.StateFile()
-	p, corrupt, err := updatestate.LoadPointers(path)
-	switch {
-	case err != nil:
+	p, _, err := updatestate.LoadPointers(path)
+	if err != nil {
 		b.logf("adopt-seed: reading state: %v; left unchanged", err)
 		return
-	case p == nil:
-		st := &updatestate.State{Schema: updatestate.SchemaVersion, Current: seed.String()}
-		if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
-			b.logf("adopt-seed: writing state: %v", err)
-			return
-		}
-		b.logf("adopt-seed: state %s; current = seed %s", map[bool]string{true: "corrupt", false: "missing"}[corrupt], seed)
-		return
-	case p.Schema > updatestate.SchemaVersion:
+	}
+	if p != nil && p.Schema > updatestate.SchemaVersion {
 		b.logf("adopt-seed: state schema %d is newer than this bootstrap; left unchanged", p.Schema)
 		return
 	}
 	s := seed.String()
-	err = updatestate.PatchCheckpointed(path, "adopt", func(st *updatestate.State) error {
+	st, corrupt, err := updatestate.Load(path)
+	switch {
+	case err != nil:
+		b.logf("adopt-seed: reading state: %v; left unchanged", err)
+		return
+	case st == nil:
+		st = &updatestate.State{Schema: updatestate.SchemaVersion, Current: s}
+		b.logf("adopt-seed: state %s; current = seed %s", map[bool]string{true: "corrupt", false: "missing"}[corrupt], s)
+	default:
 		old := st.Current
 		cur, _ := updatestate.ParseVersion(old)
-		if !complete(b.Layout.VersionDir(cur)) {
+		switch {
+		case !updatestate.VersionDirUsable(b.Layout.VersionDir(cur)):
 			st.Current = s
 			if st.Probation != nil && st.Probation.Version == old {
 				st.Probation = nil
@@ -611,22 +635,18 @@ func (b *Bootstrap) adoptState(seed updatestate.Version) {
 				st.Previous = ""
 			}
 			b.logf("adopt-seed: current %s unusable; current = seed %s", old, s)
-			return nil
+		case updatestate.Compare(seed, cur) <= 0:
+			return
+		default:
+			if _, q := st.Quarantine[s]; q {
+				b.logf("adopt-seed: seed %s is quarantined; current %s kept", s, old)
+				return
+			}
+			st.Previous, st.Current, st.Probation = old, s, nil
+			b.logf("adopt-seed: seed %s newer than current %s; current = seed", s, old)
 		}
-		if updatestate.Compare(seed, cur) <= 0 {
-			return errNoChange
-		}
-		if _, q := st.Quarantine[s]; q {
-			b.logf("adopt-seed: seed %s is quarantined; current %s kept", s, old)
-			return errNoChange
-		}
-		st.Previous = old
-		st.Current = s
-		st.Probation = nil
-		b.logf("adopt-seed: seed %s newer than current %s; current = seed", s, old)
-		return nil
-	})
-	if err != nil && !errors.Is(err, errNoChange) {
-		b.logf("adopt-seed: updating state: %v", err)
+	}
+	if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
+		b.logf("adopt-seed: writing state: %v", err)
 	}
 }

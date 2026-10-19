@@ -78,8 +78,8 @@ func TestResolveBootstrapRoot(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetFile(filepath.Join(root, launcher.BootstrapBinary), []byte{})
 	for _, agent := range []string{
-		filepath.Join(root, "seed", "1.2.3", "agent.exe"),
-		filepath.Join(root, "versions", "1.2.4", "agent.exe"),
+		filepath.Join(root, "seed", "1.2.3", "stepsecurity-dev-machine-guard.exe"),
+		filepath.Join(root, "versions", "1.2.4", "stepsecurity-dev-machine-guard.exe"),
 		filepath.Join(root, "stepsecurity-dev-machine-guard.exe"),
 	} {
 		if got, ok := resolveBootstrapRoot(mock, agent); !ok || got != root {
@@ -87,14 +87,14 @@ func TestResolveBootstrapRoot(t *testing.T) {
 		}
 	}
 	for _, agent := range []string{
-		filepath.Join(root, "other", "1.2.3", "agent.exe"),
+		filepath.Join(root, "other", "1.2.3", "stepsecurity-dev-machine-guard.exe"),
 		filepath.Join("/", "elsewhere", "stepsecurity-dev-machine-guard.exe"),
 	} {
 		if _, ok := resolveBootstrapRoot(mock, agent); ok {
 			t.Errorf("%s: unexpected bootstrap root", agent)
 		}
 	}
-	if got := resolveTaskBinary(mock, filepath.Join(root, "seed", "1.2.3", "agent.exe")); got != filepath.Join(root, launcher.BootstrapBinary) {
+	if got := resolveTaskBinary(mock, filepath.Join(root, "seed", "1.2.3", "stepsecurity-dev-machine-guard.exe")); got != filepath.Join(root, launcher.BootstrapBinary) {
 		t.Errorf("task binary = %q", got)
 	}
 }
@@ -229,7 +229,9 @@ func TestUninstall_BootstrapRemovesEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopped, reg := stubPlatformHooks(t)
-	executablePath = func() (string, error) { return filepath.Join(root, "seed", "1.2.3", "agent.exe"), nil }
+	executablePath = func() (string, error) {
+		return filepath.Join(root, "seed", "1.2.3", "stepsecurity-dev-machine-guard.exe"), nil
+	}
 
 	e := newUpdateTaskExec()
 	e.SetFile(filepath.Join(root, launcher.BootstrapBinary), []byte{})
@@ -257,7 +259,9 @@ func TestUninstall_BootstrapRemovesEverything(t *testing.T) {
 func TestUninstall_BootstrapContinuesPastFailures(t *testing.T) {
 	root := t.TempDir()
 	stopDone, _ := stubPlatformHooks(t)
-	executablePath = func() (string, error) { return filepath.Join(root, "seed", "1.2.3", "agent.exe"), nil }
+	executablePath = func() (string, error) {
+		return filepath.Join(root, "seed", "1.2.3", "stepsecurity-dev-machine-guard.exe"), nil
+	}
 	e := newUpdateTaskExec()
 	e.SetFile(filepath.Join(root, launcher.BootstrapBinary), []byte{})
 	e.present[taskName] = true

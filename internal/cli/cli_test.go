@@ -448,20 +448,15 @@ func TestParseHooks_AcceptsInstallDir(t *testing.T) {
 // cmd/stepsecurity-dev-machine-guard/main_test.go for the integration
 // test that asserts the binary always exits 0 on `_hook` invocations.
 
-func TestParse_AutoUpdate(t *testing.T) {
-	for _, args := range [][]string{
-		{"configure", "--non-interactive", "--auto-update=false"},
-		{"configure", "--non-interactive", "--auto-update", "false"},
-	} {
-		cfg, err := Parse(args)
-		if err != nil {
-			t.Fatalf("%v: %v", args, err)
-		}
-		if cfg.ConfigAutoUpdate != "false" {
-			t.Errorf("%v: ConfigAutoUpdate = %q", args, cfg.ConfigAutoUpdate)
-		}
+func TestParse_ConfigureAutoUpdate(t *testing.T) {
+	cfg, err := Parse([]string{"configure", "--non-interactive", "--auto-update=false"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := Parse([]string{"configure", "--auto-update"}); err == nil {
-		t.Error("missing value accepted")
+	if cfg.ConfigAutoUpdate == nil || *cfg.ConfigAutoUpdate {
+		t.Fatalf("ConfigAutoUpdate = %v", cfg.ConfigAutoUpdate)
+	}
+	if _, err := Parse([]string{"configure", "--auto-update=maybe"}); err == nil {
+		t.Fatal("invalid --auto-update accepted")
 	}
 }

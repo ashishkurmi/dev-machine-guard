@@ -21,19 +21,20 @@ func TestRunRecordsLifecycle(t *testing.T) {
 	}
 	at := time.Date(2026, 10, 19, 1, 2, 3, 0, time.UTC)
 	for i := 0; i < 13; i++ {
-		if err := AppendRun(path, RunRecord{Version: "1.19.0"}); err != nil {
+		id := fmt.Sprintf("run-%d", i)
+		if err := AppendRun(path, RunRecord{RunID: id, Version: "1.19.0"}); err != nil {
 			t.Fatal(err)
 		}
 		if i%2 == 0 {
-			if err := MarkRunStarted(path, fmt.Sprintf("exec-%d", i)); err != nil {
+			if err := MarkRunStarted(path, id); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if err := FinalizeRun(path, i%3, false, at.Add(time.Duration(i)*time.Minute)); err != nil {
+		if err := FinalizeRun(path, id, i%3, false, at.Add(time.Duration(i)*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := FinalizeRun(path, 0, false, at); err != ErrNoOpenRun {
+	if err := FinalizeRun(path, "run-12", 0, false, at); err != ErrNoOpenRun {
 		t.Fatalf("FinalizeRun with no open record = %v", err)
 	}
 	recs := ReadRuns(path)
@@ -44,7 +45,7 @@ func TestRunRecordsLifecycle(t *testing.T) {
 	if !first.At.Equal(at.Add(3*time.Minute)) || !last.At.Equal(at.Add(12*time.Minute)) {
 		t.Fatalf("kept the wrong window: %v .. %v", first.At, last.At)
 	}
-	if !last.Started || last.ExecutionID != "exec-12" || *last.ExitCode != 0 {
+	if !last.Started || last.RunID != "run-12" || *last.ExitCode != 0 {
 		t.Fatalf("last record %+v", last)
 	}
 	if err := AppendRun(path, RunRecord{Version: "1.19.0"}); err != nil {
@@ -52,6 +53,53 @@ func TestRunRecordsLifecycle(t *testing.T) {
 	}
 	if recs := ReadRuns(path); ClassifyRun(recs[len(recs)-1]) != RunOpen {
 		t.Fatal("new record is not open")
+	}
+}
+
+// R-F1-1: overlapping launches (hourly + logon on wake) each keep their own
+// record, whatever order they start and finish in.
+func TestOverlappingRunsMatchByRunID(t *testing.T) {
+	at := time.Date(2026, 10, 19, 1, 0, 0, 0, time.UTC)
+	for _, aFirst := range []bool{true, false} {
+		path := filepath.Join(t.TempDir(), "1.19.0.json")
+		for _, id := range []string{"A", "B"} {
+			if err := AppendRun(path, RunRecord{RunID: id, Version: "1.19.0"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		finalizeA := func() {
+			if err := MarkRunStarted(path, "A"); err != nil {
+				t.Fatalf("mark A: %v", err)
+			}
+			if err := FinalizeRun(path, "A", 0, false, at); err != nil {
+				t.Fatalf("finalize A: %v", err)
+			}
+		}
+		finalizeB := func() {
+			if err := FinalizeRun(path, "B", 1, false, at); err != nil {
+				t.Fatalf("finalize B: %v", err)
+			}
+		}
+		if aFirst {
+			finalizeA()
+			finalizeB()
+		} else {
+			finalizeB()
+			finalizeA()
+		}
+		got := map[string]RunVerdict{}
+		for _, r := range ReadRuns(path) {
+			got[r.RunID] = ClassifyRun(r)
+		}
+		if got["A"] != RunHealthy || got["B"] != RunNeutral {
+			t.Fatalf("aFirst=%v verdicts = %v, want A healthy, B neutral", aFirst, got)
+		}
+		if err := MarkRunStarted(path, "A"); err != ErrNoOpenRun {
+			t.Fatalf("closed record reopened: %v", err)
+		}
+		if err := MarkRunStarted(path, ""); err != ErrNoOpenRun {
+			t.Fatalf("empty run id matched: %v", err)
+		}
 	}
 }
 

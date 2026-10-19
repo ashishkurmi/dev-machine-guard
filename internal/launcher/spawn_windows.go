@@ -20,7 +20,7 @@ const CreateNoWindow uint32 = 0x08000000
 // and the task's ExecutionTimeLimit only terminate the action's PID) and a
 // deadline terminates the whole tree, nested launcher job included.
 func SpawnHidden(path string, args, env []string, deadline time.Duration, onStart func()) SpawnResult {
-	cmd := exec.Command(path, args...)
+	cmd := exec.Command(path, args...) // #nosec G204 -- the bootstrap launches its own resolved version binaries
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: CreateNoWindow}
 	if err := cmd.Start(); err != nil {

@@ -567,8 +567,13 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		log.Debug("scan-state: using legacy full-snapshot uploads")
 	}
 
-	// Report "started" now that we have a device_id. Fire-and-forget.
-	reportRunStatus(ctx, log, executionID, deviceID, runStatusStarted, "", invocationMethod)
+	// Report "started" now that we have a device_id. Once the backend has
+	// it, mark the bootstrap's run record (self-update health, spec §4).
+	if reportRunStatus(ctx, log, executionID, deviceID, runStatusStarted, "", invocationMethod) {
+		if err := markRunStarted(); err != nil {
+			log.Debug("run record: %v", err)
+		}
+	}
 
 	// First progress upsert: surfaces device_info completion immediately
 	// without waiting for the 5-minute heartbeat, and FORCE-attaches the log

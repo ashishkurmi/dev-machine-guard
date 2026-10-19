@@ -42,7 +42,7 @@ var executablePath = os.Executable
 
 // resolveBootstrapRoot returns the install root of an MSI bootstrap install
 // that agentPath belongs to: the agent's own directory (legacy top-level
-// layout) or, for seed\<v>\agent.exe and versions\<v>\agent.exe, two levels
+// layout) or, for an agent under seed\<v>\ or versions\<v>\, two levels
 // up. ok is false when no bootstrap sits in that root.
 func resolveBootstrapRoot(exec executor.Executor, agentPath string) (string, bool) {
 	dir := filepath.Dir(agentPath)

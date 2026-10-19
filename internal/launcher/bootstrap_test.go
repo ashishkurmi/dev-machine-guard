@@ -3,6 +3,7 @@ package launcher
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,7 @@ func newFixture(t *testing.T) *fixture {
 	sp := &fakeSpawner{}
 	out := &bytes.Buffer{}
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	runSeq := 0
 	b := &Bootstrap{
 		Layout:   l,
 		Spawn:    sp.spawn,
@@ -80,7 +82,11 @@ func newFixture(t *testing.T) *fixture {
 		Environ: func() []string {
 			return []string{"PATH=/bin", "STEPSEC_RUN_RECORD=stale", "STEPSEC_BOOTSTRAP_FALLBACK=stale"}
 		},
-		Out:            out,
+		Out: out,
+		NewRunID: func() string {
+			runSeq++
+			return fmt.Sprintf("run-%d", runSeq)
+		},
 		AdoptLockWait:  2 * time.Second,
 		RecordLockWait: time.Second,
 		LockPoll:       500 * time.Millisecond,
@@ -92,7 +98,7 @@ func newFixture(t *testing.T) *fixture {
 func mkVersionDir(t *testing.T, dir string, files ...string) {
 	t.Helper()
 	if len(files) == 0 {
-		files = []string{VersionedTaskBinary, VersionedAgentBinary, "dmg-linux"}
+		files = updatestate.VersionFiles
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -149,13 +155,15 @@ func TestRun_BootstrapMatrix(t *testing.T) {
 		{"state empty", ptr(``), map[string][]string{"1.2.0": nil}, true, "seed", ReasonStateCorrupt},
 		{"state garbage", ptr(`{{{`), map[string][]string{"1.2.0": nil}, true, "seed", ReasonStateCorrupt},
 		{"state unknown old schema", ptr(`{"schema":0,"current":"1.2.0"}`), map[string][]string{"1.2.0": nil}, true, "seed", ReasonStateCorrupt},
+		{"schema 2 with extra fields reads current/previous", ptr(`{"schema":2,"current":"1.2.0","previous":"1.1.0","probation":{"weird":true},"quarantine":[1],"updater":"x","new":{"a":[1]}}`),
+			map[string][]string{"1.1.0": nil}, true, "1.1.0", ReasonCurrentMissing + ":1.2.0"},
 		{"state newer schema still read", ptr(`{"schema":9,"current":"1.2.0","previous":"1.1.0","new":{"x":1}}`), map[string][]string{"1.2.0": nil}, true, "1.2.0", ""},
 		{"state huge", &huge, map[string][]string{"1.2.0": nil}, true, "seed", ReasonStateCorrupt},
 		{"current traversal", ptr(`{"schema":1,"current":"..\\x","previous":"1.1.0"}`), map[string][]string{"1.1.0": nil}, true, "seed", ReasonStateCorrupt},
 		{"newer schema traversal", ptr(`{"schema":2,"current":"../x"}`), nil, true, "seed", ReasonStateCorrupt},
 		{"current dir missing", ptr(`{"schema":1,"current":"1.2.0","previous":"1.1.0"}`), map[string][]string{"1.1.0": nil}, true, "1.1.0", ReasonCurrentMissing + ":1.2.0"},
-		{"current missing task.exe", ptr(`{"schema":1,"current":"1.2.0","previous":"1.1.0"}`), map[string][]string{"1.2.0": {VersionedAgentBinary}, "1.1.0": nil}, true, "1.1.0", ReasonCurrentIncomplete + ":1.2.0"},
-		{"current missing agent.exe", ptr(`{"schema":1,"current":"1.2.0","previous":"1.1.0"}`), map[string][]string{"1.2.0": {VersionedTaskBinary}, "1.1.0": nil}, true, "1.1.0", ReasonCurrentIncomplete + ":1.2.0"},
+		{"current missing task.exe", ptr(`{"schema":1,"current":"1.2.0","previous":"1.1.0"}`), map[string][]string{"1.2.0": {updatestate.AgentFile}, "1.1.0": nil}, true, "1.1.0", ReasonCurrentIncomplete + ":1.2.0"},
+		{"current missing agent.exe", ptr(`{"schema":1,"current":"1.2.0","previous":"1.1.0"}`), map[string][]string{"1.2.0": {updatestate.LauncherFile}, "1.1.0": nil}, true, "1.1.0", ReasonCurrentIncomplete + ":1.2.0"},
 		{"current and previous missing", ptr(`{"schema":1,"current":"1.2.0","previous":"1.1.0"}`), nil, true, "seed", ReasonCurrentMissing + ":1.2.0"},
 		{"no previous", ptr(`{"schema":1,"current":"1.2.0"}`), nil, true, "seed", ReasonCurrentMissing + ":1.2.0"},
 		{"seed missing, current fine", ptr(`{"schema":1,"current":"1.2.0"}`), map[string][]string{"1.2.0": nil}, false, "1.2.0", ""},
@@ -186,7 +194,7 @@ func TestRun_BootstrapMatrix(t *testing.T) {
 			if tc.wantDir != "seed" {
 				wantDir, wantVer = filepath.Join(f.layout.VersionsDir(), tc.wantDir), tc.wantDir
 			}
-			if c.path != filepath.Join(wantDir, VersionedTaskBinary) {
+			if c.path != filepath.Join(wantDir, updatestate.LauncherFile) {
 				t.Fatalf("launched %s, want under %s", c.path, wantDir)
 			}
 			if strings.Join(c.args, " ") != strings.Join(scanArgs(f.layout.DataRoot), " ") {
@@ -214,6 +222,9 @@ func TestRun_BootstrapMatrix(t *testing.T) {
 			recs := updatestate.ReadRuns(runFile)
 			if len(recs) != 1 || recs[0].ExitCode == nil || *recs[0].ExitCode != 0 {
 				t.Fatalf("run records = %+v", recs)
+			}
+			if id, _ := c.envValue(EnvRunID); id == "" || recs[0].RunID != id {
+				t.Fatalf("run_id env %q vs record %q", id, recs[0].RunID)
 			}
 		})
 	}
@@ -267,8 +278,9 @@ func TestRun_ChildExitAndWatchdogRecorded(t *testing.T) {
 	f.version("1.2.0")
 	runFile := f.layout.RunFile(updatestate.Version{Major: 1, Minor: 2})
 	// The agent marks started while it runs.
-	f.sp.during = func(spawnCall) {
-		if err := updatestate.MarkRunStarted(runFile, "exec-1"); err != nil {
+	f.sp.during = func(c spawnCall) {
+		id, _ := c.envValue(EnvRunID)
+		if err := updatestate.MarkRunStarted(runFile, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -281,7 +293,7 @@ func TestRun_ChildExitAndWatchdogRecorded(t *testing.T) {
 	if len(recs) != 2 {
 		t.Fatalf("records = %+v", recs)
 	}
-	if updatestate.ClassifyRun(recs[0]) != updatestate.RunHealthy || recs[0].ExecutionID != "exec-1" {
+	if updatestate.ClassifyRun(recs[0]) != updatestate.RunHealthy {
 		t.Fatalf("first = %+v", recs[0])
 	}
 	if !recs[1].WatchdogKilled || updatestate.ClassifyRun(recs[1]) != updatestate.RunBad {
@@ -368,7 +380,7 @@ func (f *fixture) updaterRan() string {
 		f.t.Fatalf("spawned %d times; log:\n%s", len(f.sp.calls), f.out)
 	}
 	c := f.sp.calls[0]
-	if filepath.Base(c.path) != VersionedAgentBinary || strings.Join(c.args, " ") != "self-update --system" {
+	if filepath.Base(c.path) != updatestate.AgentFile || strings.Join(c.args, " ") != "self-update --system" {
 		f.t.Fatalf("call = %+v", c)
 	}
 	rel, _ := filepath.Rel(f.layout.InstallRoot, filepath.Dir(c.path))
@@ -515,7 +527,10 @@ func TestAdoptSeed_FreshInstall(t *testing.T) {
 	seed := f.seed("1.5.0")
 	f.adopt(seed + string(filepath.Separator))
 	dst := filepath.Join(f.layout.VersionsDir(), "1.5.0")
-	for _, n := range []string{VersionedTaskBinary, VersionedAgentBinary, "dmg-linux"} {
+	if err := updatestate.VerifyVersionDir(dst, updatestate.Version{Major: 1, Minor: 5}); err != nil {
+		t.Fatalf("adopted seed does not verify against its manifest: %v", err)
+	}
+	for _, n := range updatestate.VersionFiles {
 		got, err := os.ReadFile(filepath.Join(dst, n))
 		want, _ := os.ReadFile(filepath.Join(seed, n))
 		if err != nil || !bytes.Equal(got, want) {
@@ -556,7 +571,7 @@ func TestAdoptSeed_StateRules(t *testing.T) {
 				f.version(v)
 			}
 			if tc.name == "current incomplete repaired" {
-				f.version("1.6.0", VersionedAgentBinary)
+				f.version("1.6.0", updatestate.AgentFile)
 			}
 			seed := f.seed("1.5.0")
 			f.adopt(seed)
@@ -576,7 +591,7 @@ func TestAdoptSeed_StateRules(t *testing.T) {
 
 func TestAdoptSeed_IncompleteSeedVersionReplaced(t *testing.T) {
 	f := newFixture(t)
-	f.version("1.5.0", VersionedTaskBinary)
+	f.version("1.5.0", updatestate.LauncherFile)
 	f.adopt(f.seed("1.5.0"))
 	if !updatestate.VersionDirUsable(filepath.Join(f.layout.VersionsDir(), "1.5.0")) {
 		t.Fatal("incomplete version dir not replaced")
@@ -630,7 +645,7 @@ func TestAdoptSeed_NoOpCases(t *testing.T) {
 	t.Run("incomplete seed", func(t *testing.T) {
 		f := newFixture(t)
 		d := filepath.Join(f.layout.InstallRoot, "seed", "1.5.0")
-		mkVersionDir(t, d, VersionedAgentBinary)
+		mkVersionDir(t, d, updatestate.AgentFile)
 		f.adopt(d)
 		if _, err := os.Stat(f.layout.StateFile()); !os.IsNotExist(err) {
 			t.Fatal("adopted an incomplete seed")
@@ -650,5 +665,53 @@ func TestChildEnv_ReplacesOurVars(t *testing.T) {
 	joined := strings.Join(env, "\n")
 	if strings.Contains(joined, "stale") || !strings.Contains(joined, "STEPSEC_RUN_RECORD=r") || strings.Contains(joined, EnvBootstrapFallback) {
 		t.Fatalf("env = %v", env)
+	}
+}
+
+// Overlapping hourly + Logon runs of one version: each run finalizes only its
+// own record (run_id), never the newest one.
+func TestRun_OverlappingRunsKeepTheirOwnRecords(t *testing.T) {
+	f := newFixture(t)
+	f.state(`{"schema":1,"current":"1.2.0"}`)
+	f.version("1.2.0")
+	nested := false
+	f.sp.during = func(spawnCall) {
+		if nested {
+			return
+		}
+		nested = true
+		// The Logon task fires while the hourly scan is still running.
+		if code := f.b.Run(scanArgs(f.layout.DataRoot)); code != 0 {
+			t.Errorf("inner run exit = %d", code)
+		}
+	}
+	f.sp.results = []SpawnResult{{Started: true, ExitCode: 5}, {Started: true, ExitCode: 0}}
+	if code := f.b.Run(scanArgs(f.layout.DataRoot)); code != 5 {
+		t.Fatalf("outer run exit = %d", code)
+	}
+	recs := updatestate.ReadRuns(f.layout.RunFile(updatestate.Version{Major: 1, Minor: 2}))
+	if len(recs) != 2 {
+		t.Fatalf("records = %+v", recs)
+	}
+	got := map[string]int{}
+	for _, r := range recs {
+		if r.ExitCode == nil {
+			t.Fatalf("open record left: %+v", r)
+		}
+		got[r.RunID] = *r.ExitCode
+	}
+	outer, _ := f.sp.calls[0].envValue(EnvRunID)
+	inner, _ := f.sp.calls[1].envValue(EnvRunID)
+	if outer == inner || got[outer] != 5 || got[inner] != 0 {
+		t.Fatalf("outer %s inner %s records %v", outer, inner, got)
+	}
+}
+
+func TestAdoptSeed_UnverifiableSeedVersionReplaced(t *testing.T) {
+	f := newFixture(t)
+	f.version("1.5.0") // all files, no manifest
+	f.adopt(f.seed("1.5.0"))
+	if err := updatestate.VerifyVersionDir(filepath.Join(f.layout.VersionsDir(), "1.5.0"), updatestate.Version{Major: 1, Minor: 5}); err != nil {
+		t.Fatalf("not replaced by a verified copy: %v", err)
 	}
 }

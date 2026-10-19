@@ -1,7 +1,6 @@
 package updatestate
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +17,9 @@ type Pointers struct {
 	Current   string
 	Previous  string
 	Probation string // probation version, "" when none (schema 1 only)
-	Updater   Updater
+	// Updater bookkeeping (schema 1 only).
+	UpdaterVersion  string
+	UpdaterFailures int
 }
 
 // LoadPointers reads state.json for the bootstrap. Schema 1 must pass the
@@ -57,7 +58,8 @@ func decodePointers(data []byte) (*Pointers, error) {
 		if err != nil {
 			return nil, err
 		}
-		p := &Pointers{Schema: s.Schema, Current: s.Current, Previous: s.Previous, Updater: s.Updater}
+		p := &Pointers{Schema: s.Schema, Current: s.Current, Previous: s.Previous,
+			UpdaterVersion: s.Updater.Version, UpdaterFailures: s.Updater.ConsecutiveFailures}
 		if s.Probation != nil {
 			p.Probation = s.Probation.Version
 		}
@@ -76,87 +78,6 @@ func decodePointers(data []byte) (*Pointers, error) {
 	}
 }
 
-// ErrStateNotPatchable means PatchCheckpointed found no valid schema-1 state.
-var ErrStateNotPatchable = errors.New("updatestate: no valid schema-1 state to patch")
-
-// PatchCheckpointed loads a valid schema-1 state.json, applies fn and writes
-// it back atomically like SaveCheckpointed. Only the top-level fields fn
-// changed are rewritten; every other field keeps its original bytes, so an
-// older bootstrap never strips what a newer agent added (also inside nested
-// objects such as quarantine entries). A missing, corrupt or higher-schema
-// file returns ErrStateNotPatchable and is left untouched; so does a fn that
-// changes nothing. Call it with the update lock held.
-func PatchCheckpointed(path, prefix string, fn func(*State) error) error {
-	data, err := readBounded(path, maxStateSize)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errUnreadable) {
-			return ErrStateNotPatchable
-		}
-		return err
-	}
-	st, err := decodeState(data)
-	if err != nil {
-		return ErrStateNotPatchable
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return ErrStateNotPatchable
-	}
-	before, err := patchFieldMap(st)
-	if err != nil {
-		return err
-	}
-	if err := fn(st); err != nil {
-		return err
-	}
-	st.Schema = SchemaVersion
-	if err := st.Validate(); err != nil {
-		return fmt.Errorf("updatestate: refusing to save invalid state: %w", err)
-	}
-	after, err := patchFieldMap(st)
-	if err != nil {
-		return err
-	}
-	changed := false
-	for k, v := range after {
-		if !bytes.Equal(before[k], v) {
-			raw[k] = v
-			changed = true
-		}
-	}
-	if !changed {
-		return nil
-	}
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return err
-	}
-	var afterTemp, afterRename func() error
-	if prefix != "" {
-		afterTemp = func() error { return checkpoint(prefix + ".state-temp") }
-		afterRename = func() error { return checkpoint(prefix + ".state-renamed") }
-	}
-	return writeAtomic(path, append(out, '\n'), afterTemp, afterRename)
-}
-
-func patchFieldMap(st *State) (map[string]json.RawMessage, error) {
-	b, err := json.Marshal(st)
-	if err != nil {
-		return nil, err
-	}
-	var m map[string]json.RawMessage
-	err = json.Unmarshal(b, &m)
-	return m, err
-}
-
-// Executables every launchable version directory (versions\<v>\ and
-// seed\<v>\) must contain. "Usable" is file presence only; integrity is the
-// updater's manifest check, not the bootstrap's.
-const (
-	RunnableAgentName = "agent.exe"
-	RunnableTaskName  = "task.exe"
-)
-
 // Fallback reasons for the bootstrap's EnvBootstrapFallback. Reasons about a
 // named version carry it after a colon (current_missing:1.20.0) so the agent
 // can report update_pointer_invalid with update_from = that version.
@@ -172,10 +93,12 @@ const (
 	FallbackNothingRunnable   = "no_runnable_version"
 )
 
-// VersionDirUsable reports whether dir holds both RunnableTaskName and
-// RunnableAgentName as non-empty regular files.
+// VersionDirUsable reports whether dir holds LauncherFile and AgentFile as
+// non-empty regular files: what the bootstrap needs to launch a version.
+// It is file presence only; integrity is the updater's manifest check
+// (VerifyVersionDir), not the bootstrap's.
 func VersionDirUsable(dir string) bool {
-	for _, name := range []string{RunnableTaskName, RunnableAgentName} {
+	for _, name := range []string{LauncherFile, AgentFile} {
 		fi, err := os.Lstat(filepath.Join(dir, name))
 		if err != nil || !fi.Mode().IsRegular() || fi.Size() == 0 {
 			return false
