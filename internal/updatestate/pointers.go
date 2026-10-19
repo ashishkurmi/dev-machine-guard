@@ -217,7 +217,7 @@ func ResolveRunVersion(l Layout, st *State) (Version, string) {
 // RunLockFile is the lock beside runs\<v>.json that every read-modify-write
 // of that file takes (R-B-2): the bootstrap's AppendRun/FinalizeRun and the
 // agent's MarkRunStarted, so overlapping scan tasks never lose a record.
-func (l Layout) RunLockFile(v Version) string { return l.RunFile(v) + ".lock" }
+func (l Layout) RunLockFile(v Version) string { return RunLockPath(l.RunFile(v)) }
 
 // ErrNotRecordable means SaveUpdaterRecord found no state it may patch: the
 // file is missing or its pointers (schema/current/previous) are unreadable.
@@ -262,6 +262,13 @@ func SaveUpdaterRecord(path, prefix string, fn func(version string, failures int
 		return err
 	}
 	if raw["updater"], err = json.Marshal(upd); err != nil {
+		return err
+	}
+	// Bump generation like every state writer (the updater decides whether
+	// its own write landed by generation).
+	var gen uint64
+	_ = json.Unmarshal(raw["generation"], &gen)
+	if raw["generation"], err = json.Marshal(gen + 1); err != nil {
 		return err
 	}
 	out, err := json.MarshalIndent(raw, "", "  ")

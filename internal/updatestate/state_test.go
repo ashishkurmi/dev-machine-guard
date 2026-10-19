@@ -331,3 +331,29 @@ func TestHigherSchemaIsReadAndPreserved(t *testing.T) {
 		t.Fatalf("schema-2 state not preserved: %s", data)
 	}
 }
+
+// B4(b): the bootstrap's updater-record write bumps generation like every
+// other writer, so the updater's "did my write land" check stays sound.
+func TestSaveUpdaterRecordBumpsGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	st := &State{Schema: 1, Current: "1.20.0"}
+	if err := Save(path, st); err != nil {
+		t.Fatal(err)
+	}
+	before := st.Generation
+	if err := SaveUpdaterRecord(path, "", func(string, int) (string, int) { return "1.20.0", 1 }); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := Load(path)
+	if err != nil || got.Generation != before+1 || got.Updater.ConsecutiveFailures != 1 {
+		t.Fatalf("after record: gen %d (want %d), %+v, %v", got.Generation, before+1, got.Updater, err)
+	}
+	// The updater's next save goes on from there.
+	if err := Save(path, got); err != nil {
+		t.Fatal(err)
+	}
+	again, _, _ := Load(path)
+	if again.Generation != before+2 || again.Updater.ConsecutiveFailures != 1 {
+		t.Fatalf("updater after record: %+v", again)
+	}
+}

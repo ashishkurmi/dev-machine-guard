@@ -135,3 +135,27 @@ func TestMarkRunStartedLockedTimesOut(t *testing.T) {
 		t.Fatal("marker written without the lock")
 	}
 }
+
+// B4(a): the agent's marker and the bootstrap use one lock path helper: a
+// holder of Layout.RunLockFile blocks MarkRunStartedLocked on RunFile.
+func TestMarkerAndBootstrapShareTheRunLock(t *testing.T) {
+	l := Layout{InstallRoot: t.TempDir(), DataRoot: t.TempDir()}
+	v, _ := ParseVersion("1.20.0")
+	if err := AppendRun(l.RunFile(v), RunRecord{RunID: "a", Version: "1.20.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if l.RunFile(v)+".lock" != l.RunLockFile(v) {
+		t.Fatalf("lock paths differ")
+	}
+	held, err := AcquireLock(l.RunLockFile(v))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkRunStartedLocked(l.RunFile(v), "a", 100*time.Millisecond); err == nil {
+		t.Fatal("marker written while the bootstrap held the run lock")
+	}
+	held.Release()
+	if err := MarkRunStartedLocked(l.RunFile(v), "a", time.Second); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1071,3 +1071,25 @@ func TestPersistentWriteFailureIsQuiet(t *testing.T) {
 		}
 	}
 }
+
+// B4(b): a bootstrap updater-record write between ticks bumps generation;
+// the next tick's landed-with-error write is still recognised as landed.
+func TestBootstrapRecordThenLandedWrite(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	before := e.state().Generation
+	must(t, updatestate.SaveUpdaterRecord(e.L.StateFile(), "boot", func(string, int) (string, int) { return "1.19.0", 2 }))
+	if g := e.state().Generation; g != before+1 {
+		t.Fatalf("bootstrap record: generation %d, want %d", g, before+1)
+	}
+	failingSaves(t, true)
+	e.tick()
+	got := e.events()
+	if slices.Contains(got, EventSwitchFailed) || !slices.Contains(got, EventOK) {
+		t.Fatalf("events = %v", got)
+	}
+	if st := e.state(); st.Current != "1.20.0" || st.Updater.ConsecutiveFailures != 2 {
+		t.Fatalf("state = %+v", st)
+	}
+}

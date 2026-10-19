@@ -160,13 +160,18 @@ func MarkRunStarted(path, runID string) error {
 	return updateOpenRun(path, runID, func(r *RunRecord) { r.Started = true })
 }
 
+// RunLockPath is the lock beside a run file (runs\<v>.json.lock) that every
+// read-modify-write of it takes: the bootstrap's AppendRun/FinalizeRun (via
+// Layout.RunLockFile) and the agent's MarkRunStartedLocked.
+func RunLockPath(runFile string) string { return runFile + ".lock" }
+
 // MarkRunStartedLocked is the agent's MarkRunStarted under the run-record
-// lock the bootstrap takes for AppendRun/FinalizeRun (runs\<v>.json.lock,
-// Layout.RunLockFile on the boot branch), waiting at most wait. On timeout it
+// lock the bootstrap takes for AppendRun/FinalizeRun (RunLockPath), waiting
+// at most wait. On timeout it
 // returns an error without writing; callers skip the marker and never fail
 // the scan.
 func MarkRunStartedLocked(path, runID string, wait time.Duration) error {
-	lockPath := path + ".lock"
+	lockPath := RunLockPath(path)
 	deadline := time.Now().Add(wait)
 	for {
 		l, err := AcquireLock(lockPath)
