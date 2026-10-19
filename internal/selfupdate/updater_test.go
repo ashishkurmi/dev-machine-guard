@@ -594,6 +594,9 @@ func TestGCKeepsPointersAndSweepsLeftovers(t *testing.T) {
 	for _, v := range []string{"1.18.0", "1.19.0", "1.20.0", "1.21.0"} {
 		e.installVersion(v)
 	}
+	// 1.21.0 was staged long ago (not a recent unrecorded stage): collect it.
+	old := e.now.Add(-3 * 24 * time.Hour)
+	must(t, os.Chtimes(filepath.Join(e.L.VersionDir(mustV("1.21.0")), updatestate.ManifestName), old, old))
 	must(t, os.MkdirAll(filepath.Join(e.L.VersionsDir(), ".staging-1.21.0-x"), 0o755))
 	must(t, os.MkdirAll(filepath.Join(e.L.VersionsDir(), ".trash-1.17.0-y"), 0o755))
 	st := baseState("1.20.0", "1.19.0")
@@ -1039,4 +1042,32 @@ func TestQuarantinedPendingTargetIsCollected(t *testing.T) {
 		t.Fatalf("quarantined dir kept: %v", err)
 	}
 	assertHygiene(t, e)
+}
+
+// R-C2-12: while state.json can't be written, repeats of the same event
+// carry one deterministic execution_id (the backend collapses them), and a
+// release already staged in versions\<t> is not downloaded again.
+func TestPersistentWriteFailureIsQuiet(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	failingSaves(t, false)
+	for i := 0; i < 3; i++ {
+		e.tick()
+		e.now = e.now.Add(7 * time.Hour)
+	}
+	ids := map[string]bool{}
+	for _, ev := range e.all {
+		if ev.Event == EventSwitchFailed {
+			ids[ev.ExecutionID] = true
+		}
+	}
+	if len(ids) != 1 {
+		t.Fatalf("update_switch_failed sent with %d distinct execution_ids, want 1", len(ids))
+	}
+	for remote, n := range e.api.githubHits {
+		if n != 1 {
+			t.Fatalf("%s downloaded %d times", remote, n)
+		}
+	}
 }

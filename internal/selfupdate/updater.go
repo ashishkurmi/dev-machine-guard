@@ -106,7 +106,19 @@ type tick struct {
 	st    *updatestate.State
 	now   time.Time
 	seeds []updatestate.Version
+	// diskIDs are the execution_ids of outbox events loaded from disk;
+	// target is this tick's latest-binary target ("" before S3).
+	diskIDs map[string]bool
+	target  string
 }
+
+// directSendNS namespaces the deterministic ids of directly sent events.
+var directSendNS = uuid.MustParse("6f1c2d3e-8a4b-5c6d-9e0f-a1b2c3d4e5f6")
+
+// stagedKeep is how long GC keeps a verified, not-yet-switched staged
+// version newer than current, so a tick that couldn't record its progress
+// doesn't download the release again.
+const stagedKeep = 24 * time.Hour
 
 // checkpoint is faultinject.Point; a var so unit tests can observe order.
 var checkpoint = faultinject.Point
@@ -178,6 +190,10 @@ func (t *tick) load() error {
 	if st != nil {
 		t.st = st
 		normalize(st)
+		t.diskIDs = map[string]bool{}
+		for _, ev := range st.Outbox {
+			t.diskIDs[ev.ExecutionID] = true
+		}
 		return nil
 	}
 	cur := t.d.Self
@@ -331,6 +347,9 @@ func (t *tick) gc() {
 		return
 	}
 	keep := t.keep()
+	if v := t.recentStaged(entries); v != "" {
+		keep[v] = true
+	}
 	for _, e := range entries {
 		p := filepath.Join(t.L.VersionsDir(), e.Name())
 		if updatestate.IsSweepable(e.Name()) {
@@ -351,6 +370,32 @@ func (t *tick) gc() {
 			t.d.Logf("self-update: GC %s: %v (retry next tick)", e.Name(), err)
 		}
 	}
+}
+
+// recentStaged is the newest version dir above current that verifies, isn't
+// quarantined and was staged within stagedKeep: a staged target whose
+// switch didn't get recorded. "" if none.
+func (t *tick) recentStaged(entries []os.DirEntry) string {
+	cur, err := updatestate.ParseVersion(t.st.Current)
+	if err != nil {
+		return ""
+	}
+	best := ""
+	var bestV updatestate.Version
+	for _, e := range entries {
+		v, err := updatestate.ParseVersion(e.Name())
+		if err != nil || !e.IsDir() || updatestate.Compare(v, cur) <= 0 || t.quarantined(v.String()) {
+			continue
+		}
+		fi, err := os.Stat(filepath.Join(t.L.VersionDir(v), updatestate.ManifestName))
+		if err != nil || t.now.Sub(fi.ModTime()) > stagedKeep || updatestate.VerifyVersionDir(t.L.VersionDir(v), v) != nil {
+			continue
+		}
+		if best == "" || updatestate.Compare(v, bestV) > 0 {
+			best, bestV = v.String(), v
+		}
+	}
+	return best
 }
 
 func (t *tick) dirValid(v string) bool {
@@ -553,6 +598,7 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 		return t.finish(ctx, ExitFailed)
 	}
 	target := rel.Version.String()
+	t.target = target
 	if t.st.PendingSwitch != "" && t.st.PendingSwitch != target {
 		// The deferred target was abandoned; its dir and count go with it.
 		t.st.PendingSwitch, t.st.SwitchDeferrals = "", 0
@@ -793,6 +839,7 @@ func (t *tick) finish(ctx context.Context, code int) int {
 		// execution_ids) rather than lose them; the save is retried by later
 		// ticks.
 		t.d.Logf("self-update: state not written; sending this tick's events directly")
+		t.deterministicIDs()
 		t.flush(ctx)
 		return ExitFailed
 	}
@@ -802,6 +849,20 @@ func (t *tick) finish(ctx context.Context, code int) int {
 		}
 	}
 	return code
+}
+
+// deterministicIDs gives events that never reached disk an execution_id
+// derived from (event, from, to, target, state generation): while state.json
+// stays unwritable, every tick repeats the same events under the same ids
+// and the backend keeps one row each (D9: one id per event instance).
+func (t *tick) deterministicIDs() {
+	for i, ev := range t.st.Outbox {
+		if t.diskIDs[ev.ExecutionID] {
+			continue
+		}
+		key := fmt.Sprintf("%s|%s|%s|%s|%d", ev.Event, ev.From, ev.To, t.target, t.st.Generation)
+		t.st.Outbox[i].ExecutionID = uuid.NewSHA1(directSendNS, []byte(key)).String()
+	}
 }
 
 // flush sends due pending events oldest first. Delivered and rejected
