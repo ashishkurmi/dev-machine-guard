@@ -313,6 +313,9 @@ func (t *tick) keep() map[string]bool {
 	if p := t.st.Probation; p != nil {
 		k[p.Version] = true
 	}
+	if t.st.PendingSwitch != "" {
+		k[t.st.PendingSwitch] = true // staged, waiting for the scan mutex
+	}
 	for _, s := range t.seeds {
 		k[s.String()] = true
 	}
@@ -550,6 +553,10 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 		return t.finish(ctx, ExitFailed)
 	}
 	target := rel.Version.String()
+	if t.st.PendingSwitch != "" && t.st.PendingSwitch != target {
+		// The deferred target was abandoned; its dir and count go with it.
+		t.st.PendingSwitch, t.st.SwitchDeferrals = "", 0
+	}
 	switch {
 	case !t.d.AutoUpdate:
 		if target != st.Current {
@@ -618,6 +625,9 @@ func (t *tick) switchTo(ctx context.Context, v updatestate.Version) int {
 	target, old := v.String(), t.st.Current
 	release, ok := t.waitInstance(ctx)
 	if !ok {
+		if t.st.PendingSwitch != target {
+			t.st.PendingSwitch, t.st.SwitchDeferrals = target, 0
+		}
 		t.st.SwitchDeferrals++
 		// Retry the switch next tick instead of after the check interval.
 		t.st.LastCheck = time.Time{}
@@ -638,6 +648,7 @@ func (t *tick) switchTo(ctx context.Context, v updatestate.Version) int {
 	next.Current = target
 	next.Probation = &updatestate.Probation{Version: target, Since: t.now.UTC(), SmokeOK: true}
 	next.SwitchDeferrals = 0
+	next.PendingSwitch = ""
 	enqueueTo(next, t.now, t.dedupeWindow(), EventOK, old, target, "", "")
 	if err := t.save(next, "S6"); err != nil {
 		t.enqueue(EventSwitchFailed, old, target, err.Error(), EventSwitchFailed+":"+target)

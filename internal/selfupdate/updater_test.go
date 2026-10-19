@@ -187,6 +187,9 @@ func assertHygiene(t *testing.T, e *env) {
 	if st.Probation != nil {
 		allowed[st.Probation.Version] = true
 	}
+	if st.PendingSwitch != "" {
+		allowed[st.PendingSwitch] = true
+	}
 	for _, s := range seedVersions(e.L) {
 		allowed[s.String()] = true
 	}
@@ -878,5 +881,46 @@ func TestSmokeBudgetCutoffRetries(t *testing.T) {
 	}
 	if !st.LastCheck.IsZero() {
 		t.Fatal("the target check is not retried on the next tick")
+	}
+}
+
+// D15/R-C2-8: deferred switches reuse the staged versions\<t> instead of
+// re-downloading it every tick.
+func TestDeferralReusesStagedDir(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.busy = 5
+	for i := 0; i < 5; i++ {
+		e.tick()
+		e.now = e.now.Add(time.Hour)
+	}
+	e.tick()
+	if st := e.state(); st.Current != "1.20.0" {
+		t.Fatalf("not switched: %+v", st)
+	}
+	for remote, n := range e.api.githubHits {
+		if n != 1 {
+			t.Fatalf("%s downloaded %d times", remote, n)
+		}
+	}
+}
+
+// The deferral counter belongs to one target: a count left by an abandoned
+// target doesn't make the next target's first deferral a report.
+func TestDeferralCounterIsPerTarget(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	st := baseState("1.19.0", "")
+	st.SwitchDeferrals = 3
+	st.PendingSwitch = "1.21.0"
+	e.writeState(st)
+	e.busy = 1
+	e.tick()
+	if got := e.events(); slices.Contains(got, EventSwitchDeferred) {
+		t.Fatalf("first deferral of a new target reported: %v", got)
+	}
+	if st := e.state(); st.SwitchDeferrals != 1 || st.PendingSwitch != "1.20.0" {
+		t.Fatalf("deferral state: %d %q", st.SwitchDeferrals, st.PendingSwitch)
 	}
 }

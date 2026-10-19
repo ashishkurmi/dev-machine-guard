@@ -296,6 +296,9 @@ func (e *h1Env) assertHygiene(st *updatestate.State) {
 	if st.Probation != nil {
 		allowed[st.Probation.Version] = true
 	}
+	if st.PendingSwitch != "" {
+		allowed[st.PendingSwitch] = true
+	}
 	entries, _ := os.ReadDir(e.L.VersionsDir())
 	for _, en := range entries {
 		if updatestate.IsSweepable(en.Name()) || !allowed[en.Name()] {

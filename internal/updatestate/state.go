@@ -39,6 +39,9 @@ type State struct {
 	// Outbox holds update events not yet accepted by the backend. Events
 	// are added in the same atomic write as the state change they report.
 	Outbox []OutboxEvent `json:"outbox,omitempty"`
+	// PendingSwitch is a staged target whose switch was deferred; its
+	// versions dir is kept and SwitchDeferrals counts for it alone.
+	PendingSwitch string `json:"pending_switch,omitempty"`
 	// OutboxDropped counts events dropped because the outbox was full.
 	OutboxDropped uint64 `json:"outbox_dropped,omitempty"`
 
