@@ -993,3 +993,24 @@ func TestDedupeNeverHidesANewEventClass(t *testing.T) {
 	e.tick()
 	wantEvents(t, e.events()) // same class, same target, same window: deduped
 }
+
+// R-F1-8: with 12 abandoned open records in the run file, two crashes are
+// still seen and the probation version is rolled back.
+func TestRollbackDespiteAbandonedRecords(t *testing.T) {
+	e := newEnv(t)
+	probationState(t, e)
+	pv := mustV("1.20.0")
+	stale := time.Now().Add(-48 * time.Hour)
+	for i := 0; i < 12; i++ {
+		must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: fmt.Sprintf("dead-%d", i), Version: "1.20.0", StartedAt: stale}))
+	}
+	for i := 0; i < 2 && e.state().Current == "1.20.0"; i++ {
+		id := fmt.Sprintf("crash-%d", i)
+		must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: id, Version: "1.20.0"}))
+		must(t, updatestate.FinalizeRun(e.L.RunFile(pv), id, 2, false, e.now))
+		e.tick()
+	}
+	if rb := e.lastSentOrNil(EventRolledBack); rb == nil || rb.Error != ReasonBadRuns {
+		t.Fatalf("crashing version not rolled back: %+v", e.state())
+	}
+}

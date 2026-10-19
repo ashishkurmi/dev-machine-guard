@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+// A launch can't outlive the agent's execution deadline (4 h default), plus
+// the scan task's ExecutionTimeLimit margin over it (30 min, which covers
+// the bootstrap's own watchdog slack), plus abandonSlack. An open record
+// older than that belongs to a bootstrap that died (logoff, shutdown, the
+// task time limit) and will never be finalized.
+const (
+	runAgentDeadline = 4 * time.Hour
+	runTaskMargin    = 30 * time.Minute
+	abandonSlack     = 2 * time.Hour
+	abandonAfter     = runAgentDeadline + runTaskMargin + abandonSlack
+)
+
 // MaxRunRecords is how many run records a runs\<v>.json keeps.
 const MaxRunRecords = 10
 
@@ -22,8 +34,13 @@ const maxRunsSize = 64 << 10
 // RunID, so overlapping launches never touch each other's record. A nil
 // ExitCode means not finalized yet.
 type RunRecord struct {
-	RunID          string    `json:"run_id,omitempty"`
-	Version        string    `json:"version"`
+	RunID   string `json:"run_id,omitempty"`
+	Version string `json:"version"`
+	// StartedAt is when the record was appended (the launch began).
+	StartedAt time.Time `json:"start,omitzero"`
+	// Abandoned marks an open record whose launch outlived any possible
+	// scan (its bootstrap died); it is Neutral and evicted first.
+	Abandoned      bool      `json:"abandoned,omitempty"`
 	ExecutionID    string    `json:"execution_id,omitempty"`
 	Started        bool      `json:"started"`
 	ExitCode       *int      `json:"exit_code,omitempty"`
@@ -60,24 +77,25 @@ func decodeRuns(data []byte) []RunRecord {
 			out = append(out, r)
 		}
 	}
-	out = trimRuns(out)
+	out = trimRuns(out, "")
 	if len(out) == 0 {
 		return nil
 	}
 	return out
 }
 
-// trimRuns keeps at most MaxRunRecords, evicting the oldest closed records
-// first: an open record (its launch still running) is never dropped, or
-// that launch's marker and finalize would find nothing. Order is kept.
-func trimRuns(recs []RunRecord) []RunRecord {
+// trimRuns keeps at most MaxRunRecords plus any fresh open records,
+// evicting the oldest closed or abandoned records first. A fresh open
+// record (its launch still running) and the record named protect (the one
+// this write finalizes or marks) are never evicted. Order is kept.
+func trimRuns(recs []RunRecord, protect string) []RunRecord {
 	excess := len(recs) - MaxRunRecords
 	if excess <= 0 {
 		return recs
 	}
 	out := make([]RunRecord, 0, len(recs))
 	for _, r := range recs {
-		if excess > 0 && ClassifyRun(r) != RunOpen {
+		if excess > 0 && ClassifyRun(r) != RunOpen && (protect == "" || r.RunID != protect) {
 			excess--
 			continue
 		}
@@ -86,8 +104,22 @@ func trimRuns(recs []RunRecord) []RunRecord {
 	return out
 }
 
-func writeRuns(path string, recs []RunRecord) error {
-	recs = trimRuns(recs)
+// abandonStale marks open records older than abandonAfter (or with no start
+// time) as abandoned: their bootstrap died and will never finalize them.
+func abandonStale(recs []RunRecord, now time.Time) {
+	for i := range recs {
+		r := &recs[i]
+		if ClassifyRun(*r) == RunOpen && (r.StartedAt.IsZero() || now.Sub(r.StartedAt) > abandonAfter) {
+			r.Abandoned = true
+		}
+	}
+}
+
+// writeRuns abandons stale open records, trims (never evicting protect)
+// and writes. Callers hold the run-record lock.
+func writeRuns(path string, recs []RunRecord, protect string) error {
+	abandonStale(recs, time.Now())
+	recs = trimRuns(recs, protect)
 	data, err := json.Marshal(runFile{Records: recs})
 	if err != nil {
 		return err
@@ -117,7 +149,10 @@ func AppendRun(path string, r RunRecord) error {
 			return ErrRunID
 		}
 	}
-	return writeRuns(path, append(recs, r))
+	if r.StartedAt.IsZero() {
+		r.StartedAt = time.Now().UTC()
+	}
+	return writeRuns(path, append(recs, r), r.RunID)
 }
 
 // MarkRunStarted sets the started marker on the open record runID.
@@ -163,7 +198,7 @@ func updateOpenRun(path, runID string, fn func(*RunRecord)) error {
 	for i := range recs {
 		if recs[i].RunID == runID && ClassifyRun(recs[i]) == RunOpen {
 			fn(&recs[i])
-			return writeRuns(path, recs)
+			return writeRuns(path, recs, runID)
 		}
 	}
 	return ErrNoOpenRun
@@ -193,6 +228,9 @@ const panicExitCode = 2
 // ClassifyRun applies the bad-run rule to one record.
 func ClassifyRun(r RunRecord) RunVerdict {
 	switch {
+	case r.Abandoned:
+		// Its launch died unrecorded: neither a crash nor a scan.
+		return RunNeutral
 	case r.WatchdogKilled:
 		return RunBad
 	case r.ExitCode == nil:

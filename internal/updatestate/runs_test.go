@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -219,5 +220,61 @@ func TestTrimNeverEvictsOpenRecords(t *testing.T) {
 	}
 	if err := FinalizeRun(path, "long-running", 0, false, at); err != nil {
 		t.Fatalf("open record evicted: %v", err)
+	}
+}
+
+// R-F1-8: open records whose bootstrap died (logoff, shutdown, the task
+// time limit) are abandoned once older than a scan's maximum life: they
+// become Neutral, are evicted first, and the record finalized in the same
+// write is never evicted, so a crash still reads as Bad.
+func TestStaleOpenRecordsDoNotEvictTheFinalizedOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "1.20.0.json")
+	stale := time.Now().Add(-(abandonAfter + time.Hour))
+	for i := 0; i < 12; i++ {
+		if err := AppendRun(path, RunRecord{RunID: fmt.Sprintf("dead-%d", i), Version: "1.20.0", StartedAt: stale}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := AppendRun(path, RunRecord{RunID: "crash", Version: "1.20.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinalizeRun(path, "crash", 2, false, time.Now()); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	recs := ReadRuns(path)
+	var crash *RunRecord
+	abandoned := 0
+	for i := range recs {
+		switch {
+		case recs[i].RunID == "crash":
+			crash = &recs[i]
+		case recs[i].Abandoned:
+			abandoned++
+			if v := ClassifyRun(recs[i]); v != RunNeutral {
+				t.Fatalf("abandoned record classified %v", v)
+			}
+		}
+	}
+	if crash == nil || ClassifyRun(*crash) != RunBad {
+		t.Fatalf("the finalized crash record was lost or not Bad: %+v", recs)
+	}
+	if len(recs) > MaxRunRecords {
+		t.Fatalf("%d records kept, want ≤ %d with no fresh open ones", len(recs), MaxRunRecords)
+	}
+	// Fresh open records are never evicted and don't count against the cap.
+	for i := 0; i < 3; i++ {
+		if err := AppendRun(path, RunRecord{RunID: fmt.Sprintf("live-%d", i), Version: "1.20.0"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recs = ReadRuns(path)
+	live := 0
+	for _, r := range recs {
+		if strings.HasPrefix(r.RunID, "live-") {
+			live++
+		}
+	}
+	if live != 3 || len(recs) > MaxRunRecords+3 {
+		t.Fatalf("live=%d len=%d", live, len(recs))
 	}
 }
