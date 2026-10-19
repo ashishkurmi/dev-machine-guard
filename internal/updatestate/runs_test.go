@@ -376,3 +376,25 @@ func TestAbandonUnknownOwnerFutureStart(t *testing.T) {
 	}
 }
 
+// R-F1-10: the reader never trims: 10 fresh open runs plus a just-finalized
+// crash, and the crash is visible.
+func TestReadRunsNeverTrims(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "1.20.0.json")
+	for i := 0; i < 10; i++ {
+		if err := AppendRun(path, RunRecord{RunID: fmt.Sprintf("live-%d", i), Version: "1.20.0"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := AppendRun(path, RunRecord{RunID: "crash", Version: "1.20.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinalizeRun(path, "crash", 2, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if r := recordOf(t, path, "crash"); ClassifyRun(r) != RunBad {
+		t.Fatalf("crash = %+v", r)
+	}
+	if n := len(ReadRuns(path)); n != 11 {
+		t.Fatalf("reader returned %d records, want 11", n)
+	}
+}

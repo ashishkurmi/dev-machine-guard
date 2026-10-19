@@ -61,7 +61,8 @@ type runFile struct {
 // ErrNoOpenRun means the run file has no unfinalized record with that run_id.
 var ErrNoOpenRun = errors.New("updatestate: no open run record")
 
-// ReadRuns returns the newest MaxRunRecords records, oldest first. The file
+// ReadRuns returns every record in the file, oldest first; trimming
+// happens only when writing. The file
 // is user-writable, so anything unreadable or malformed reads as no records
 // and records with an invalid version are dropped; it never fails.
 func ReadRuns(path string) []RunRecord {
@@ -83,7 +84,6 @@ func decodeRuns(data []byte) []RunRecord {
 			out = append(out, r)
 		}
 	}
-	out = trimRuns(out, "")
 	if len(out) == 0 {
 		return nil
 	}

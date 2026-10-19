@@ -53,14 +53,7 @@ func FuzzDecodeRuns(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		recs := decodeRuns(data)
-		// Beyond MaxRunRecords only open records may remain (never evicted).
-		if len(recs) > MaxRunRecords {
-			for _, r := range recs {
-				if ClassifyRun(r) != RunOpen {
-					t.Fatalf("%d records, including closed ones", len(recs))
-				}
-			}
-		}
+		// The reader never trims (R-F1-10); the 64 KiB read bound caps it.
 		for _, r := range recs {
 			if !validVersion(r.Version) {
 				t.Fatalf("invalid version kept: %q", r.Version)
