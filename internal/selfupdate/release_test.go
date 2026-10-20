@@ -74,12 +74,10 @@ func TestLatestRejectsNonStrictVersions(t *testing.T) {
 
 func TestLatestFailures(t *testing.T) {
 	cases := map[string]func(f *fakeAPI){
-		"http 500":        func(f *fakeAPI) { f.metaStatus = 500 },
-		"http 422":        func(f *fakeAPI) { f.metaStatus = 422 },
-		"garbage":         func(f *fakeAPI) { f.metaBody = "<html>" },
-		"oversized":       func(f *fakeAPI) { f.metaBody = `{"version":"` + strings.Repeat("1", maxMetaBytes) + `"}` },
-		"no launcher":     func(f *fakeAPI) { f.metaBody = `{"version":"1.20.0","checksum":"a","signed_checksum":"b"}` },
-		"missing release": func(f *fakeAPI) { f.target = "1.21.0" },
+		"http 500":  func(f *fakeAPI) { f.metaStatus = 500 },
+		"http 422":  func(f *fakeAPI) { f.metaStatus = 422 },
+		"garbage":   func(f *fakeAPI) { f.metaBody = "<html>" },
+		"oversized": func(f *fakeAPI) { f.metaBody = `{"version":"` + strings.Repeat("1", maxMetaBytes) + `"}` },
 	}
 	for name, mut := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -94,6 +92,29 @@ func TestLatestFailures(t *testing.T) {
 
 // D11: a response without the dmg-linux fields is a verify failure, not a
 // silent skip and not a check failure.
+// DMG-I5-1: a response that names a valid version but lacks a checksum or
+// signature for any asset is a verification failure (spec S4), not a check
+// failure, and nothing is downloaded.
+func TestMissingSignedFieldsFailVerification(t *testing.T) {
+	for name, body := range map[string]string{
+		"no signed_checksum": `{"version":"1.20.0","checksum":"` + strings.Repeat("a", 64) + `","launcher_checksum":"` + strings.Repeat("b", 64) + `","signed_launcher_checksum":"x"}`,
+		"no launcher fields": `{"version":"1.20.0","checksum":"` + strings.Repeat("a", 64) + `","signed_checksum":"x"}`,
+		"no checksum at all": `{"version":"1.20.0"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, c := newReleaseFixture(t)
+			f.metaBody = body
+			rel, err := c.Latest(context.Background())
+			if err != nil {
+				t.Fatalf("Latest = %v, want a release that fails verification", err)
+			}
+			if err := c.VerifySignatures(rel); !errors.Is(err, ErrVerify) {
+				t.Fatalf("VerifySignatures = %v, want ErrVerify", err)
+			}
+		})
+	}
+}
+
 func TestMissingLinuxFieldsFailVerification(t *testing.T) {
 	f, c := newReleaseFixture(t)
 	f.noLinuxFields = true

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1252,5 +1253,19 @@ func TestUpdaterIgnoresOlderSeed(t *testing.T) {
 	}
 	if ev := e.lastSentOrNil(EventOK); ev != nil {
 		t.Fatalf("event sent: %+v", ev)
+	}
+}
+
+// DMG-I5-1 at the updater: a missing signed_checksum reports
+// update_verify_failed with no download.
+func TestMissingSignedChecksumIsVerifyFailed(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.writeState(baseState("1.19.0", ""))
+	e.api.metaBody = `{"version":"1.20.0","checksum":"` + strings.Repeat("a", 64) + `","launcher_checksum":"` + strings.Repeat("b", 64) + `","signed_launcher_checksum":"x","linux_checksum":"` + strings.Repeat("c", 64) + `","signed_linux_checksum":"y"}`
+	e.tick()
+	wantEvents(t, e.events(), EventVerifyFailed)
+	if len(e.api.githubHits) != 0 {
+		t.Fatalf("downloaded: %v", e.api.githubHits)
 	}
 }

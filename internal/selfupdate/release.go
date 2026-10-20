@@ -147,8 +147,9 @@ var ErrCheck = errors.New("latest-binary check failed")
 
 // Latest resolves the target from one windows latest-binary response:
 // agent, launcher and dmg-linux all come from the same resolution, so they
-// always name one version. Missing dmg-linux fields are left empty for
-// VerifySignatures to reject (update_verify_failed).
+// always name one version. A missing checksum or signature for any asset is
+// left empty for VerifySignatures to reject (update_verify_failed) before
+// anything is downloaded.
 func (c *Client) Latest(ctx context.Context) (*Release, error) {
 	win, err := c.fetch(ctx, "windows")
 	if err != nil {
@@ -157,9 +158,6 @@ func (c *Client) Latest(ctx context.Context) (*Release, error) {
 	v, err := updatestate.ParseVersion(win.Version)
 	if err != nil {
 		return nil, fmt.Errorf("%w: target %q is not a strict x.y.z release", ErrCheck, win.Version)
-	}
-	if win.Checksum == "" || win.SignedChecksum == "" || win.LauncherChecksum == "" || win.SignedLauncherChecksum == "" {
-		return nil, fmt.Errorf("%w: response for %s lacks agent or launcher checksums", ErrCheck, v)
 	}
 	vs := v.String()
 	return &Release{Version: v, Assets: []Asset{
