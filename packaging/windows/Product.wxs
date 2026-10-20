@@ -269,6 +269,20 @@
                   Impersonate="no"
                   Return="ignore"/>
 
+    <!-- Rollback-phase counterpart (DMG-I5-7): the install action registers
+         the tasks and starts a scan, so a bootstrap may be running when a
+         failed transaction rolls back and restores the old files over it
+         (an in-use file, parked as *.tmp for deletion at reboot). Sequenced
+         last, so in rollback (reverse order) it runs first: it stops DMG
+         processes and waits until the files are free before any file is
+         restored. -->
+    <CustomAction Id="RunStopForMsiRollback"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec64"
+                  Execute="rollback"
+                  Impersonate="no"
+                  Return="ignore"/>
+
     <CustomAction Id="RunInstallScheduledTask"
                   BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
                   DllEntry="WixQuietExec64"
@@ -327,6 +341,11 @@
                  Value='"[INSTALLFOLDER]state\msi\stepsecurity-dev-machine-guard-bootstrap.exe" stop-for-msi --install-dir "[INSTALLFOLDER]."'
                  Sequence="execute"
                  Before="RunStopForMsi"/>
+
+    <SetProperty Id="RunStopForMsiRollback"
+                 Value='"[INSTALLFOLDER]state\msi\stepsecurity-dev-machine-guard-bootstrap.exe" stop-for-msi --install-dir "[INSTALLFOLDER]."'
+                 Sequence="execute"
+                 Before="RunStopForMsiRollback"/>
 
     <SetProperty Id="RunAdoptSeedRollback"
                  Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard-bootstrap.exe" adopt-seed --rollback'
@@ -403,6 +422,8 @@
       <Custom Action="RunAdoptSeedCommit"
               After="RunInstallScheduledTask"
               Condition="NOT REMOVE=&quot;ALL&quot;"/>
+      <Custom Action="RunStopForMsiRollback"
+              After="RunAdoptSeedCommit"/>
       <Custom Action="RunUninstallScheduledTask"
               Before="RemoveFiles"
               Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"/>
