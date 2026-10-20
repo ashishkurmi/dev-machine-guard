@@ -168,3 +168,18 @@ func FreeBytes(path string) (uint64, error) {
 	}
 	return avail, nil
 }
+
+// InstallerBusy reports a Windows Installer transaction in progress: the
+// Global\_MSIExecute mutex exists while msiexec runs an install.
+func InstallerBusy() bool {
+	name, err := windows.UTF16PtrFromString(`Global\_MSIExecute`)
+	if err != nil {
+		return false
+	}
+	h, err := windows.OpenMutex(windows.SYNCHRONIZE, false, name)
+	if err != nil {
+		return false
+	}
+	_ = windows.CloseHandle(h)
+	return true
+}

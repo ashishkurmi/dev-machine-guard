@@ -1309,3 +1309,25 @@ func TestUpdaterSweepsStaleAdoptSnapshot(t *testing.T) {
 		t.Fatalf("stale snapshot kept: %v", err)
 	}
 }
+
+// FR1-8: no seed adoption while Windows Installer is mid-transaction; the
+// next tick adopts.
+func TestNoSeedAdoptionDuringMSI(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	st := baseState("1.19.0", "")
+	st.LastCheck = e.now
+	e.writeState(st)
+	e.writeSeed("1.21.0")
+	d := e.deps()
+	d.InstallerBusy = func() bool { return true }
+	Run(context.Background(), d)
+	if e.state().Current != "1.19.0" {
+		t.Fatal("adopted a seed while msiexec was running")
+	}
+	d.InstallerBusy = func() bool { return false }
+	Run(context.Background(), d)
+	if e.state().Current != "1.21.0" {
+		t.Fatalf("seed not adopted after the MSI finished: %+v", e.state())
+	}
+}

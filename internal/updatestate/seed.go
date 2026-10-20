@@ -10,13 +10,42 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/faultinject"
 )
 
-// CopySeedVersion copies seed\<v> into versions\<v> through a staging dir,
+// CopySeedVersion copies seed\<v> into versions\<v> through a staging dir
+// after the seed's agent and launcher pass verifyPublisher, checks every
+// copied file against the source's sha256 and size taken before the copy,
 // writes its manifest (so the updater treats it as a verified version) and
 // renames it into place. A dir that already verifies is kept (immutable);
 // anything else at that path is moved to trash first. Used by the MSI's
 // adopt-seed and by the updater; the caller holds the update lock. It
 // returns a note for the log ("" when nothing was copied).
-func (l Layout) CopySeedVersion(v Version, now time.Time) (string, error) {
+func (l Layout) CopySeedVersion(v Version, now time.Time, verifyPublisher func(path string) error) (string, error) {
+	// The seed's executables must come from our publisher (nil: skip).
+	if verifyPublisher != nil {
+		for _, name := range []string{AgentFile, LauncherFile} {
+			if err := verifyPublisher(filepath.Join(l.SeedDir(v), name)); err != nil {
+				return "", fmt.Errorf("seed %s %s: %w", v, name, err)
+			}
+		}
+	}
+	// Hash the source first: the copy must match it, not just itself.
+	type fileSum struct {
+		sum  string
+		size int64
+	}
+	src := map[string]fileSum{}
+	for _, name := range VersionFiles {
+		p := filepath.Join(l.SeedDir(v), name)
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			return "", fmt.Errorf("seed %s: %s missing or not a file", v, name)
+		}
+		sum, err := FileSHA256(p)
+		if err != nil {
+			return "", err
+		}
+		src[name] = fileSum{sum, fi.Size()}
+	}
+	afterSeedHashed()
 	dst := l.VersionDir(v)
 	note := ""
 	if _, err := os.Lstat(dst); err == nil {
@@ -50,6 +79,13 @@ func (l Layout) CopySeedVersion(v Version, now time.Time) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		fi, err := os.Stat(dstFile)
+		if err != nil {
+			return "", err
+		}
+		if want := src[name]; sum != want.sum || fi.Size() != want.size {
+			return "", fmt.Errorf("seed %s: copy of %s doesn't match the source hashed before copying", v, name)
+		}
 		m.Files[name] = sum
 	}
 	if err := WriteManifest(staging, m); err != nil {
@@ -64,6 +100,9 @@ func (l Layout) CopySeedVersion(v Version, now time.Time) (string, error) {
 	done = true
 	return note + fmt.Sprintf("copied seed %s into %s", v, dst), nil
 }
+
+// afterSeedHashed runs between hashing the seed and copying it (tests).
+var afterSeedHashed = func() {}
 
 func copySeedFile(src, dst string) error {
 	in, err := os.Open(src) // #nosec G304 -- MSI-owned seed payload

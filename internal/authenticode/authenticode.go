@@ -109,3 +109,17 @@ func samePublisher(candidate, self string, verify func(string) (*Signature, erro
 	}
 	return nil
 }
+
+// SameSeedPublisher is the publisher rule for adopting an MSI seed: as
+// SamePublisher, except that an unsigned running binary (a dev or CI
+// build, which has no publisher to compare) accepts the seed. The seed was
+// installed by the MSI into an admin-only directory; its copy is still
+// checked against hashes of the source.
+func SameSeedPublisher(candidate, self string) error {
+	if testPinnedSubject() == "" {
+		if _, err := ownSubject(self); errors.Is(err, ErrUnsigned) {
+			return nil
+		}
+	}
+	return SamePublisher(candidate, self)
+}

@@ -87,6 +87,12 @@ type Deps struct {
 	Send func(ctx context.Context, ev updatestate.OutboxEvent) error
 	// SetRunningVersion records HKLM RunningVersion (inventory only).
 	SetRunningVersion func(v string)
+	// VerifySeed checks an MSI seed's executables (authenticode
+	// SameSeedPublisher); nil falls back to VerifyPublisher.
+	VerifySeed func(path string) error
+	// InstallerBusy reports a Windows Installer transaction in progress
+	// (Global\_MSIExecute held); nil means never.
+	InstallerBusy func() bool
 	// FreeBytes reports free space on the volume holding path.
 	FreeBytes func(path string) (uint64, error)
 	Now       func() time.Time
@@ -320,7 +326,15 @@ func (t *tick) adoptNewerSeed() error {
 	if !ok || err != nil || t.st.Probation != nil || updatestate.Compare(seed, cur) <= 0 || t.quarantined(seed.String()) {
 		return nil
 	}
-	note, err := t.L.CopySeedVersion(seed, t.now)
+	if t.d.InstallerBusy != nil && t.d.InstallerBusy() {
+		t.d.Logf("self-update: Windows Installer is running; seed %s adoption waits for the next tick", seed)
+		return nil
+	}
+	verify := t.d.VerifySeed
+	if verify == nil {
+		verify = t.d.VerifyPublisher
+	}
+	note, err := t.L.CopySeedVersion(seed, t.now, verify)
 	if err != nil {
 		t.d.Logf("self-update: copying seed %s: %v", seed, err)
 		return nil // retried next tick; the seed stays the bootstrap's fallback

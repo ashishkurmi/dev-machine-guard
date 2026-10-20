@@ -146,6 +146,8 @@ func runSelfUpdate(args []string) int {
 		},
 		AutoUpdate:      config.AutoUpdate == nil || *config.AutoUpdate,
 		VerifyPublisher: func(p string) error { return authenticode.SamePublisher(p, selfExe) },
+		VerifySeed:      func(p string) error { return authenticode.SameSeedPublisher(p, selfExe) },
+		InstallerBusy:   selfupdate.InstallerBusy,
 		Smoke:           selfupdate.RunSmoke,
 		AcquireInstance: func() (func(), error) {
 			lk, err := lock.Acquire(exec)

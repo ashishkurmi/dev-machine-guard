@@ -26,3 +26,6 @@ func FreeBytes(path string) (uint64, error) {
 	}
 	return uint64(s.Bavail) * uint64(s.Bsize), nil // #nosec G115 -- statfs sizes are non-negative
 }
+
+// InstallerBusy is Windows-only.
+func InstallerBusy() bool { return false }

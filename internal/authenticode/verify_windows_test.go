@@ -339,3 +339,22 @@ func TestForgedBagFailsPublisherPin(t *testing.T) {
 		}
 	}
 }
+
+// FR1-8: seed adoption follows the publisher rule; only an unsigned (dev)
+// running binary, which has nothing to compare, accepts any seed.
+func TestSameSeedPublisher(t *testing.T) {
+	if testPinnedSubject() != "" {
+		t.Skip("pinned subject build")
+	}
+	unsignedSelf, unsignedSeed := copyExe(t), copyExe(t)
+	if err := SameSeedPublisher(unsignedSeed, unsignedSelf); err != nil {
+		t.Fatalf("unsigned self: %v", err)
+	}
+	requireElevated(t)
+	a := newTestCert(t, "DMG Test Publisher A")
+	signedSelf := copyExe(t)
+	a.sign(t, signedSelf, "")
+	if err := SameSeedPublisher(unsignedSeed, signedSelf); err == nil {
+		t.Fatal("signed self accepted an unsigned seed")
+	}
+}

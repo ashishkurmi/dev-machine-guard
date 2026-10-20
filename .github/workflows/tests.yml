@@ -176,7 +176,7 @@ jobs:
       - name: Test self-update fault injection + U0 kill matrix (selfupdate_faults tag)
         run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
       - name: Authenticode against test-signed binaries (verbose, shows skips)
-        run: go test -count=1 -v -run 'TestVerify|TestForgedBag|TestTrustData' ./internal/authenticode/
+        run: go test -count=1 -v -run 'TestVerify|TestForgedBag|TestTrustData|TestSameSeedPublisher' ./internal/authenticode/
       - name: Test launcher bootstrap mode and self-update tasks
         run: |
           go test -race -count=1 ./internal/launcher/

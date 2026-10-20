@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/step-security/dev-machine-guard/internal/authenticode"
 	"io"
 	"os"
 	"path/filepath"
@@ -100,6 +101,9 @@ type Bootstrap struct {
 	// SetRunningVersion records the version adopt-seed made current
 	// (HKLM RunningVersion on Windows); nil skips it.
 	SetRunningVersion func(string) error
+	// VerifySeed checks a seed's executables before adopt-seed copies them
+	// (authenticode.SameSeedPublisher in production); nil skips it.
+	VerifySeed func(path string) error
 
 	AdoptLockWait  time.Duration // adopt-seed: bounded wait for the update lock
 	RecordLockWait time.Duration // update: wait to record the updater result
@@ -124,6 +128,7 @@ func NewBootstrap(exePath string, isSystem func() bool) *Bootstrap {
 		Out:               os.Stdout,
 		NewRunID:          uuid.NewString,
 		SetRunningVersion: SetRunningVersion,
+		VerifySeed:        func(p string) error { return authenticode.SameSeedPublisher(p, exePath) },
 		AdoptLockWait:     60 * time.Second,
 		RecordLockWait:    30 * time.Second,
 		LockPoll:          500 * time.Millisecond,
@@ -558,7 +563,7 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 		return 0
 	}
 
-	if note, err := b.Layout.CopySeedVersion(v, b.Now()); err != nil {
+	if note, err := b.Layout.CopySeedVersion(v, b.Now(), b.VerifySeed); err != nil {
 		b.logf("adopt-seed: copying seed %s: %v", v, err)
 	} else if note != "" {
 		b.logf("adopt-seed: %s", note)
