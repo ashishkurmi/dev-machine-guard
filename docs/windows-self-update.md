@@ -35,7 +35,11 @@ HKLM\Software\StepSecurity\RunningVersion        version currently selected
   actions: on install, upgrade and repair, `adopt-seed` copies the seed
   into `versions\<seed>` and moves `current` forward to it if the seed is
   newer (never back), and a real uninstall removes both directories. A
-  repair or upgrade therefore can't undo a self-update, and a failed
+  repair or upgrade therefore can't undo a self-update. The MSI stops
+  running DMG processes and waits for its files to be free before any
+  file action, and never reboots on its own (`REBOOT=ReallySuppress`;
+  `msiexec /f` repairs ignore `/norestart`, see the packaging README). A
+  failed
   upgrade that Windows Installer rolls back also undoes adopt-seed's
   change (it snapshots `state.json` first).
 

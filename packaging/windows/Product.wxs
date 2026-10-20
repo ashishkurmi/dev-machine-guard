@@ -155,22 +155,10 @@
       </Directory>
     </StandardDirectory>
 
-    <!-- Stop running DMG processes before files are replaced or removed
-         (install, upgrade, repair, uninstall). A scan holds the bootstrap
-         (an MSI file) open for its whole run; without this, /qn treats the
-         file in use as reboot-required and Windows Installer restarts the
-         machine on its own (M-18). Matched by image name, so a running
-         per-user (loader) agent is stopped too; scans are periodic and the
-         next tick re-runs it. -->
-    <util:CloseApplication Id="CloseBootstrap"
-                           Target="stepsecurity-dev-machine-guard-bootstrap.exe"
-                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1"/>
-    <util:CloseApplication Id="CloseLauncher"
-                           Target="stepsecurity-dev-machine-guard-task.exe"
-                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1"/>
-    <util:CloseApplication Id="CloseAgent"
-                           Target="stepsecurity-dev-machine-guard.exe"
-                           CloseMessage="no" RebootPrompt="no" TerminateProcess="1"/>
+    <!-- Never reboot on our own (D29): whatever the command line says
+         (msiexec /f repairs ignore /norestart and every property), a file
+         still in use ends as 3010 "reboot required", never a restart. -->
+    <Property Id="REBOOT" Value="ReallySuppress"/>
 
     <Feature Id="Main" Title="Dev Machine Guard" Level="1">
       <ComponentRef Id="BootstrapBinary"/>
@@ -264,6 +252,23 @@
                   Impersonate="no"
                   Return="ignore"/>
 
+    <!-- Stop running DMG processes before any file action (install,
+         repair, upgrade, uninstall) and wait until none holds an MSI-owned
+         file (D29). A scan or update tick holds the bootstrap (an MSI file)
+         for its whole run; util:CloseApplication terminated it without
+         waiting, and the file copy ~10 ms later still found the dying
+         process's image in use (a reboot). It runs a helper copy of the
+         bootstrap in state\msi\ (refreshed by adopt-seed), which is not an
+         MSI file, so its own image can't be in the way. Missing on a first
+         install or an upgrade from a release without it: Return="ignore",
+         and REBOOT=ReallySuppress bounds the worst case at 3010. -->
+    <CustomAction Id="RunStopForMsi"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"/>
+
     <CustomAction Id="RunInstallScheduledTask"
                   BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
                   DllEntry="WixQuietExec64"
@@ -318,6 +323,11 @@
                  Before="RunAdoptSeed"
                  Condition="NOT REMOVE=&quot;ALL&quot;"/>
 
+    <SetProperty Id="RunStopForMsi"
+                 Value='"[INSTALLFOLDER]state\msi\stepsecurity-dev-machine-guard-bootstrap.exe" stop-for-msi --install-dir "[INSTALLFOLDER]."'
+                 Sequence="execute"
+                 Before="RunStopForMsi"/>
+
     <SetProperty Id="RunAdoptSeedRollback"
                  Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard-bootstrap.exe" adopt-seed --rollback'
                  Sequence="execute"
@@ -363,6 +373,11 @@
         (M-6). The new product's install CA replaces the tasks.
     -->
     <InstallExecuteSequence>
+      <!-- First deferred action, before the old product's removal in a
+           major upgrade and before RemoveFiles / InstallFiles. -->
+      <Custom Action="RunStopForMsi"
+              After="InstallInitialize"
+              Before="RemoveExistingProducts"/>
       <!-- Prefer file-based configure when BOOTSTRAPFILE is provided.
            Inline runs only when BOOTSTRAPFILE is empty AND APIKEY is set. -->
       <Custom Action="RunConfigureFromFile"

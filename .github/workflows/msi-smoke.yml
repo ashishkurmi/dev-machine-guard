@@ -79,7 +79,9 @@ jobs:
           go build -trimpath -ldflags "-s -w" `
             -o "$PWD\dmg-smoke.exe" `
             ./cmd/stepsecurity-dev-machine-guard
-          go build -trimpath -ldflags "-s -w -H windowsgui" `
+          # The launcher (= the bootstrap) carries the fault checkpoints, inert
+          # unless DMG_FAULT is set, so a step can hang a bootstrap on purpose.
+          go build -trimpath -tags selfupdate_faults -ldflags "-s -w -H windowsgui" `
             -o "$PWD\dmg-smoke-task.exe" `
             ./cmd/stepsecurity-dev-machine-guard-task
           # The MSI's third component: the Linux build of the same agent, which
@@ -360,6 +362,44 @@ jobs:
           Check ($runs.records[-1].exit_code -eq 0) "run recorded on $ver"
           Done
 
+      - name: Repairs while a bootstrap holds its image never reboot (D29)
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          . "$env:RUNNER_TEMP\dmg-assert.ps1"
+          $ver = $env:MSI_VERSION
+          $boot0 = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+          Check (Test-Path "$root\state\msi\stepsecurity-dev-machine-guard-bootstrap.exe") "stop-for-msi helper present in state\msi"
+          $props = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+          $forms = @(
+            @{ name = "/i REINSTALL=ALL REINSTALLMODE=a"; args = @("/i", $env:INSTALLED_MSI, "REINSTALL=ALL", "REINSTALLMODE=a", "/qn") },
+            @{ name = "/fa (ignores command-line properties)"; args = @("/fa", $env:INSTALLED_MSI, "/qn") }
+          )
+          $i = 0
+          foreach ($form in $forms) {
+            $i++
+            # A bootstrap that hangs (boot.resolved:hang) holds its own image,
+            # an MSI file, for the whole repair: the D29 race, every time.
+            $env:DMG_FAULT = "boot.resolved:hang"
+            $bp = Start-Process -FilePath $boot -ArgumentList @("run", "version", "--install-dir=$data") -PassThru
+            Remove-Item Env:DMG_FAULT
+            Start-Sleep -Seconds 3
+            Check (-not $bp.HasExited) "$($form.name): a hung bootstrap is running"
+            $log = "dist\dmg-repair-busy-$i.log"
+            $code = Msi $form.args $log
+            Check ($code -eq 0) "$($form.name): exit 0, not 3010/1641 ($code)"
+            Check (-not (Select-String -Path $log -Pattern 'is being held in use' -SimpleMatch -Quiet)) "$($form.name): no MSI file held in use"
+            Check (Select-String -Path $log -Pattern 'stop-for-msi' -SimpleMatch -Quiet) "$($form.name): stop-for-msi ran"
+            $pfr = (Get-ItemProperty -Path $props -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
+            Check (-not ($pfr -match 'StepSecurity')) "$($form.name): no pending file renames for our files"
+            Check ((Get-CimInstance Win32_OperatingSystem).LastBootUpTime -eq $boot0) "$($form.name): no reboot (boot time unchanged)"
+            $bp.Refresh()
+            Check $bp.HasExited "$($form.name): the hung bootstrap was stopped"
+            Check ((State).current -eq $ver) "$($form.name): current kept ($((State).current))"
+            AssertTasks
+          }
+          Done
+
       - name: SCCM-style repair keeps current, restores tasks, leaves AUTOUPDATE alone (M-7)
         timeout-minutes: 8
         shell: pwsh
@@ -498,5 +538,6 @@ jobs:
             dist/dmg-fresh.log
             dist/dmg-upgrade.log
             dist/dmg-upgrade-fail.log
+            dist/dmg-repair-busy-*.log
             dist/dmg-uninstall.log
           if-no-files-found: ignore

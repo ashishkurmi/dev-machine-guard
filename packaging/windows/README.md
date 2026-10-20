@@ -150,6 +150,22 @@ msiexec /i stepsecurity-dev-machine-guard-<version>-x64.msi /qn ^
 Key never traverses the msiexec command line — survives `/l*v` logging
 clean.
 
+## Repairs and reboots
+
+The MSI never restarts the machine on its own: it sets
+`REBOOT=ReallySuppress`, so a file that is still in use ends the install
+with exit code 3010 ("restart required"), never a restart. Before any file
+action it also stops running Dev Machine Guard processes and waits until
+none holds an MSI-owned file, so a repair or upgrade that overlaps a scan
+or an update tick completes normally (exit 0).
+
+`msiexec /f…` repairs ignore every command-line property, including
+`/norestart` and `AUTOUPDATE`. For SCCM/Intune repairs use:
+
+```cmd
+msiexec /i stepsecurity-dev-machine-guard-<version>-x64.msi REINSTALL=ALL REINSTALLMODE=omus /qn /norestart
+```
+
 ## Upgrades
 
 Each release ships a new MSI with the **same `UpgradeCode`** and a
