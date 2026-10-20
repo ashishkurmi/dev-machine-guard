@@ -168,7 +168,7 @@ func findSigner(certs []*x509.Certificate, sid asn1.RawValue) []*x509.Certificat
 	var out []*x509.Certificate
 	if sid.Class == asn1.ClassContextSpecific && sid.Tag == 0 {
 		for _, c := range certs {
-			keyID := sha1.Sum(publicKeyBits(c))
+			keyID := sha1.Sum(publicKeyBits(c)) // #nosec G401 -- RFC 5280 key identifier lookup, not a security hash
 			if bytes.Equal(c.SubjectKeyId, sid.Bytes) || bytes.Equal(keyID[:], sid.Bytes) {
 				out = append(out, c)
 			}
