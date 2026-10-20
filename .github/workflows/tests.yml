@@ -113,7 +113,7 @@ jobs:
           go-version-file: go.mod
       - run: make test
       - name: Test self-update fault injection (selfupdate_faults tag)
-        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
+        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/ ./internal/telemetry/
       - name: Test bootstrap fault checkpoints (selfupdate_faults tag)
         run: go test -race -count=1 -tags selfupdate_faults ./internal/launcher/
 
@@ -172,9 +172,9 @@ jobs:
       - run: go test -race -count=1 ./internal/devicepolicy/ ./internal/secureuserfile/ ./internal/detector/credentials/ ./internal/safepath/ ./internal/executor/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/ ./internal/awakeclock/
       - run: go test -race -count=1 -run '^TestReal_' ./internal/detector/
       - name: Test scheduled scan console suppression
-        run: go test -race -count=1 -run 'Test(IsTaskRegistered|DetectInvocationMethod_Windows|HideWindow)' ./internal/schtasks/ ./internal/telemetry/ ./internal/winproc/
+        run: go test -race -count=1 -run 'Test(IsTaskRegistered|DetectInvocationMethod_Windows|HideWindow|StopUnderThenWaitReleased)' ./internal/schtasks/ ./internal/telemetry/ ./internal/winproc/
       - name: Test self-update fault injection + U0 kill matrix (selfupdate_faults tag)
-        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
+        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/ ./internal/telemetry/
       - name: Authenticode against test-signed binaries (verbose, shows skips)
         run: go test -count=1 -v -run 'TestVerify|TestForgedBag|TestTrustData|TestSameSeedPublisher' ./internal/authenticode/
       - name: Test launcher bootstrap mode and self-update tasks
