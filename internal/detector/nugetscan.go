@@ -1668,16 +1668,10 @@ func (c *nugetScan) emitDeps(f nugetFound) {
 // emitScript records a source file only once a package directive proves it
 // is a file-based app or script; ordinary source files leave no trace.
 func (c *nugetScan) emitScript(f nugetFound) {
-	if c.stopped(c.byID[f.root]) {
-		return
-	}
-	files := c.fs(f.path, maxNuGetMetadataBytes)
-	info, err := files.Stat(f.path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxNuGetMetadataBytes {
-		return
-	}
-	data, err := files.ReadFile(f.path)
-	if err != nil {
+	// Failed probes must mark discovery partial even before a directive is known.
+	probe := &model.NuGetSource{Path: f.path, ParentSourceID: f.root}
+	data, ok := c.read(probe, false)
+	if !ok {
 		return
 	}
 	kind, directives := "file_based", parseNuGetCSharpDirectives(data)

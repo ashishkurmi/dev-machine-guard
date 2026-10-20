@@ -691,6 +691,28 @@ func TestNuGetScanLimitsDeadlineAndGuards(t *testing.T) {
 		t.Errorf("receipt with an unreadable archive = %+v", src)
 	}
 
+	// An unreadable script does not prove its previous package evidence gone.
+	for _, reason := range []string{"permission_denied", "size_limit"} {
+		t.Run("script_"+reason, func(t *testing.T) {
+			home := goTestHome(t)
+			root := filepath.Join(home, "code")
+			script := filepath.Join(root, "app.cs")
+			scanner, x := nugetTestScanner(t, home)
+			content := "#:package Example.Script@1.0.0"
+			if reason == "permission_denied" {
+				x.readErrors[script] = os.ErrPermission
+			} else {
+				content += strings.Repeat(" ", int(maxNuGetMetadataBytes))
+			}
+			goWrite(t, script, content, 0o600)
+			inv, audit := scanner.Scan(t.Context(), goTestTarget(home), []string{root}, nil)
+			nugetAssertRefs(t, inv, audit)
+			if src := nugetSource(t, inv, "project_search_root", root); src.Status != "partial" || !slices.Contains(src.Reasons, reason) {
+				t.Errorf("unreadable script proves absence: %+v", src)
+			}
+		})
+	}
+
 	// Every output budget keeps admitted records and leaves only fully
 	// collected sources complete.
 	oldOut := maxNuGetOutputBytes
