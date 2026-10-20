@@ -35,7 +35,9 @@ HKLM\Software\StepSecurity\RunningVersion        version currently selected
   actions: on install, upgrade and repair, `adopt-seed` copies the seed
   into `versions\<seed>` and moves `current` forward to it if the seed is
   newer (never back), and a real uninstall removes both directories. A
-  repair or upgrade therefore can't undo a self-update.
+  repair or upgrade therefore can't undo a self-update, and a failed
+  upgrade that Windows Installer rolls back also undoes adopt-seed's
+  change (it snapshots `state.json` first).
 
 ## Tasks
 

@@ -500,6 +500,14 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 			seedDir = args[i+1]
 		}
 	}
+	for _, a := range args {
+		switch a {
+		case "--rollback":
+			return b.adoptRollback()
+		case "--commit":
+			return b.adoptCommit()
+		}
+	}
 	if seedDir == "" {
 		b.logf("adopt-seed: --seed-dir is required")
 		return 0
@@ -541,6 +549,15 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 	}
 	defer l.Release()
 
+	// Snapshot before changing anything, for the MSI's rollback action.
+	snapPath := b.Layout.AdoptSnapshotFile()
+	updatestate.SweepStaleAdoptSnapshot(snapPath)
+	snap := b.adoptSnapshot(v)
+	if err := updatestate.WriteAdoptSnapshot(snapPath, snap); err != nil {
+		b.logf("adopt-seed: writing rollback snapshot: %v; not adopting", err)
+		return 0
+	}
+
 	if note, err := b.Layout.CopySeedVersion(v, b.Now()); err != nil {
 		b.logf("adopt-seed: copying seed %s: %v", v, err)
 	} else if note != "" {
@@ -550,7 +567,128 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 		b.logf("adopt-seed: versions\\%s unusable (%v); state left unchanged", v, err)
 		return 0
 	}
-	b.adoptState(v)
+	if b.adoptState(v) {
+		if gen, ok := updatestate.StateGeneration(b.Layout.StateFile()); ok {
+			snap.AfterGeneration = &gen
+			if err := updatestate.WriteAdoptSnapshot(snapPath, snap); err != nil {
+				b.logf("adopt-seed: updating rollback snapshot: %v", err)
+			}
+		}
+	}
+	return 0
+}
+
+// adoptSnapshot records state.json and whether versions\<v> exists, before
+// adopt-seed touches either.
+func (b *Bootstrap) adoptSnapshot(v updatestate.Version) *updatestate.AdoptSnapshot {
+	snap := &updatestate.AdoptSnapshot{Seed: v.String()}
+	if data, err := os.ReadFile(b.Layout.StateFile()); err == nil { // #nosec G304 -- protected state dir
+		snap.StatePresent, snap.State = true, data
+	}
+	snap.CreatedDir = updatestate.VerifyVersionDir(b.Layout.VersionDir(v), v) != nil
+	return snap
+}
+
+// adoptRollback is `adopt-seed --rollback`, the MSI's rollback action for
+// adopt-seed (DMG-I5-2): when the transaction fails after adopt-seed ran,
+// restore the state.json it changed (only if nobody wrote it since) and
+// remove the versions\<seed> it created unless the restored state points at
+// it. Always exits 0 (Return=ignore).
+func (b *Bootstrap) adoptRollback() int {
+	if !b.IsSystem() {
+		b.logf("adopt-seed --rollback must run as SYSTEM")
+		return 0
+	}
+	defer b.openUpdateLog()()
+	l, err := b.lockWithWait(b.AdoptLockWait)
+	if err != nil {
+		b.logf("adopt-seed --rollback: update lock not taken (%v)", err)
+		return 0
+	}
+	defer l.Release()
+	snapPath := b.Layout.AdoptSnapshotFile()
+	snap, age, err := updatestate.ReadAdoptSnapshot(snapPath)
+	switch {
+	case err != nil:
+		b.logf("adopt-seed --rollback: unreadable snapshot (%v); removed", err)
+		_ = os.Remove(snapPath)
+		return 0
+	case snap == nil:
+		b.logf("adopt-seed --rollback: nothing to roll back")
+		return 0
+	case age > updatestate.AdoptSnapshotMaxAge:
+		b.logf("adopt-seed --rollback: snapshot is %s old (not this MSI's); removed", age.Round(time.Second))
+		_ = os.Remove(snapPath)
+		return 0
+	}
+	defer func() { _ = os.Remove(snapPath) }()
+	path := b.Layout.StateFile()
+	if snap.AfterGeneration != nil {
+		if gen, ok := updatestate.StateGeneration(path); !ok || gen != *snap.AfterGeneration {
+			b.logf("adopt-seed --rollback: state.json changed since adopt-seed; left as is")
+		} else {
+			b.restoreState(path, snap, gen)
+		}
+	}
+	if snap.CreatedDir {
+		v, err := updatestate.ParseVersion(snap.Seed)
+		p, _, _ := updatestate.LoadPointers(path)
+		if err == nil && (p == nil || (p.Current != snap.Seed && p.Previous != snap.Seed)) {
+			dir := b.Layout.VersionDir(v)
+			trash := filepath.Join(b.Layout.VersionsDir(), fmt.Sprintf("%s%s-rollback", updatestate.TrashPrefix, snap.Seed))
+			if os.Rename(dir, trash) == nil {
+				_ = os.RemoveAll(trash)
+				b.logf("adopt-seed --rollback: removed %s", dir)
+			}
+		}
+	}
+	return 0
+}
+
+// restoreState puts back the pre-adopt state.json: through the preserving
+// Save (generation continues upward) when it parses, else byte-for-byte;
+// removed if there was none.
+func (b *Bootstrap) restoreState(path string, snap *updatestate.AdoptSnapshot, gen uint64) {
+	if !snap.StatePresent {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			b.logf("adopt-seed --rollback: removing state.json: %v", err)
+			return
+		}
+		b.logf("adopt-seed --rollback: removed the state.json adopt-seed created")
+		return
+	}
+	tmp := path + ".rollback"
+	if err := os.WriteFile(tmp, snap.State, 0o600); err != nil {
+		b.logf("adopt-seed --rollback: %v", err)
+		return
+	}
+	defer os.Remove(tmp)
+	st, corrupt, err := updatestate.Load(tmp)
+	if err != nil || corrupt || st == nil {
+		b.logf("adopt-seed --rollback: pre-adopt state not loadable; left as is")
+		return
+	}
+	st.Generation = gen
+	if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
+		b.logf("adopt-seed --rollback: writing state: %v", err)
+		return
+	}
+	b.logf("adopt-seed --rollback: restored current %s", st.Current)
+	b.recordRunningVersion(st.Current)
+}
+
+// adoptCommit is `adopt-seed --commit`, the MSI's commit action: the
+// transaction succeeded, so the rollback snapshot is no longer needed.
+func (b *Bootstrap) adoptCommit() int {
+	if !b.IsSystem() {
+		return 0
+	}
+	l, err := b.lockWithWait(b.AdoptLockWait)
+	if err != nil {
+		return 0 // swept later (AdoptSnapshotMaxAge)
+	}
+	defer l.Release()
+	_ = os.Remove(b.Layout.AdoptSnapshotFile())
 	return 0
 }
 
@@ -581,47 +719,48 @@ func seedComplete(dir string) bool {
 // (unreadable pointers, fields Load rejects, a newer schema) is left
 // byte-for-byte alone for the updater to handle. An MSI never downgrades a
 // self-updated device. Called with the update lock held.
-func (b *Bootstrap) adoptState(seed updatestate.Version) {
+func (b *Bootstrap) adoptState(seed updatestate.Version) (changed bool) {
 	path := b.Layout.StateFile()
 	s := seed.String()
 	p, corrupt, err := updatestate.LoadPointers(path)
 	switch {
 	case err != nil:
 		b.logf("adopt-seed: reading state: %v; left unchanged", err)
-		return
+		return false
 	case corrupt:
 		b.logf("adopt-seed: state pointers unreadable; left unchanged for the updater")
-		return
+		return false
 	case p == nil:
 		st := &updatestate.State{Schema: updatestate.SchemaVersion, Current: s}
 		if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
 			b.logf("adopt-seed: writing state: %v", err)
-			return
+			return false
 		}
 		b.logf("adopt-seed: no state; current = seed %s", s)
 		b.recordRunningVersion(s)
-		return
+		return true
 	case p.Schema > updatestate.SchemaVersion:
 		b.logf("adopt-seed: state schema %d is newer than this bootstrap; left unchanged", p.Schema)
-		return
+		return false
 	}
 	st, corrupt, err := updatestate.Load(path)
 	if err != nil || corrupt || st == nil {
 		b.logf("adopt-seed: state has fields this build can't round-trip (%v); left unchanged", err)
-		return
+		return false
 	}
 	changed, why := b.Layout.AdoptSeedRule(st, seed, b.Now())
 	if why != "" {
 		b.logf("adopt-seed: %s", why)
 	}
 	if !changed {
-		return
+		return false
 	}
 	if err := updatestate.SaveCheckpointed(path, st, "adopt"); err != nil {
 		b.logf("adopt-seed: writing state: %v", err)
-		return
+		return false
 	}
 	b.recordRunningVersion(s)
+	return true
 }
 
 // recordRunningVersion sets RunningVersion after adopt-seed set current

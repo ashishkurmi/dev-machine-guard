@@ -264,6 +264,8 @@ func enqueueTo(st *updatestate.State, now time.Time, window time.Duration, event
 // quarantine expiry. Never fatal.
 func (t *tick) sweep(ctx context.Context) {
 	updatestate.SweepTemps(t.L.StateFile())
+	// An MSI that ended without its adopt-seed commit or rollback action.
+	updatestate.SweepStaleAdoptSnapshot(t.L.AdoptSnapshotFile())
 	if t.d.EnsureACLs != nil {
 		drifted, err := t.d.EnsureACLs()
 		if err != nil {

@@ -129,6 +129,18 @@ jobs:
             -d "LauncherPath=$PWD\dmg-smoke-task.exe" `
             -d "LinuxBinaryPath=$PWD\dmg-smoke-linux" `
             -out "dist\dmg-smoke-next.msi"
+          # N+1 with the test-only late-failure hook (WIXFAILWHENDEFERRED=1
+          # makes the transaction fail after adopt-seed), for the rollback path.
+          wix build packaging/windows/Product.wxs `
+            -arch x64 `
+            -ext WixToolset.Util.wixext `
+            -d Arch=x64 `
+            -d "Version=$next" `
+            -d "TestFailUpgrade=1" `
+            -d "BinaryPath=$PWD\dmg-smoke.exe" `
+            -d "LauncherPath=$PWD\dmg-smoke-task.exe" `
+            -d "LinuxBinaryPath=$PWD\dmg-smoke-linux" `
+            -out "dist\dmg-smoke-next-fail.msi"
           "MSI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "MSI_NEXT_VERSION=$next" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "INSTALLED_MSI=dist\dmg-smoke.msi" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -320,6 +332,34 @@ jobs:
           DmgProcesses
           Done
 
+      - name: Failed major upgrade rolls adopt-seed back (DMG-I5-2)
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          . "$env:RUNNER_TEMP\dmg-assert.ps1"
+          $ver = $env:MSI_VERSION
+          $next = $env:MSI_NEXT_VERSION
+          Check ((State).current -eq $ver) "baseline current = $ver"
+          Check (-not (Test-Path "$root\versions\$next")) "baseline: no versions\$next"
+          $code = Msi @("/i", "dist\dmg-smoke-next-fail.msi", "/qn", "WIXFAILWHENDEFERRED=1") "dist\dmg-upgrade-fail.log"
+          Check ($code -eq 1603) "forced-failure upgrade exits 1603 ($code)"
+          $ranRollback = Select-String -Path "dist\dmg-upgrade-fail.log" -Pattern 'adopt-seed --rollback' -SimpleMatch -Quiet
+          Check $ranRollback "adopt-seed rollback action ran"
+          $s = State
+          Check ($s.current -eq $ver) "current restored to $ver (got $($s.current))"
+          Check (-not (Test-Path "$root\versions\$next")) "versions\$next created by the failed upgrade removed"
+          Check (-not (Test-Path "$root\state\adopt-snapshot.json")) "rollback snapshot removed"
+          Check (UsableDir "$root\seed\$ver") "seed\$ver restored"
+          $av = (Get-ItemProperty -Path 'HKLM:\Software\StepSecurity' -Name AgentVersion).AgentVersion
+          Check ($av -eq $ver) "AgentVersion = $ver ($av)"
+          AssertTasks
+          # The device still scans: the bootstrap launches current and records it.
+          $p = Start-Process -FilePath $boot -ArgumentList @("run", "version", "--install-dir=$data") -Wait -PassThru
+          Check ($p.ExitCode -eq 0) "bootstrap run after the rollback exits 0 ($($p.ExitCode))"
+          $runs = Get-Content "$data\runs\$ver.json" -Raw | ConvertFrom-Json
+          Check ($runs.records[-1].exit_code -eq 0) "run recorded on $ver"
+          Done
+
       - name: SCCM-style repair keeps current, restores tasks, leaves AUTOUPDATE alone (M-7)
         timeout-minutes: 8
         shell: pwsh
@@ -457,5 +497,6 @@ jobs:
             dist/dmg-badvalue.log
             dist/dmg-fresh.log
             dist/dmg-upgrade.log
+            dist/dmg-upgrade-fail.log
             dist/dmg-uninstall.log
           if-no-files-found: ignore

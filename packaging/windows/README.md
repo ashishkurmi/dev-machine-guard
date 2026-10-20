@@ -158,10 +158,13 @@ Upgrade: silent removal of the old version followed by install of the
 new one, atomically. The old version's uninstall custom action is
 **skipped** during an upgrade (`REMOVE="ALL" AND NOT
 UPGRADINGPRODUCTCODE`), so a successful upgrade keeps the self-update
-state, and the new version's `install` replaces the tasks. Known gap: if
-an upgrade fails late and Windows Installer rolls it back, the scan tasks
-may be missing and adopt-seed's change to `state.json` is not undone;
-re-running the install (or a repair) restores the tasks. SCCM admins use the **supersedence** flow to point the new
+state, and the new version's `install` replaces the tasks. If an upgrade
+fails late and Windows Installer rolls it back, adopt-seed's rollback
+action restores `state.json` to its pre-upgrade content and removes the
+`versions\<seed>` directory the upgrade created, so the device keeps
+running the version it had. Known gap: if the failure happens after the
+old product's tasks were replaced, re-running the install (or a repair)
+restores them. SCCM admins use the **supersedence** flow to point the new
 Application at the old one — no scripting required.
 
 An MSI upgrade never downgrades a self-updated device: if the device

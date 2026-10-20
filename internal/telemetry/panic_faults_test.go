@@ -88,7 +88,9 @@ func TestScanHangAfterStartedIsABadRun(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetGOOS(model.PlatformLinux)
 	mock.SetFile("/sys/class/dmi/id/product_serial", []byte("SER-TEST-123\n"))
-	go func() { _ = Run(mock, progress.NewLogger(progress.LevelError), &cli.Config{SearchDirs: []string{t.TempDir()}}) }()
+	go func() {
+		_ = Run(mock, progress.NewLogger(progress.LevelError), &cli.Config{SearchDirs: []string{t.TempDir()}})
+	}()
 	deadline := time.Now().Add(30 * time.Second)
 	for !updatestate.ReadRuns(runs)[0].Started {
 		if time.Now().After(deadline) {

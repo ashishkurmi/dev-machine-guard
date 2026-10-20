@@ -243,6 +243,27 @@
                   Impersonate="no"
                   Return="ignore"/>
 
+    <!-- adopt-seed's rollback and commit actions (DMG-I5-2). adopt-seed
+         snapshots state.json before changing it. If the transaction fails
+         later (e.g. a 1603 major upgrade), Windows Installer runs the
+         rollback action, which restores the snapshot and removes the
+         versions\<seed> adopt-seed created; on success the commit action
+         drops the snapshot. The rollback action is sequenced just before
+         adopt-seed so it is registered before adopt-seed runs. -->
+    <CustomAction Id="RunAdoptSeedRollback"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec64"
+                  Execute="rollback"
+                  Impersonate="no"
+                  Return="ignore"/>
+
+    <CustomAction Id="RunAdoptSeedCommit"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec64"
+                  Execute="commit"
+                  Impersonate="no"
+                  Return="ignore"/>
+
     <CustomAction Id="RunInstallScheduledTask"
                   BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
                   DllEntry="WixQuietExec64"
@@ -297,6 +318,18 @@
                  Before="RunAdoptSeed"
                  Condition="NOT REMOVE=&quot;ALL&quot;"/>
 
+    <SetProperty Id="RunAdoptSeedRollback"
+                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard-bootstrap.exe" adopt-seed --rollback'
+                 Sequence="execute"
+                 Before="RunAdoptSeedRollback"
+                 Condition="NOT REMOVE=&quot;ALL&quot;"/>
+
+    <SetProperty Id="RunAdoptSeedCommit"
+                 Value='"[INSTALLFOLDER]stepsecurity-dev-machine-guard-bootstrap.exe" adopt-seed --commit'
+                 Sequence="execute"
+                 Before="RunAdoptSeedCommit"
+                 Condition="NOT REMOVE=&quot;ALL&quot;"/>
+
     <SetProperty Id="RunInstallScheduledTask"
                  Value='"[SEEDFOLDER]stepsecurity-dev-machine-guard.exe" install --ignore-telemetry-error'
                  Sequence="execute"
@@ -315,7 +348,8 @@
       On install, upgrade and repair (NOT REMOVE="ALL"):
         InstallFiles → RunConfigureFromFile OR RunConfigureInline
                      → RunConfigureAutoUpdate (AUTOUPDATE set)
-                     → RunAdoptSeed → RunInstallScheduledTask
+                     → RunAdoptSeedRollback (rollback-only) → RunAdoptSeed
+                     → RunInstallScheduledTask → RunAdoptSeedCommit (commit-only)
         install is idempotent and (re)creates all three tasks, so a repair
         restores a deleted or clobbered task (M-7). adopt-seed runs before it
         so the first scan the install CA triggers finds state.json.
@@ -340,16 +374,29 @@
       <Custom Action="RunConfigureAutoUpdate"
               After="RunConfigureInline"
               Condition="AUTOUPDATE AND NOT REMOVE=&quot;ALL&quot;"/>
-      <Custom Action="RunAdoptSeed"
+      <Custom Action="RunAdoptSeedRollback"
               After="RunConfigureAutoUpdate"
+              Condition="NOT REMOVE=&quot;ALL&quot;"/>
+      <Custom Action="RunAdoptSeed"
+              After="RunAdoptSeedRollback"
               Condition="NOT REMOVE=&quot;ALL&quot;"/>
       <Custom Action="RunInstallScheduledTask"
               After="RunAdoptSeed"
+              Condition="NOT REMOVE=&quot;ALL&quot;"/>
+      <Custom Action="RunAdoptSeedCommit"
+              After="RunInstallScheduledTask"
               Condition="NOT REMOVE=&quot;ALL&quot;"/>
       <Custom Action="RunUninstallScheduledTask"
               Before="RemoveFiles"
               Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"/>
     </InstallExecuteSequence>
+
+    <?ifdef TestFailUpgrade?>
+    <!-- Test builds only (msi-smoke: -d TestFailUpgrade=1): with
+         WIXFAILWHENDEFERRED=1 the transaction fails late, after adopt-seed,
+         so the rollback path can be exercised. Release builds omit it. -->
+    <util:FailWhenDeferred/>
+    <?endif?>
 
   </Package>
 </Wix>

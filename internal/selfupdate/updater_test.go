@@ -1287,3 +1287,25 @@ func TestHangAfterStartedRollsBack(t *testing.T) {
 		t.Fatalf("hung version not rolled back: %+v", e.state())
 	}
 }
+
+// DMG-I5-2: a stale adopt-seed snapshot (an MSI that never committed or
+// rolled back) is swept by the updater; a fresh one is left for the MSI.
+func TestUpdaterSweepsStaleAdoptSnapshot(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	st := baseState("1.19.0", "")
+	st.LastCheck = e.now
+	e.writeState(st)
+	snap := e.L.AdoptSnapshotFile()
+	must(t, updatestate.WriteAdoptSnapshot(snap, &updatestate.AdoptSnapshot{Seed: "1.19.0"}))
+	e.tick()
+	if _, err := os.Stat(snap); err != nil {
+		t.Fatalf("fresh snapshot swept: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	must(t, os.Chtimes(snap, old, old))
+	e.tick()
+	if _, err := os.Stat(snap); !os.IsNotExist(err) {
+		t.Fatalf("stale snapshot kept: %v", err)
+	}
+}
