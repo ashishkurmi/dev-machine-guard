@@ -89,14 +89,15 @@ the switch (so clock changes can't hide runs). Each is classified:
 
 - **Healthy:** the scan reached the backend (run-status `started`) and
   didn't crash or get killed by the watchdog.
-- **Bad:** a crash (a Go panic, recovered or not, exits 2), a watchdog
-  kill, or an exit before `started` with any other code (including
-  "couldn't start the agent", 70).
+- **Bad:** a crash (a Go panic, recovered or not, exits 2), "couldn't
+  start the agent" (70) or a watchdog kill, whether or not the scan had
+  posted `started`; or an exit before `started` with any code not listed
+  as Neutral. The watchdogs count awake time only, so a laptop asleep past
+  the limit is not killed; a kill means the scan really hung.
 - **Neutral:** an exit 0 or 1 before `started` (offline, or skipped
   because another scan was running); an exit caused by the session
   ending (130, `0xC000013A` STATUS_CONTROL_C_EXIT, `0x40010004`
-  DBG_TERMINATE_PROCESS); a watchdog stop of a scan that spanned a system
-  sleep (exit 75: the watchdogs count awake time only); or a launch whose
+  DBG_TERMINATE_PROCESS); or a launch whose
   bootstrap died without recording an outcome (shutdown, logoff, the task
   time limit).
 

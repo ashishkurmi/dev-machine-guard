@@ -329,14 +329,11 @@ func (b *Bootstrap) Run(args []string) int {
 	return ExitCannotStart
 }
 
-// runOutcome is the exit code and watchdog flag a scan launch records. A
-// deadline kill after the system slept is recorded as ExitSlept (Neutral),
-// not as a watchdog kill (Bad): it isn't evidence of a hang.
+// runOutcome is the exit code and watchdog flag a scan launch records. The
+// deadline counts awake time only (sleep excluded), so a deadline kill is a
+// real hang: a watchdog kill.
 func runOutcome(res SpawnResult) (code int, watchdogKilled bool) {
-	switch {
-	case res.Killed && res.Slept:
-		return updatestate.ExitSlept, false
-	case res.Killed:
+	if res.Killed {
 		return ExitKilled, true
 	}
 	return res.ExitCode, false

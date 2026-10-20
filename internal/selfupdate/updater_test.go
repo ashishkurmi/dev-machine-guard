@@ -1269,3 +1269,21 @@ func TestMissingSignedChecksumIsVerifyFailed(t *testing.T) {
 		t.Fatalf("downloaded: %v", e.api.githubHits)
 	}
 }
+
+// FR1-7: a version whose scans hang after posting started (watchdog-killed)
+// is rolled back after K=2 such runs.
+func TestHangAfterStartedRollsBack(t *testing.T) {
+	e := newEnv(t)
+	probationState(t, e)
+	pv := mustV("1.20.0")
+	for i := 0; i < 2 && e.state().Current == "1.20.0"; i++ {
+		id := fmt.Sprintf("hang-%d", i)
+		must(t, updatestate.AppendRun(e.L.RunFile(pv), updatestate.RunRecord{RunID: id, Version: "1.20.0"}))
+		must(t, updatestate.MarkRunStarted(e.L.RunFile(pv), id))
+		must(t, updatestate.FinalizeRun(e.L.RunFile(pv), id, 124, true, e.now))
+		e.tick()
+	}
+	if rb := e.lastSentOrNil(EventRolledBack); rb == nil || rb.Error != ReasonBadRuns {
+		t.Fatalf("hung version not rolled back: %+v", e.state())
+	}
+}

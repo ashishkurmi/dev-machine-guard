@@ -399,13 +399,20 @@ func TestReadRunsNeverTrims(t *testing.T) {
 	}
 }
 
-// FR1-3: a watchdog kill that followed a system sleep is Neutral.
-func TestSleptKillIsNeutral(t *testing.T) {
-	code := ExitSlept
-	for _, started := range []bool{false, true} {
-		r := RunRecord{Version: "1.20.0", RunID: "x", Started: started, ExitCode: &code}
-		if v := ClassifyRun(r); v == RunBad {
-			t.Fatalf("started=%v: slept kill classified Bad", started)
+// FR1-7: the watchdogs count awake time, so any watchdog kill is a real
+// hang and Bad, before or after the started marker; kill/crash codes are
+// judged before the marker.
+func TestKillsAndCrashesAreBadEvenAfterStarted(t *testing.T) {
+	two, seventy, seventyFive := 2, 70, 75
+	for _, r := range []RunRecord{
+		{Started: true, WatchdogKilled: true, ExitCode: &seventyFive},
+		{Started: true, ExitCode: &two},
+		{Started: true, ExitCode: &seventy},
+		{Started: false, ExitCode: &seventyFive},
+	} {
+		r.Version, r.RunID = "1.20.0", "x"
+		if v := ClassifyRun(r); v != RunBad {
+			t.Errorf("%+v: verdict %v, want Bad", r, v)
 		}
 	}
 }

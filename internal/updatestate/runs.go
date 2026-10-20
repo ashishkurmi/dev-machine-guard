@@ -282,9 +282,8 @@ const (
 	RunNeutral
 )
 
-// ExitSlept is the exit status of a scan the agent's or the bootstrap's
-// watchdog ended after the system had slept: not evidence of a hang.
-const ExitSlept = 75
+// cannotStartExitCode is the launcher's "couldn't start the agent" (D5).
+const cannotStartExitCode = 70
 
 // sessionEnd reports exits caused by the user's session ending, not by the
 // version: 130 (the agent's SIGTERM path, which Go maps CTRL_CLOSE /
@@ -313,11 +312,13 @@ func ClassifyRun(r RunRecord) RunVerdict {
 		return RunBad
 	case r.ExitCode == nil:
 		return RunOpen
-	case *r.ExitCode == panicExitCode:
+	case *r.ExitCode == panicExitCode || *r.ExitCode == cannotStartExitCode:
+		// Kills and crashes are judged before the started marker: a version
+		// that crashes or hangs after posting started is still bad.
 		return RunBad
 	case r.Started:
 		return RunHealthy
-	case *r.ExitCode == 0 || *r.ExitCode == 1 || *r.ExitCode == ExitSlept || sessionEnd(*r.ExitCode):
+	case *r.ExitCode == 0 || *r.ExitCode == 1 || sessionEnd(*r.ExitCode):
 		return RunNeutral
 	default:
 		return RunBad

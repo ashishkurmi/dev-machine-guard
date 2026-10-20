@@ -902,15 +902,13 @@ func TestUpdate_Schema2StateStillCountsFailuresAndFallsBack(t *testing.T) {
 	}
 }
 
-// FR1-3: a deadline kill after a system sleep is recorded Neutral.
-func TestRunOutcomeAfterSleep(t *testing.T) {
-	code, killed := runOutcome(SpawnResult{Started: true, Killed: true, Slept: true})
+// FR1-7: a deadline kill is a watchdog kill (Bad) even if the system slept
+// meanwhile: the deadline already counts awake time only.
+func TestRunOutcomeKillIsWatchdog(t *testing.T) {
+	code, killed := runOutcome(SpawnResult{Started: true, Killed: true})
 	exit := code
-	if killed || updatestate.ClassifyRun(updatestate.RunRecord{Version: "1.20.0", ExitCode: &exit}) != updatestate.RunNeutral {
-		t.Fatalf("slept kill: code %d killed %v", code, killed)
-	}
-	if code, killed := runOutcome(SpawnResult{Started: true, Killed: true}); code != ExitKilled || !killed {
-		t.Fatalf("plain kill: code %d killed %v", code, killed)
+	if !killed || code != ExitKilled || updatestate.ClassifyRun(updatestate.RunRecord{Version: "1.20.0", Started: true, ExitCode: &exit, WatchdogKilled: killed}) != updatestate.RunBad {
+		t.Fatalf("kill: code %d killed %v", code, killed)
 	}
 	if code, killed := runOutcome(SpawnResult{Started: true, ExitCode: 3}); code != 3 || killed {
 		t.Fatalf("exit 3: code %d killed %v", code, killed)

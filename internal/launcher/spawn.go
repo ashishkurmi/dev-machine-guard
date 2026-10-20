@@ -12,7 +12,6 @@ type SpawnResult struct {
 	Started  bool  // false: the child never started (Err says why)
 	ExitCode int   // valid when Started
 	Killed   bool  // the deadline fired and the child's tree was terminated
-	Slept    bool  // ...after the system had slept (not evidence of a hang)
 	Err      error // start error, or a wait error with no exit status
 }
 
@@ -30,15 +29,14 @@ func waitWithDeadline(cmd *exec.Cmd, deadline time.Duration, kill func()) SpawnR
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	// The deadline counts awake time (sleep excluded), see awakeclock.
-	type expiry struct{ slept bool }
-	timeout := make(chan expiry, 1)
+	timeout := make(chan struct{}, 1)
 	stop := make(chan struct{})
 	defer close(stop)
 	if deadline > 0 {
 		start := awakeclock.Begin(awakeclock.System)
 		go func() {
-			if fired, slept := start.Wait(deadline, stop, watchdogPoll); fired {
-				timeout <- expiry{slept}
+			if fired, _ := start.Wait(deadline, stop, watchdogPoll); fired {
+				timeout <- struct{}{}
 			}
 		}()
 	}
@@ -46,8 +44,8 @@ func waitWithDeadline(cmd *exec.Cmd, deadline time.Duration, kill func()) SpawnR
 	var err error
 	select {
 	case err = <-done:
-	case e := <-timeout:
-		res.Killed, res.Slept = true, e.slept
+	case <-timeout:
+		res.Killed = true
 		kill()
 		err = <-done
 	}
