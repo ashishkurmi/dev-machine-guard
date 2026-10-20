@@ -385,13 +385,16 @@ jobs:
             Remove-Item Env:DMG_FAULT
             Start-Sleep -Seconds 3
             Check (-not $bp.HasExited) "$($form.name): a hung bootstrap is running"
+            $pfr0 = @((Get-ItemProperty -Path $props -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations | Where-Object { $_ })
+            if ($pfr0 -match 'StepSecurity') { Write-Host "pending renames before this repair (not ours to judge): $($pfr0 -match 'StepSecurity' -join '; ')" }
             $log = "dist\dmg-repair-busy-$i.log"
             $code = Msi $form.args $log
             Check ($code -eq 0) "$($form.name): exit 0, not 3010/1641 ($code)"
             Check (-not (Select-String -Path $log -Pattern 'is being held in use' -SimpleMatch -Quiet)) "$($form.name): no MSI file held in use"
             Check (Select-String -Path $log -Pattern 'stop-for-msi' -SimpleMatch -Quiet) "$($form.name): stop-for-msi ran"
-            $pfr = (Get-ItemProperty -Path $props -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
-            Check (-not ($pfr -match 'StepSecurity')) "$($form.name): no pending file renames for our files"
+            $pfr = @((Get-ItemProperty -Path $props -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations | Where-Object { $_ })
+            $new = @($pfr | Where-Object { $_ -match 'StepSecurity' -and $pfr0 -notcontains $_ })
+            Check ($new.Count -eq 0) "$($form.name): the repair scheduled no file renames for our files ($($new -join '; '))"
             Check ((Get-CimInstance Win32_OperatingSystem).LastBootUpTime -eq $boot0) "$($form.name): no reboot (boot time unchanged)"
             $bp.Refresh()
             Check $bp.HasExited "$($form.name): the hung bootstrap was stopped"
