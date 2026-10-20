@@ -4,15 +4,15 @@ package schtasks
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/step-security/dev-machine-guard/internal/progress"
+	"github.com/step-security/dev-machine-guard/internal/updatestate"
+	"github.com/step-security/dev-machine-guard/internal/winproc"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -58,56 +58,32 @@ func waitForInstanceMutex(wait time.Duration) bool {
 	return <-res
 }
 
+// terminateUnder stops every DMG process under root, then waits (bounded)
+// until no process holds an MSI-owned file, since a terminated process can
+// keep its image held for a while (D29). This process's own image (the
+// uninstall action runs the seed agent) can't be waited for and is skipped.
 func terminateUnder(root string, log *progress.Logger) error {
-	prefix := strings.ToLower(filepath.Clean(root)) + `\`
-	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
-	if err != nil {
-		return fmt.Errorf("process snapshot: %w", err)
+	stopped, err := winproc.StopUnder(root)
+	for _, img := range stopped {
+		log.Progress("Stopped running DMG process %s", img)
 	}
-	defer func() { _ = windows.CloseHandle(snap) }()
-	self := uint32(os.Getpid()) // #nosec G115 -- a pid fits in uint32
-	var pe windows.ProcessEntry32
-	pe.Size = uint32(unsafe.Sizeof(pe))
-	var errs []error
-	for err = windows.Process32First(snap, &pe); err == nil; err = windows.Process32Next(snap, &pe) {
-		if pe.ProcessID == self || pe.ProcessID == 0 {
-			continue
+	self, _ := os.Executable()
+	var files []string
+	for _, f := range (updatestate.Layout{InstallRoot: root}).MSIOwnedFiles() {
+		if !strings.EqualFold(filepath.Clean(f), filepath.Clean(self)) {
+			files = append(files, f)
 		}
-		h, oerr := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, pe.ProcessID)
-		if oerr != nil {
-			continue
-		}
-		buf := make([]uint16, windows.MAX_LONG_PATH)
-		n := uint32(len(buf))
-		if qerr := windows.QueryFullProcessImageName(h, 0, &buf[0], &n); qerr == nil {
-			img := windows.UTF16ToString(buf[:n])
-			if strings.HasPrefix(strings.ToLower(img), prefix) {
-				if serr := stopProcess(h); serr != nil {
-					errs = append(errs, fmt.Errorf("terminating %s (pid %d): %w", img, pe.ProcessID, serr))
-				} else {
-					log.Progress("Stopped running DMG process %s (pid %d)", img, pe.ProcessID)
-				}
-			}
-		}
-		_ = windows.CloseHandle(h)
 	}
-	return errors.Join(errs...)
+	if held := winproc.WaitReleased(files, releaseWait, 50*time.Millisecond); len(held) > 0 {
+		log.Warn("still held after %s: %s", releaseWait, strings.Join(held, ", "))
+	}
+	return err
 }
 
-// stopProcess terminates the process and waits up to 5 s for it to exit.
-// A process that is already exiting (for example killed by its kill-on-close
-// job when its parent bootstrap died) rejects TerminateProcess with
-// ACCESS_DENIED; what counts is whether it is gone, so that is not an error.
-func stopProcess(h windows.Handle) error {
-	terr := windows.TerminateProcess(h, 1)
-	if ev, _ := windows.WaitForSingleObject(h, 5000); ev == windows.WAIT_OBJECT_0 {
-		return nil
-	}
-	if terr != nil {
-		return terr
-	}
-	return errors.New("still running 5 s after TerminateProcess")
-}
+// releaseWait bounds the wait for MSI-owned files to be released.
+const releaseWait = 30 * time.Second
+
+func stopProcess(h windows.Handle) error { return winproc.StopProcess(h) }
 
 // deleteRunningVersionPlatform removes HKLM\Software\StepSecurity\RunningVersion
 // (updater-owned). AgentVersion is MSI-owned and left to the MSI.

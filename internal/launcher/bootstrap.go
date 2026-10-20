@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/step-security/dev-machine-guard/internal/authenticode"
+	"github.com/step-security/dev-machine-guard/internal/winproc"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,6 +102,9 @@ type Bootstrap struct {
 	// SetRunningVersion records the version adopt-seed made current
 	// (HKLM RunningVersion on Windows); nil skips it.
 	SetRunningVersion func(string) error
+	// SelfExe is this bootstrap's own image; adopt-seed copies it to
+	// Layout.MSIHelperFile for the MSI's stop-for-msi action. "" skips it.
+	SelfExe string
 	// VerifySeed checks a seed's executables before adopt-seed copies them
 	// (authenticode.SameSeedPublisher in production); nil skips it.
 	VerifySeed func(path string) error
@@ -129,6 +133,7 @@ func NewBootstrap(exePath string, isSystem func() bool) *Bootstrap {
 		NewRunID:          uuid.NewString,
 		SetRunningVersion: SetRunningVersion,
 		VerifySeed:        func(p string) error { return authenticode.SameSeedPublisher(p, exePath) },
+		SelfExe:           exePath,
 		AdoptLockWait:     60 * time.Second,
 		RecordLockWait:    30 * time.Second,
 		LockPoll:          500 * time.Millisecond,
@@ -149,6 +154,8 @@ func (b *Bootstrap) Main(argv []string) int {
 		return b.Update()
 	case "adopt-seed":
 		return b.AdoptSeed(argv[1:])
+	case "stop-for-msi":
+		return b.StopForMSI(argv[1:])
 	default:
 		b.logf("unknown bootstrap verb %q", argv[0])
 		return exitUsage
@@ -554,6 +561,8 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 	}
 	defer l.Release()
 
+	b.refreshMSIHelper()
+
 	// Snapshot before changing anything, for the MSI's rollback action.
 	snapPath := b.Layout.AdoptSnapshotFile()
 	updatestate.SweepStaleAdoptSnapshot(snapPath)
@@ -582,6 +591,88 @@ func (b *Bootstrap) AdoptSeed(args []string) int {
 	}
 	return 0
 }
+
+// refreshMSIHelper copies this bootstrap to Layout.MSIHelperFile, which the
+// next MSI's stop-for-msi action runs (D29). Best effort.
+func (b *Bootstrap) refreshMSIHelper() {
+	if b.SelfExe == "" {
+		return
+	}
+	dst := b.Layout.MSIHelperFile()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { // #nosec G301 -- inside the protected state dir
+		b.logf("adopt-seed: MSI helper: %v", err)
+		return
+	}
+	tmp := dst + ".new"
+	if err := copyExecutable(b.SelfExe, tmp); err != nil {
+		b.logf("adopt-seed: MSI helper: %v", err)
+		_ = os.Remove(tmp)
+		return
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		b.logf("adopt-seed: MSI helper: %v", err)
+		_ = os.Remove(tmp)
+	}
+}
+
+func copyExecutable(src, dst string) error {
+	in, err := os.Open(src) // #nosec G304 -- this bootstrap's own image
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755) // #nosec G302 G304 -- protected state dir
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, in)
+	if err == nil {
+		err = out.Sync()
+	}
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// StopForMSI is `stop-for-msi --install-dir <root>`, the MSI's first
+// deferred action (D29): it stops every DMG process under root and waits,
+// bounded, until no process holds any MSI-owned file, so Windows Installer
+// never finds one in use (which needs a reboot). It runs from the helper
+// copy in state\msi\, so its own image is not an MSI file. Always exits 0.
+func (b *Bootstrap) StopForMSI(args []string) int {
+	root := ""
+	for i, a := range args {
+		switch {
+		case strings.HasPrefix(a, "--install-dir="):
+			root = strings.TrimPrefix(a, "--install-dir=")
+		case a == "--install-dir" && i+1 < len(args):
+			root = args[i+1]
+		}
+	}
+	if root == "" {
+		b.logf("stop-for-msi: --install-dir is required")
+		return 0
+	}
+	root = filepath.Clean(strings.Trim(root, `"`))
+	stopped, err := winproc.StopUnder(root)
+	for _, img := range stopped {
+		b.logf("stop-for-msi: stopped %s", img)
+	}
+	if err != nil {
+		b.logf("stop-for-msi: %v", err)
+	}
+	files := updatestate.Layout{InstallRoot: root}.MSIOwnedFiles()
+	if held := winproc.WaitReleased(files, msiReleaseWait, 50*time.Millisecond); len(held) > 0 {
+		b.logf("stop-for-msi: still held after %s: %s", msiReleaseWait, strings.Join(held, ", "))
+		return 0
+	}
+	b.logf("stop-for-msi: %d MSI-owned files free", len(files))
+	return 0
+}
+
+// msiReleaseWait bounds stop-for-msi's wait for MSI-owned files.
+const msiReleaseWait = 30 * time.Second
 
 // adoptSnapshot records state.json and whether versions\<v> exists, before
 // adopt-seed touches either.

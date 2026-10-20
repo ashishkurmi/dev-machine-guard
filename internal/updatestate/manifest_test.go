@@ -56,3 +56,31 @@ func TestVerifyVersionDir(t *testing.T) {
 		t.Fatal("non-strict manifest version written")
 	}
 }
+
+// D29: the files the MSI owns (replaced or removed by Windows Installer):
+// the bootstrap and every file under seed\.
+func TestMSIOwnedFiles(t *testing.T) {
+	l := Layout{InstallRoot: t.TempDir(), DataRoot: t.TempDir()}
+	for _, p := range []string{
+		filepath.Join(l.InstallRoot, BootstrapFile),
+		filepath.Join(l.InstallRoot, "seed", "1.19.0", AgentFile),
+		filepath.Join(l.InstallRoot, "seed", "1.19.0", LinuxFile),
+		filepath.Join(l.InstallRoot, "versions", "1.20.0", AgentFile),
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := l.MSIOwnedFiles()
+	if len(got) != 3 {
+		t.Fatalf("MSIOwnedFiles = %v", got)
+	}
+	for _, p := range got {
+		if filepath.Base(filepath.Dir(p)) == "1.20.0" {
+			t.Fatalf("versions\\ is updater-owned: %v", got)
+		}
+	}
+}
