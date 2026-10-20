@@ -51,7 +51,7 @@ func newEnv(t *testing.T) *env {
 		api: newFakeAPI(t), now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC),
 		self: "1.19.0", auto: true, smokeErr: map[string]error{},
 	}
-	for _, v := range []string{"1.18.0", "1.19.0", "1.20.0", "1.21.0"} {
+	for _, v := range []string{"1.17.0", "1.18.0", "1.19.0", "1.20.0", "1.21.0"} {
 		e.api.addRelease(v, testArch, payload("agent", v), payload("task", v), payload("linux", v))
 	}
 	e.api.setTarget("1.20.0")
@@ -434,7 +434,7 @@ func TestPolicyOutcomes(t *testing.T) {
 		staged bool
 	}{
 		{"disabled", func(e *env) { e.auto = false }, EventDisabled, ExitOK, false},
-		{"below floor", func(e *env) { e.api.setTarget("1.18.0") }, EventRefusedFloor, ExitOK, false},
+		{"below floor", func(e *env) { e.api.setTarget("1.17.0") }, EventRefusedFloor, ExitOK, false},
 		{"check failed", func(e *env) { e.api.metaStatus = 500 }, EventCheckFailed, ExitFailed, false},
 		{"bad signature", func(e *env) {
 			e.api.badSig["stepsecurity-dev-machine-guard-1.20.0-windows_amd64.exe"] = true

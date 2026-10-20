@@ -140,7 +140,7 @@ the `AUTOUPDATE` values and re-enabling.
 ## Version floor
 
 The updater refuses any target older than the first release that
-contains it (`minWindowsSelfUpdateVersion`, currently 1.19.0) and
+contains it (`minWindowsSelfUpdateVersion`, currently 1.18.0) and
 reports `update_refused_floor`. A version below the floor has no updater
 and would leave the device stuck. To put devices on an older release,
 deploy that release's MSI instead.
