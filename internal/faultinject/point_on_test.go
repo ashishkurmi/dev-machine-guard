@@ -227,3 +227,15 @@ func TestPointPanicAction(t *testing.T) {
 	_ = Point("S0.locked")
 	t.Fatal("no panic")
 }
+
+// D28: sleep<duration> blocks at the checkpoint, then continues normally.
+func TestPointSleepAction(t *testing.T) {
+	t.Setenv("DMG_FAULT", "S6.mutex:sleep300ms")
+	start := time.Now()
+	if err := Point("S6.mutex"); err != nil {
+		t.Fatalf("Point = %v, want nil after the sleep", err)
+	}
+	if d := time.Since(start); d < 300*time.Millisecond {
+		t.Fatalf("returned after %s", d)
+	}
+}

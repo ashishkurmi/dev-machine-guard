@@ -72,6 +72,10 @@ func act(name, action string) error {
 			time.Sleep(time.Hour)
 		}
 	default:
+		if d, ok := sleepAction(action); ok {
+			time.Sleep(d) // then continue normally
+			return nil
+		}
 		if n, ok := strings.CutPrefix(action, "exit"); ok {
 			if code, err := strconv.Atoi(n); err == nil && code >= 0 {
 				exit(code)

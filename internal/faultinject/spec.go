@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // MalformedExitCode is how a fault build exits on a malformed DMG_FAULT or
@@ -68,8 +69,27 @@ func validAction(a string) bool {
 	case "kill", "err", "hang", "diskfull", "panic":
 		return true
 	}
+	if _, ok := sleepAction(a); ok {
+		return true
+	}
 	n, ok := strings.CutPrefix(a, "exit")
 	code, err := strconv.Atoi(n)
 	// MalformedExitCode is reserved: a fault may not imitate a bad spec.
 	return ok && err == nil && code >= 0 && code != MalformedExitCode
+}
+
+// MaxSleep bounds the sleep<duration> action.
+const MaxSleep = 10 * time.Minute
+
+// sleepAction parses sleep<duration> (Go syntax, 0 < d <= MaxSleep).
+func sleepAction(a string) (time.Duration, bool) {
+	v, ok := strings.CutPrefix(a, "sleep")
+	if !ok {
+		return 0, false
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 || d > MaxSleep {
+		return 0, false
+	}
+	return d, true
 }

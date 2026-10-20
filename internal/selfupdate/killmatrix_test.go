@@ -706,3 +706,35 @@ func TestHarnessChildrenSkipRaceExitSleep(t *testing.T) {
 		t.Fatalf("child env lacks GORACE=atexit_sleep_ms=0")
 	}
 }
+
+// D28: S6.mutex fires with the scan instance mutex held, so
+// S6.mutex:sleep<d> keeps a scan out for d (harness U-F3).
+func TestSleepAtS6MutexHoldsTheInstanceMutex(t *testing.T) {
+	e := newH1Env(t)
+	trace := filepath.Join(t.TempDir(), "trace")
+	done := make(chan int, 1)
+	go func() { done <- e.tick("S6.mutex:sleep3s", trace) }()
+	deadline := time.Now().Add(2 * time.Minute)
+	for !slices.Contains(readTrace(trace), "S6.mutex") {
+		if time.Now().After(deadline) {
+			t.Fatal("S6.mutex never reached")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	holdInstanceMu.Lock()
+	restore := lock.SetTargetForTest(e.lock)
+	lk, err := lock.Acquire(nil)
+	restore()
+	holdInstanceMu.Unlock()
+	if err == nil {
+		lk.Release()
+		t.Fatal("a scan took the instance mutex while the updater slept at S6.mutex")
+	}
+	if code := <-done; code != ExitOK {
+		e.dumpLogs()
+		t.Fatalf("tick exit %d", code)
+	}
+	if e.state().Current != h1Target {
+		t.Fatal("switch did not complete after the sleep")
+	}
+}
