@@ -373,12 +373,13 @@
         (M-6). The new product's install CA replaces the tasks.
     -->
     <InstallExecuteSequence>
-      <!-- First deferred action: RemoveExistingProducts is scheduled
-           afterInstallInitialize (MajorUpgrade), so this lands between
-           InstallInitialize and the old product's removal, before
-           RemoveFiles / InstallFiles. -->
+      <!-- Right after RemoveExistingProducts (which must follow
+           InstallInitialize directly, error 2613), so before RemoveFiles /
+           InstallFiles on install, repair and uninstall. In a major upgrade
+           the old product's removal runs its own copy of this action (for
+           versions that have it); REBOOT=ReallySuppress bounds the rest. -->
       <Custom Action="RunStopForMsi"
-              Before="RemoveExistingProducts"/>
+              After="RemoveExistingProducts"/>
       <!-- Prefer file-based configure when BOOTSTRAPFILE is provided.
            Inline runs only when BOOTSTRAPFILE is empty AND APIKEY is set. -->
       <Custom Action="RunConfigureFromFile"
