@@ -44,6 +44,10 @@ type State struct {
 	// SmokeTimeouts counts consecutive smoke-test timeouts per version; the
 	// third quarantines it (a timeout alone is retried).
 	SmokeTimeouts map[string]int `json:"smoke_timeouts,omitempty"`
+	// Restages counts re-stagings of a version whose dir was damaged (an AV
+	// deleting a file); RestageBackoff pauses them (version -> until).
+	Restages       map[string]Restage   `json:"restages,omitempty"`
+	RestageBackoff map[string]time.Time `json:"restage_backoff,omitempty"`
 	// PendingSwitch is a staged target whose switch was deferred; its
 	// versions dir is kept and SwitchDeferrals counts for it alone.
 	PendingSwitch string `json:"pending_switch,omitempty"`
@@ -52,6 +56,13 @@ type State struct {
 
 	// Extra holds keys this version doesn't know; Save writes them back.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// Restage counts re-stagings of one version since First (Last: the latest).
+type Restage struct {
+	Count int       `json:"count"`
+	First time.Time `json:"first"`
+	Last  time.Time `json:"last"`
 }
 
 // OutboxEvent is a pending update event (spec Contracts: Update event).

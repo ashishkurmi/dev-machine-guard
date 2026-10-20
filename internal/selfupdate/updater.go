@@ -314,6 +314,60 @@ func (t *tick) reportUpdaterFailure() {
 	}
 }
 
+const (
+	restageLimit  = 3              // restages of one version within restageWindow
+	restageWindow = 24 * time.Hour // ... before a restageWindow pause
+)
+
+// restagePaused reports whether restaging v is paused; an expired pause is
+// cleared.
+func (t *tick) restagePaused(v string) bool {
+	until, ok := t.st.RestageBackoff[v]
+	if !ok {
+		return false
+	}
+	if t.now.Before(until) {
+		t.d.Logf("self-update: %s keeps losing files; restaging paused until %s", v, until.Format(time.RFC3339))
+		return true
+	}
+	delete(t.st.RestageBackoff, v)
+	return false
+}
+
+// countRestage records a restage of v; the restageLimit-th within
+// restageWindow pauses further restages for restageWindow and reports one
+// update_stage_failed (av_deleted). Not a quarantine: the version is fine,
+// something keeps deleting its files; the bootstrap runs the fallback.
+func (t *tick) countRestage(v string) {
+	if t.st.Restages == nil {
+		t.st.Restages = map[string]updatestate.Restage{}
+	}
+	r := t.st.Restages[v]
+	if r.Count == 0 || t.now.Sub(r.First) > restageWindow {
+		r = updatestate.Restage{First: t.now.UTC()}
+	}
+	r.Count++
+	r.Last = t.now.UTC()
+	t.st.Restages[v] = r
+	if r.Count < restageLimit {
+		return
+	}
+	if t.st.RestageBackoff == nil {
+		t.st.RestageBackoff = map[string]time.Time{}
+	}
+	t.st.RestageBackoff[v] = t.now.Add(restageWindow).UTC()
+	t.enqueue(EventStageFailed, v, v, "av_deleted", EventStageFailed+":av_deleted:"+v)
+}
+
+// resetIntactRestages forgets the restage count of a current version that
+// has stayed intact for restageWindow since its last restage.
+func (t *tick) resetIntactRestages(currentValid bool) {
+	r, ok := t.st.Restages[t.st.Current]
+	if ok && currentValid && t.now.Sub(r.Last) >= restageWindow {
+		delete(t.st.Restages, t.st.Current)
+	}
+}
+
 // adoptNewerSeed does what the MSI's adopt-seed would, for a newer seed
 // that adopt-seed couldn't adopt (it gives up after a bounded wait for the
 // update lock): with no probation open and the seed newer than current and
@@ -663,6 +717,7 @@ func cloneState(s *updatestate.State) *updatestate.State {
 func (t *tick) update(ctx context.Context, probationClosed bool) int {
 	st := t.st
 	currentValid := t.dirValid(st.Current)
+	t.resetIntactRestages(currentValid)
 	due := st.LastCheck.IsZero() || t.now.Sub(st.LastCheck) >= duration(knobCheckInterval) ||
 		st.LastCheck.After(t.now) || probationClosed || !currentValid
 	if st.Probation != nil || !due {
@@ -704,6 +759,12 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 		return t.finish(ctx, ExitOK)
 	}
 
+	// A damaged current (an AV deleting a file) is restaged in place, but
+	// not endlessly (DMG-I5-5).
+	if target == st.Current && t.restagePaused(target) {
+		return t.finish(ctx, ExitOK)
+	}
+
 	// S4 Stage, leaving the smoke its reserved budget.
 	stageCtx := ctx
 	if dl, ok := ctx.Deadline(); ok {
@@ -725,6 +786,7 @@ func (t *tick) update(ctx context.Context, probationClosed bool) int {
 		// Current's dir was missing or damaged and is now restaged in place:
 		// the pointer already names it, so there is nothing to switch.
 		t.d.Logf("self-update: restaged current %s", target)
+		t.countRestage(target)
 		return t.finish(ctx, ExitOK)
 	}
 

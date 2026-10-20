@@ -1331,3 +1331,49 @@ func TestNoSeedAdoptionDuringMSI(t *testing.T) {
 		t.Fatalf("seed not adopted after the MSI finished: %+v", e.state())
 	}
 }
+
+// DMG-I5-5: an AV that keeps deleting a file from the confirmed current
+// version gets at most 3 restages in 24 h, then one update_stage_failed
+// (av_deleted) and a 24 h pause; the version is not quarantined.
+func TestRestageBackoffAfterRepeatedDeletion(t *testing.T) {
+	e := newEnv(t)
+	e.installVersion("1.19.0")
+	e.installVersion("1.20.0")
+	e.self = "1.20.0"
+	e.writeState(baseState("1.20.0", "1.19.0"))
+	agent := filepath.Join(e.L.VersionDir(mustV("1.20.0")), updatestate.AgentFile)
+	downloads := func() int { return e.api.githubHits["stepsecurity-dev-machine-guard-1.20.0-windows_amd64.exe"] }
+	for i := 0; i < 6; i++ {
+		_ = os.Remove(agent) // the AV strikes again (already gone while paused)
+		e.tick()
+		e.now = e.now.Add(time.Hour)
+	}
+	if n := downloads(); n != 3 {
+		t.Fatalf("restaged %d times in 6 h, want 3", n)
+	}
+	var avEvents int
+	for _, ev := range e.all {
+		if ev.Event == EventStageFailed && ev.Error == "av_deleted" {
+			avEvents++
+		}
+	}
+	st := e.state()
+	if avEvents != 1 || st.RestageBackoff["1.20.0"].IsZero() || st.Current != "1.20.0" {
+		t.Fatalf("events=%d backoff=%v current=%s", avEvents, st.RestageBackoff, st.Current)
+	}
+	if _, q := st.Quarantine["1.20.0"]; q {
+		t.Fatal("a healthy version was quarantined")
+	}
+	// After the backoff it is restaged again.
+	e.now = e.now.Add(25 * time.Hour)
+	e.tick()
+	if n := downloads(); n != 4 {
+		t.Fatalf("not restaged after the backoff (downloads %d)", n)
+	}
+	// Intact for 24 h: the counter resets.
+	e.now = e.now.Add(25 * time.Hour)
+	e.tick()
+	if r, ok := e.state().Restages["1.20.0"]; ok && r.Count != 0 {
+		t.Fatalf("restage counter not reset: %+v", r)
+	}
+}
