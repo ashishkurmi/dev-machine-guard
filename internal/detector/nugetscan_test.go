@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -32,6 +33,19 @@ func nugetTestScanner(t *testing.T, home string) (*NuGetScanner, *composerTrap) 
 		return func(string) string { return "" }, func(string) bool { return false }
 	}
 	return s, x
+}
+
+// nugetJSONPath escapes native paths embedded in receipt fixtures.
+func nugetJSONPath(path string) string {
+	data, _ := json.Marshal(path)
+	return string(data[1 : len(data)-1])
+}
+
+func nugetTestToolName(name string) string {
+	if runtime.GOOS == model.PlatformWindows {
+		return name + ".exe"
+	}
+	return name
 }
 
 func nugetNuspec(id, version string) string {
@@ -61,6 +75,10 @@ func nugetWriteFixture(t *testing.T, home, root string) {
 	t.Helper()
 	app := filepath.Join(root, "app")
 	packages := filepath.Join(home, ".nuget", "packages")
+	userConfigDir := filepath.Join(home, ".nuget", "NuGet")
+	if runtime.GOOS == model.PlatformWindows {
+		userConfigDir = filepath.Join(home, "AppData", "Roaming", "NuGet")
+	}
 	goWrite(t, filepath.Join(root, "Directory.Build.props"), `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`, 0o600)
 	goWrite(t, filepath.Join(root, "Directory.Packages.props"), `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally><NuGetAuditMode>all</NuGetAuditMode></PropertyGroup><ItemGroup><PackageVersion Include="Central" Version="1.0.0" /><GlobalPackageReference Include="Analyzer" Version="2.0.0" /></ItemGroup></Project>`, 0o600)
 	goWrite(t, filepath.Join(app, "App.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
@@ -83,7 +101,7 @@ func nugetWriteFixture(t *testing.T, home, root string) {
 </Project>`, 0o600)
 	goWrite(t, filepath.Join(app, "Program.cs"), "#:package Ignored@1.0.0\nSystem.Console.WriteLine();\n", 0o600)
 	goWrite(t, filepath.Join(app, "packages.lock.json"), `{"version":3,"net8.0":{"framework":".NETCoreApp,Version=v8.0","dependencies":{"Newtonsoft.Json":{"type":"Direct","requested":"[13.0.1, )","resolved":"13.0.1","contentHash":"`+nugetHashA+`"},"Transitive.Dep":{"type":"Transitive","resolved":"2.0.0","contentHash":"not-base64"},"App":{"type":"Project"}}}}`, 0o600)
-	goWrite(t, filepath.Join(app, "obj", "project.assets.json"), `{"version":3,"targets":{"net8.0":{"Newtonsoft.Json/13.0.1":{"type":"package"},"Transitive.Dep/2.0.0":{"type":"package"},"App/1.0.0":{"type":"project"}},"net8.0/linux-x64":{"Newtonsoft.Json/13.0.1":{"type":"package"}}},"libraries":{"Newtonsoft.Json/13.0.1":{"sha512":"`+nugetHashA+`","type":"package","path":"newtonsoft.json/13.0.1"},"Transitive.Dep/2.0.0":{"sha512":"`+nugetHashB+`","type":"package","path":"transitive.dep/2.0.0"},"App/1.0.0":{"type":"project"}},"packageFolders":{"`+packages+`":{}},"project":{"restore":{"projectPath":"`+filepath.Join(app, "App.csproj")+`","packagesPath":"`+packages+`","configFilePaths":["`+filepath.Join(app, "NuGet.Config")+`","`+filepath.Join(root, "NuGet.Config")+`"]},"frameworks":{"net8.0":{"targetAlias":"net8.0","framework":".NETCoreApp,Version=v8.0","dependencies":{"Newtonsoft.Json":{"version":"[13.0.1, )"}}}}}}`, 0o600)
+	goWrite(t, filepath.Join(app, "obj", "project.assets.json"), `{"version":3,"targets":{"net8.0":{"Newtonsoft.Json/13.0.1":{"type":"package"},"Transitive.Dep/2.0.0":{"type":"package"},"App/1.0.0":{"type":"project"}},"net8.0/linux-x64":{"Newtonsoft.Json/13.0.1":{"type":"package"}}},"libraries":{"Newtonsoft.Json/13.0.1":{"sha512":"`+nugetHashA+`","type":"package","path":"newtonsoft.json/13.0.1"},"Transitive.Dep/2.0.0":{"sha512":"`+nugetHashB+`","type":"package","path":"transitive.dep/2.0.0"},"App/1.0.0":{"type":"project"}},"packageFolders":{"`+nugetJSONPath(packages)+`":{}},"project":{"restore":{"projectPath":"`+nugetJSONPath(filepath.Join(app, "App.csproj"))+`","packagesPath":"`+nugetJSONPath(packages)+`","configFilePaths":["`+nugetJSONPath(filepath.Join(app, "NuGet.Config"))+`","`+nugetJSONPath(filepath.Join(root, "NuGet.Config"))+`"]},"frameworks":{"net8.0":{"targetAlias":"net8.0","framework":".NETCoreApp,Version=v8.0","dependencies":{"Newtonsoft.Json":{"version":"[13.0.1, )"}}}}}}`, 0o600)
 	goWrite(t, filepath.Join(app, "bin", "Debug", "net8.0", "App.deps.json"), `{"runtimeTarget":{"name":".NETCoreApp,Version=v8.0"},"targets":{},"libraries":{"App/1.0.0":{"type":"project"},"Newtonsoft.Json/13.0.1":{"type":"package","sha512":"sha512-`+nugetHashA+`","path":"newtonsoft.json/13.0.1"}}}`, 0o600)
 	goWrite(t, filepath.Join(app, "NuGet.Config"), `<?xml version="1.0"?><configuration>
   <packageSources>
@@ -108,7 +126,7 @@ func nugetWriteFixture(t *testing.T, home, root string) {
 	goWrite(t, filepath.Join(root, "scripts", "NuGet.Config"), `<configuration><packageSources><add key="scripts" value="http://scripts.example.invalid/v3/index.json" /></packageSources><config><add key="globalPackagesFolder" value="`+filepath.Join(home, "scriptcache")+`" /></config></configuration>`, 0o600)
 	goWrite(t, filepath.Join(home, "scriptcache", "example.cached", "1.0.0", "example.cached.nuspec"), nugetNuspec("Example.Cached", "1.0.0"), 0o600)
 	goWrite(t, filepath.Join(home, "scriptcache", "example.cached", "1.0.0", ".nupkg.metadata"), `{"version":2,"contentHash":"`+nugetHashB+`","source":"https://api.nuget.org/v3/index.json"}`, 0o600)
-	goWrite(t, filepath.Join(root, "orphan", "obj", "project.assets.json"), `{"version":3,"targets":{"net8.0":{"Orphaned/1.0.0":{"type":"package"}}},"libraries":{"Orphaned/1.0.0":{"sha512":"`+nugetHashB+`","type":"package","path":"orphaned/1.0.0"}},"packageFolders":{"`+packages+`":{}},"project":{"restore":{"projectPath":"`+filepath.Join(root, "gone", "Gone.csproj")+`"}}}`, 0o600)
+	goWrite(t, filepath.Join(root, "orphan", "obj", "project.assets.json"), `{"version":3,"targets":{"net8.0":{"Orphaned/1.0.0":{"type":"package"}}},"libraries":{"Orphaned/1.0.0":{"sha512":"`+nugetHashB+`","type":"package","path":"orphaned/1.0.0"}},"packageFolders":{"`+nugetJSONPath(packages)+`":{}},"project":{"restore":{"projectPath":"`+nugetJSONPath(filepath.Join(root, "gone", "Gone.csproj"))+`"}}}`, 0o600)
 	// Pack output beside a project is still a project; an extracted package is not.
 	goWrite(t, filepath.Join(root, "packed", "Packed.1.0.0.nupkg"), "", 0o600)
 	goWrite(t, filepath.Join(root, "packed", "Packed.csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><RestorePackagesPath>pkgs</RestorePackagesPath></PropertyGroup></Project>`, 0o600)
@@ -129,29 +147,29 @@ func nugetWriteFixture(t *testing.T, home, root string) {
 	goWrite(t, filepath.Join(packages, "newtonsoft.json", "13.0.1", ".nupkg.metadata"), `{"version":2,"contentHash":"`+nugetHashA+`","source":"https://user:CANARY_PASSWORD@api.nuget.org/v3/index.json?CANARY_QUERY"}`, 0o600)
 	goWrite(t, filepath.Join(packages, "newtonsoft.json", "13.0.1", "newtonsoft.json.13.0.1.nupkg.sha512"), nugetHashB+"\n", 0o600)
 	goWrite(t, filepath.Join(packages, "transitive.dep", "2.0.0", "transitive.dep.nuspec"), nugetNuspec("Transitive.Dep", "2.0.0"), 0o600)
-	goWrite(t, filepath.Join(packages, "transitive.dep", "2.0.0", ".nupkg.metadata"), `{"version":2,"contentHash":"`+nugetHashB+`","source":"`+filepath.Join(home, "feed")+`"}`, 0o600)
+	goWrite(t, filepath.Join(packages, "transitive.dep", "2.0.0", ".nupkg.metadata"), `{"version":2,"contentHash":"`+nugetHashB+`","source":"`+nugetJSONPath(filepath.Join(home, "feed"))+`"}`, 0o600)
 	goWrite(t, filepath.Join(packages, "archived", "2.0.0", "archived.2.0.0.nupkg"), nugetArchive(t, nugetNuspec("Archived", "2.0.0")), 0o600)
 	goWrite(t, filepath.Join(packages, "archived", "2.0.0", ".nupkg.metadata"), `{"version":1,"contentHash":"`+nugetHashB+`"}`, 0o600)
 	goWrite(t, filepath.Join(packages, "mismatch", "1.0.0", "mismatch.nuspec"), nugetNuspec("Other", "1.0.0"), 0o600)
 	goWrite(t, filepath.Join(packages, "bare", "1.0.0", "bare.nuspec"), nugetNuspec("Bare", "1.0.0"), 0o600)
-	goWrite(t, filepath.Join(home, ".nuget", "NuGet", "NuGet.Config"), `<configuration><packageSources><add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" /><add key="lab" value="https://lab.example.invalid/v3/index.json" disableTLSCertificateValidation="true" allowInsecureConnections="false" /></packageSources><config><add key="http_proxy.password" value="CANARY_PASSWORD" /></config></configuration>`, 0o600)
-	goWrite(t, filepath.Join(home, ".nuget", "NuGet", "config", "signers.config"), `<configuration><trustedSigners><author name="CANARY_AUTHOR"><certificate fingerprint="CANARY_FINGERPRINT" hashAlgorithm="SHA256" allowUntrustedRoot="true" /></author><repository name="nuget.org" serviceIndex="https://api.nuget.org/v3/index.json"><certificate fingerprint="x" hashAlgorithm="SHA256" allowUntrustedRoot="false" /></repository></trustedSigners></configuration>`, 0o600)
+	goWrite(t, filepath.Join(userConfigDir, "NuGet.Config"), `<configuration><packageSources><add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" /><add key="lab" value="https://lab.example.invalid/v3/index.json" disableTLSCertificateValidation="true" allowInsecureConnections="false" /></packageSources><config><add key="http_proxy.password" value="CANARY_PASSWORD" /></config></configuration>`, 0o600)
+	goWrite(t, filepath.Join(userConfigDir, "config", "signers.config"), `<configuration><trustedSigners><author name="CANARY_AUTHOR"><certificate fingerprint="CANARY_FINGERPRINT" hashAlgorithm="SHA256" allowUntrustedRoot="true" /></author><repository name="nuget.org" serviceIndex="https://api.nuget.org/v3/index.json"><certificate fingerprint="x" hashAlgorithm="SHA256" allowUntrustedRoot="false" /></repository></trustedSigners></configuration>`, 0o600)
 	store := filepath.Join(home, ".dotnet", "tools", ".store")
-	goWrite(t, filepath.Join(store, "dotnet-format", "8.0.0", "project.assets.json"), `{"version":3,"targets":{".NETCoreApp,Version=v8.0/any":{"dotnet-format/8.0.0":{"type":"package"},"Humanizer/2.14.1":{"type":"package"}}},"libraries":{"dotnet-format/8.0.0":{"sha512":"`+nugetHashA+`","type":"package","path":"dotnet-format/8.0.0"},"Humanizer/2.14.1":{"sha512":"`+nugetHashB+`","type":"package","path":"humanizer/2.14.1"}},"packageFolders":{"`+store+`":{}}}`, 0o600)
+	goWrite(t, filepath.Join(store, "dotnet-format", "8.0.0", "project.assets.json"), `{"version":3,"targets":{".NETCoreApp,Version=v8.0/any":{"dotnet-format/8.0.0":{"type":"package"},"Humanizer/2.14.1":{"type":"package"}}},"libraries":{"dotnet-format/8.0.0":{"sha512":"`+nugetHashA+`","type":"package","path":"dotnet-format/8.0.0"},"Humanizer/2.14.1":{"sha512":"`+nugetHashB+`","type":"package","path":"humanizer/2.14.1"}},"packageFolders":{"`+nugetJSONPath(store)+`":{}}}`, 0o600)
 	goWrite(t, filepath.Join(store, "dotnet-format", "8.0.0", "dotnet-format", "8.0.0", "tools", "net8.0", "any", "DotnetToolSettings.xml"), `<DotNetCliTool Version="1"><Commands><Command Name="dotnet-format" EntryPoint="dotnet-format.dll" Runner="dotnet" /></Commands></DotNetCliTool>`, 0o600)
 	goWrite(t, filepath.Join(store, ".stage", "ignored"), "", 0o600)
-	goWrite(t, filepath.Join(home, ".dotnet", "tools", "dotnet-format"), "#!/bin/sh\n", 0o700)
+	goWrite(t, filepath.Join(home, ".dotnet", "tools", nugetTestToolName("dotnet-format")), "#!/bin/sh\n", 0o700)
 	// A RID-specific tool: the SDK 10 pointer receipt plus the payload receipt
 	// that names the platform package holding the commands.
-	goWrite(t, filepath.Join(store, "example.ridcli", "1.0.0", "project.assets.json"), `{"version":3,"targets":{"net10.0/osx-arm64":{"Example.RidCli/1.0.0":{"type":"package"}}},"libraries":{},"packageFolders":{"`+store+`":{}}}`, 0o600)
-	goWrite(t, filepath.Join(store, "example.ridcli", "1.0.0", "project.assets.ridpackage.json"), `{"version":3,"targets":{"net10.0/osx-arm64":{"Example.RidCli.osx-arm64/1.0.0":{"type":"package"}}},"libraries":{},"packageFolders":{"`+store+`":{}}}`, 0o600)
+	goWrite(t, filepath.Join(store, "example.ridcli", "1.0.0", "project.assets.json"), `{"version":3,"targets":{"net10.0/osx-arm64":{"Example.RidCli/1.0.0":{"type":"package"}}},"libraries":{},"packageFolders":{"`+nugetJSONPath(store)+`":{}}}`, 0o600)
+	goWrite(t, filepath.Join(store, "example.ridcli", "1.0.0", "project.assets.ridpackage.json"), `{"version":3,"targets":{"net10.0/osx-arm64":{"Example.RidCli.osx-arm64/1.0.0":{"type":"package"}}},"libraries":{},"packageFolders":{"`+nugetJSONPath(store)+`":{}}}`, 0o600)
 	goWrite(t, filepath.Join(store, "example.ridcli", "1.0.0", "Example.RidCli.osx-arm64", "1.0.0", "tools", "net10.0", "osx-arm64", "DotnetToolSettings.xml"), `<DotNetCliTool Version="1"><Commands><Command Name="ridcli" EntryPoint="ridcli" Runner="executable" /></Commands></DotNetCliTool>`, 0o600)
-	goWrite(t, filepath.Join(home, ".dotnet", "tools", "ridcli"), "#!/bin/sh\n", 0o700)
-	goWrite(t, filepath.Join(home, ".dotnet", "toolResolverCache", "1", "dotnet-format"), `[{"Version":"8.0.0","TargetFramework":"net8.0","RuntimeIdentifier":"any","Name":"dotnet-format","PathToExecutable":"`+filepath.Join(packages, "dotnet-format", "8.0.0", "tools", "net8.0", "any", "dotnet-format.dll")+`"}]`, 0o600)
+	goWrite(t, filepath.Join(home, ".dotnet", "tools", nugetTestToolName("ridcli")), "#!/bin/sh\n", 0o700)
+	goWrite(t, filepath.Join(home, ".dotnet", "toolResolverCache", "1", "dotnet-format"), `[{"Version":"8.0.0","TargetFramework":"net8.0","RuntimeIdentifier":"any","Name":"dotnet-format","PathToExecutable":"`+nugetJSONPath(filepath.Join(packages, "dotnet-format", "8.0.0", "tools", "net8.0", "any", "dotnet-format.dll"))+`"}]`, 0o600)
 	goWrite(t, filepath.Join(home, ".templateengine", "packages", "Example.Templates.1.0.0.nupkg"), nugetArchive(t, nugetNuspec("Example.Templates", "1.0.0")), 0o600)
 	goWrite(t, filepath.Join(home, ".templateengine", "packages", "Broken.Templates.1.0.0.nupkg"), "", 0o600)
 	goWrite(t, filepath.Join(home, ".templateengine", "packages", "Mismatch.Templates.1.0.0.nupkg"), nugetArchive(t, nugetNuspec("Other.Templates", "1.0.0")), 0o600)
-	goWrite(t, filepath.Join(home, ".templateengine", "packages.json"), `{"Packages":[{"MountPointUri":"`+filepath.Join(home, ".templateengine", "packages", "Example.Templates.1.0.0.nupkg")+`","Details":{"PackageId":"Example.Templates","Version":"1.0.0","NuGetSource":"https://api.nuget.org/v3/index.json"}},{"MountPointUri":"`+filepath.Join(home, ".templateengine", "packages", "Broken.Templates.1.0.0.nupkg")+`","Details":{"PackageId":"Broken.Templates","Version":"1.0.0","NuGetSource":""}},{"MountPointUri":"`+filepath.Join(home, ".templateengine", "packages", "Mismatch.Templates.1.0.0.nupkg")+`","Details":{"PackageId":"Mismatch.Templates","Version":"1.0.0","NuGetSource":""}}]}`, 0o600)
+	goWrite(t, filepath.Join(home, ".templateengine", "packages.json"), `{"Packages":[{"MountPointUri":"`+nugetJSONPath(filepath.Join(home, ".templateengine", "packages", "Example.Templates.1.0.0.nupkg"))+`","Details":{"PackageId":"Example.Templates","Version":"1.0.0","NuGetSource":"https://api.nuget.org/v3/index.json"}},{"MountPointUri":"`+nugetJSONPath(filepath.Join(home, ".templateengine", "packages", "Broken.Templates.1.0.0.nupkg"))+`","Details":{"PackageId":"Broken.Templates","Version":"1.0.0","NuGetSource":""}},{"MountPointUri":"`+nugetJSONPath(filepath.Join(home, ".templateengine", "packages", "Mismatch.Templates.1.0.0.nupkg"))+`","Details":{"PackageId":"Mismatch.Templates","Version":"1.0.0","NuGetSource":""}}]}`, 0o600)
 }
 
 func nugetFixtureEnv(x *composerTrap) {
@@ -426,7 +444,7 @@ func TestNuGetScanFixtureEvidence(t *testing.T) {
 	for _, p := range tools {
 		switch {
 		case p.PackageName == "dotnet-format" && p.Scope == "user":
-			if !slices.Equal(p.ToolCommands, []string{"dotnet-format"}) || p.Installation == nil || p.Installation.Presence != "present" || p.Installation.Path != filepath.Join(home, ".dotnet", "tools", "dotnet-format") || p.RuntimeIdentifier != "any" {
+			if !slices.Equal(p.ToolCommands, []string{"dotnet-format"}) || p.Installation == nil || p.Installation.Presence != "present" || p.Installation.Path != filepath.Join(home, ".dotnet", "tools", nugetTestToolName("dotnet-format")) || p.RuntimeIdentifier != "any" {
 				t.Errorf("global tool = %+v", p)
 			}
 		case p.PackageName == "example.ridcli", p.PackageName == "example.ridcli.osx-arm64":
@@ -560,6 +578,9 @@ func TestNuGetScanUnknownProcessAndDeveloper(t *testing.T) {
 	scanner, x = nugetTestScanner(t, home)
 	target := goTestTarget(home)
 	target.Uid = "0"
+	if x.GOOS() == model.PlatformWindows {
+		target.Uid = "S-1-5-18"
+	}
 	x.current = target
 	inv, audit = scanner.Scan(context.Background(), target, []string{root}, nil)
 	if inv.Status != "partial" || !slices.Equal(inv.Reasons, []string{"user_unresolved"}) || len(inv.Sources) != 0 || audit.Status != "partial" {
@@ -831,5 +852,77 @@ func TestNuGetScanDeterministicAndRootDedupe(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".nuget", "packages")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNuGetScanConfiguredAssets(t *testing.T) {
+	for _, name := range []string{"extensions", "intermediate", "artifacts", "relative", "already discovered", "denied", "unreadable props", "missing", "unresolved"} {
+		t.Run(name, func(t *testing.T) {
+			home := goTestHome(t)
+			root := filepath.Join(home, "code")
+			dir := filepath.Join(root, "app")
+			manifest := filepath.Join(dir, "App.csproj")
+			output := filepath.Join(home, "external output")
+			if name == "already discovered" {
+				output = filepath.Join(dir, "obj")
+			}
+			props := "<MSBuildProjectExtensionsPath>" + output + "</MSBuildProjectExtensionsPath>"
+			if name == "intermediate" {
+				props = "<BaseIntermediateOutputPath>" + output + "</BaseIntermediateOutputPath>"
+			}
+			if name == "artifacts" {
+				props = "<UseArtifactsOutput>true</UseArtifactsOutput><ArtifactsPath>" + output + "</ArtifactsPath>"
+				output = filepath.Join(output, "obj", "App")
+			}
+			if name == "relative" {
+				props = "<BaseIntermediateOutputPath>../../external output</BaseIntermediateOutputPath>"
+			}
+			if name == "unresolved" {
+				props = "<MSBuildProjectExtensionsPath>$(Unknown)/obj</MSBuildProjectExtensionsPath>"
+			}
+			goWrite(t, filepath.Join(root, "Directory.Build.props"), "<Project><PropertyGroup>"+props+"</PropertyGroup></Project>", 0o600)
+			goWrite(t, manifest, `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`, 0o600)
+			assetPath := filepath.Join(output, "project.assets.json")
+			if name != "missing" {
+				data, err := json.Marshal(map[string]any{
+					"version":   3,
+					"targets":   map[string]any{"net8.0": map[string]any{"Example.Widget/1.0.0": map[string]any{"type": "package"}}},
+					"libraries": map[string]any{"Example.Widget/1.0.0": map[string]any{"type": "package", "path": "example.widget/1.0.0"}},
+					"project":   map[string]any{"restore": map[string]any{"projectPath": manifest}},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				goWrite(t, assetPath, string(data), 0o600)
+			}
+			scanner, x := nugetTestScanner(t, home)
+			if name == "denied" {
+				x.denied[assetPath] = os.ErrPermission
+			}
+			if name == "unreadable props" {
+				x.denied[filepath.Join(root, "Directory.Build.props")] = os.ErrPermission
+			}
+			inv, _ := scanner.Scan(t.Context(), goTestTarget(home), []string{root}, nil)
+			got := nugetPackages(inv, "restored_package", "example.widget")
+			if name == "missing" || name == "unresolved" || name == "denied" || name == "unreadable props" {
+				if len(got) != 0 {
+					t.Fatalf("unexpected restored facts: %+v", got)
+				}
+				source := nugetSource(t, inv, "project_manifest", manifest)
+				if (source.Status == "partial") != (name != "missing") {
+					t.Fatalf("source = %+v", source)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].ProjectPath != dir || got[0].SourcePath != assetPath {
+				t.Fatalf("configured assets missing: %+v", got)
+			}
+			if p := nugetProject(t, inv, manifest); p.AssetsPath != assetPath {
+				t.Fatalf("assets path = %q", p.AssetsPath)
+			}
+			if x.reads[assetPath] != 1 {
+				t.Fatalf("assets read %d times", x.reads[assetPath])
+			}
+		})
 	}
 }

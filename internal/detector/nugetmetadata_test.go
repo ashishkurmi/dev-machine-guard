@@ -284,9 +284,11 @@ func TestNuGetToolTemplateAndDepsParsers(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(commands, []string{"dotnet-format"}) {
 		t.Errorf("commands = %v %v", commands, err)
 	}
-	templates, partial, err := parseNuGetTemplates([]byte(`{"Packages":[{"MountPointUri":"/home/dev/.templateengine/packages/Example.Templates.1.0.0.nupkg","Details":{"PackageId":"Example.Templates","Version":"1.0.0","NuGetSource":"https://api.nuget.org/v3/index.json"}},{"MountPointUri":"/opt/templates","Details":{"Author":"dir"}},{"MountPointUri":"/x","Details":{"PackageId":"bad/id","Version":"1"}}]}`))
-	if err != nil || !partial || len(templates) != 1 || templates[0].id != "Example.Templates" || templates[0].source == "" {
-		t.Errorf("templates = %+v %v %v", templates, partial, err)
+	for _, prefix := range []string{"", "\xef\xbb\xbf"} {
+		templates, partial, err := parseNuGetTemplates([]byte(prefix + `{"Packages":[{"MountPointUri":"/home/dev/.templateengine/packages/Example.Templates.1.0.0.nupkg","Details":{"PackageId":"Example.Templates","Version":"1.0.0","NuGetSource":"https://api.nuget.org/v3/index.json"}},{"MountPointUri":"/opt/templates","Details":{"Author":"dir"}},{"MountPointUri":"/x","Details":{"PackageId":"bad/id","Version":"1"}}]}`))
+		if err != nil || !partial || len(templates) != 1 || templates[0].id != "Example.Templates" || templates[0].source == "" {
+			t.Errorf("templates = %+v %v %v", templates, partial, err)
+		}
 	}
 	deps, partial, err := parseNuGetDeps([]byte(`{"runtimeTarget":{"name":".NETCoreApp,Version=v8.0/linux-x64"},"targets":{},"libraries":{"App/1.0.0":{"type":"project"},"Newtonsoft.Json/13.0.1":{"type":"package","sha512":"sha512-abc==","path":"newtonsoft.json/13.0.1"},"bad":{"type":"package"}}}`))
 	if err != nil || !partial || len(deps) != 1 || deps[0].sha512 != "abc==" || deps[0].framework != ".NETCoreApp,Version=v8.0" || deps[0].rid != "linux-x64" {

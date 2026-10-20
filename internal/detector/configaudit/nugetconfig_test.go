@@ -55,7 +55,10 @@ func nugetFile(t *testing.T, a model.NuGetConfigAudit, path string) model.NuGetC
 
 func TestNuGetConfigAllowlistRedactionAndFindings(t *testing.T) {
 	m, scope := nugetConfigTest(t)
-	m.SetEnv("NUGET_PACKAGES", "/srv/CANARY_DIR/packages")
+	packages := filepath.Join(scope.Home, "CANARY_DIR", "packages")
+	fallback := filepath.Join(scope.Home, "fallback")
+	legacy := filepath.Join(scope.Home, "legacy")
+	m.SetEnv("NUGET_PACKAGES", packages)
 	m.SetEnv("NUGET_FALLBACK_PACKAGES", "/opt/fallback;relative/ignored")
 	m.SetEnv("HTTPS_PROXY", "https://alice:CANARY_PROXY@proxy.example.invalid:8443/?token=CANARY_QUERY")
 	m.SetEnv("NO_PROXY", "localhost,.example.invalid")
@@ -77,10 +80,10 @@ func TestNuGetConfigAllowlistRedactionAndFindings(t *testing.T) {
     <packageSource key="nuget.org"><package pattern="*" /></packageSource>
     <packageSource key="lab"><package pattern="Contoso.*" /><package pattern="Fabrikam" /></packageSource>
   </packageSourceMapping>
-  <fallbackPackageFolders><add key="shared" value="/opt/shared" /><add key="expr" value="%USERPROFILE%\fallback" /></fallbackPackageFolders>
+  <fallbackPackageFolders><add key="shared" value="`+fallback+`" /><add key="expr" value="%USERPROFILE%\fallback" /></fallbackPackageFolders>
   <config>
     <add key="globalPackagesFolder" value="pkgs" />
-    <add key="repositoryPath" value="/srv/legacy" />
+    <add key="repositoryPath" value="`+legacy+`" />
     <add key="http_proxy" value="http://bob:CANARY_CONFIG_PROXY@proxy.example.invalid:8080" />
     <add key="http_proxy.user" value="bob" />
     <add key="http_proxy.password" value="CANARY_CONFIG_PROXY" />
@@ -96,10 +99,10 @@ func TestNuGetConfigAllowlistRedactionAndFindings(t *testing.T) {
   </trustedSigners>
 </configuration>`))
 	a := NewNuGetConfigDetector(m).Detect(context.Background(), scope)
-	if a.GlobalPackages != "/srv/CANARY_DIR/packages" || a.CLIHome != scope.Home {
+	if a.GlobalPackages != packages || a.CLIHome != scope.Home {
 		t.Errorf("GlobalPackages = %q CLIHome = %q", a.GlobalPackages, a.CLIHome)
 	}
-	if !slices.Equal(a.PackageRoots, []string{"/opt/shared", filepath.Join(filepath.Dir(user), "pkgs"), "/srv/legacy"}) {
+	if !slices.Equal(a.PackageRoots, []string{fallback, filepath.Join(filepath.Dir(user), "pkgs"), legacy}) {
 		t.Errorf("PackageRoots = %v", a.PackageRoots)
 	}
 	audit := a.Finish()
@@ -108,7 +111,7 @@ func TestNuGetConfigAllowlistRedactionAndFindings(t *testing.T) {
 	}
 	process := nugetSettings(audit, "")
 	want := map[string]string{
-		"environment.NUGET_PACKAGES": "/srv/CANARY_DIR/packages", "environment.HTTPS_PROXY": "https://proxy.example.invalid:8443/",
+		"environment.NUGET_PACKAGES": packages, "environment.HTTPS_PROXY": "https://proxy.example.invalid:8443/",
 		"environment.NO_PROXY": "localhost,.example.invalid", "auth_configured": "true", "credential_provider_configured": "true",
 	}
 	for key, value := range want {
@@ -130,8 +133,8 @@ func TestNuGetConfigAllowlistRedactionAndFindings(t *testing.T) {
 		"packageSources.6.name": "elsewhere", "packageSources.6.enabled": "false",
 		"packageSourceMapping.0.source": "nuget.org", "packageSourceMapping.0.pattern": "*",
 		"packageSourceMapping.1.source": "lab", "packageSourceMapping.1.pattern": "Contoso.*", "packageSourceMapping.2.source": "lab", "packageSourceMapping.2.pattern": "Fabrikam",
-		"fallbackPackageFolders.0.path": "/opt/shared",
-		"config.globalPackagesFolder":   filepath.Join(filepath.Dir(user), "pkgs"), "config.repositoryPath": "/srv/legacy",
+		"fallbackPackageFolders.0.path": fallback,
+		"config.globalPackagesFolder":   filepath.Join(filepath.Dir(user), "pkgs"), "config.repositoryPath": legacy,
 		"config.http_proxy": "http://proxy.example.invalid:8080", "config.no_proxy": "localhost",
 		"config.signatureValidationMode": "require", "config.maxHttpRequestsPerSource": "16",
 		"trustedSigners.0.type": "author", "trustedSigners.0.allowUntrustedRoot": "true",
@@ -214,6 +217,7 @@ func TestNuGetConfigCredentialFinding(t *testing.T) {
 
 func TestNuGetConfigPrecedenceAndContexts(t *testing.T) {
 	m, scope := nugetConfigTest(t)
+	fallback := filepath.Join(scope.Home, "fallback")
 	userDir := filepath.Join(scope.Home, ".nuget", "NuGet")
 	primary := filepath.Join(userDir, "NuGet.Config")
 	alt := filepath.Join(scope.Home, ".config", "NuGet", "NuGet.Config")
@@ -229,7 +233,7 @@ func TestNuGetConfigPrecedenceAndContexts(t *testing.T) {
 	m.SetFile(filepath.Join(scope.Home, "src", "nuget.config"), []byte(`<configuration><config><add key="repositoryPath" value="packages" /></config></configuration>`))
 	m.SetFile(filepath.Join(project, "NuGet.Config"), []byte(`<configuration/>`))
 	a := NewNuGetConfigDetector(m).Detect(context.Background(), scope)
-	record := a.ProjectFile(filepath.Join(project, "App.csproj"), "read", nil, map[string]string{"NuGetAudit": "false", "NuGetAuditLevel": "High", "RestorePackagesPath": "$(MSBuildProjectDirectory)/pkgs", "NuGetLockFilePath": "locks/packages.lock.json", "RestoreFallbackFolders": "/opt/fb;../shared"}, project)
+	record := a.ProjectFile(filepath.Join(project, "App.csproj"), "read", nil, map[string]string{"NuGetAudit": "false", "NuGetAuditLevel": "High", "RestorePackagesPath": "$(MSBuildProjectDirectory)/pkgs", "NuGetLockFilePath": "locks/packages.lock.json", "RestoreFallbackFolders": fallback + ";../shared"}, project)
 	// A shared file keeps only paths anchored to itself; consumer-relative ones wait for each consumer.
 	shared := a.ProjectFile(filepath.Join(scope.Home, "src", "Directory.Build.props"), "read", nil, map[string]string{"RestorePackagesPath": "packages", "NuGetLockFilePath": "$(MSBuildThisFileDirectory)locks/shared.lock.json", "RestoreFallbackFolders": "/opt/fb2;fallback"}, "")
 	if len(shared.Settings) != 1 || shared.Settings[0].Key != "project.NuGetLockFilePath" || shared.Settings[0].Display != filepath.Join(scope.Home, "src", "locks", "shared.lock.json") {
@@ -241,7 +245,7 @@ func TestNuGetConfigPrecedenceAndContexts(t *testing.T) {
 	if paths.Repository != filepath.Join(scope.Home, "src", "packages") {
 		t.Errorf("Repository = %q", paths.Repository)
 	}
-	if !slices.Equal(a.PackageRoots, []string{"/opt/fb", filepath.Join(scope.Home, "src", "shared"), filepath.Join(project, "pkgs"), filepath.Join(scope.Home, "src", "packages")}) {
+	if !slices.Equal(a.PackageRoots, []string{fallback, filepath.Join(scope.Home, "src", "shared"), filepath.Join(project, "pkgs"), filepath.Join(scope.Home, "src", "packages")}) {
 		t.Errorf("PackageRoots = %v", a.PackageRoots)
 	}
 	ids := func(paths ...string) []string {
@@ -267,7 +271,7 @@ func TestNuGetConfigPrecedenceAndContexts(t *testing.T) {
 		t.Errorf("alternate user file = %+v", f)
 	}
 	got := nugetSettings(audit, filepath.Join(project, "App.csproj"))
-	want := map[string]string{"project.NuGetAudit": "false", "project.NuGetAuditLevel": "high", "project.RestorePackagesPath": filepath.Join(project, "pkgs"), "project.NuGetLockFilePath": filepath.Join(project, "locks", "packages.lock.json"), "project.RestoreFallbackFolders": "/opt/fb;" + filepath.Join(scope.Home, "src", "shared")}
+	want := map[string]string{"project.NuGetAudit": "false", "project.NuGetAuditLevel": "high", "project.RestorePackagesPath": filepath.Join(project, "pkgs"), "project.NuGetLockFilePath": filepath.Join(project, "locks", "packages.lock.json"), "project.RestoreFallbackFolders": fallback + ";" + filepath.Join(scope.Home, "src", "shared")}
 	for key, value := range want {
 		if got[key] != value {
 			t.Errorf("%s = %q, want %q", key, got[key], value)

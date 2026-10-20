@@ -207,6 +207,8 @@ var nugetProjectProperties = []string{
 	"TargetFramework", "TargetFrameworks", "RuntimeIdentifier", "RuntimeIdentifiers", "RestorePackagesPath",
 	"RestoreFallbackFolders", "RestoreAdditionalProjectFallbackFolders", "NuGetLockFilePath", "RestoreLockedMode",
 	"NuGetAudit", "NuGetAuditMode", "NuGetAuditLevel", "ManagePackageVersionsCentrally",
+	"MSBuildProjectExtensionsPath", "BaseIntermediateOutputPath", "UseArtifactsOutput", "ArtifactsPath",
+	"ArtifactsProjectName", "IncludeProjectNameInArtifactsPaths", "UseArtifactsIntermediateOutput",
 }
 
 // parseNuGetProject reads project, Directory.Packages.props and similar
@@ -433,7 +435,7 @@ func nugetObject(data []byte) (map[string]json.RawMessage, error) {
 	if int64(len(data)) > maxNuGetMetadataBytes {
 		return nil, errors.New("invalid metadata")
 	}
-	return composerObject(data)
+	return composerObject(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")))
 }
 
 func nugetString(raw json.RawMessage, limit int) (string, bool) { return composerString(raw, limit) }

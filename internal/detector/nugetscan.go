@@ -164,6 +164,7 @@ func (s *NuGetScanner) Scan(ctx context.Context, target *user.User, searchDirs [
 		c.cacheRoot(p, "custom")
 	}
 	c.walkRoots(dirs)
+	c.discoverProjectAssets()
 	c.readAssets()
 	c.emitProjects()
 	// Project files add their own package roots; scan caches once all are known.
@@ -627,6 +628,92 @@ func (c *nugetScan) degradeImports(imports []*nugetImportState, reasons []string
 	for _, imp := range imports {
 		for _, reason := range reasons {
 			c.degrade(imp.src, reason)
+		}
+	}
+}
+
+// discoverProjectAssets follows literal restore-output paths outside the walk.
+// These are exact guarded reads, not additional project search roots.
+func (c *nugetScan) discoverProjectAssets() {
+	seen := map[string]bool{}
+	for _, st := range c.assets {
+		seen[c.key(st.src.Path)] = true
+	}
+	for _, key := range slices.Sorted(maps.Keys(c.projects)) {
+		st := c.projects[key]
+		if c.stopped(st.src) || st.file == nil {
+			continue
+		}
+		dir := st.project.ProjectPath
+		props := c.nearestImport(dir, "directory.build.props", st.src.ParentSourceID)
+		targets := c.nearestImport(dir, "directory.build.targets", st.src.ParentSourceID)
+		for _, imp := range []*nugetImportState{props, targets} {
+			if imp != nil && imp.file == nil {
+				// An unreadable import may still point at the previous assets.
+				st.project.SelectionStatus = "partial"
+				for _, reason := range imp.src.Reasons {
+					c.degrade(st.src, reason)
+				}
+			}
+		}
+		layers := []nugetLayer{}
+		if props != nil {
+			layers = append(layers, nugetLayer{filepath.Dir(props.src.Path), props.file})
+		}
+		layers = append(layers, nugetLayer{dir, st.file})
+		if targets != nil {
+			layers = append(layers, nugetLayer{filepath.Dir(targets.src.Path), targets.file})
+		}
+		effective := nugetEffective(layers...)
+		p := effective.properties
+		output := cmp.Or(p["MSBuildProjectExtensionsPath"], p["BaseIntermediateOutputPath"])
+		if output == "" && !strings.EqualFold(p["UseArtifactsOutput"], "false") && !strings.EqualFold(p["UseArtifactsIntermediateOutput"], "false") && (p["ArtifactsPath"] != "" || strings.EqualFold(p["UseArtifactsOutput"], "true")) {
+			artifacts := p["ArtifactsPath"]
+			if artifacts == "" && props != nil {
+				artifacts = filepath.Join(filepath.Dir(props.src.Path), "artifacts")
+			}
+			if artifacts != "" {
+				output = filepath.Join(artifacts, "obj")
+				if !strings.EqualFold(p["IncludeProjectNameInArtifactsPaths"], "false") {
+					projectName := cmp.Or(p["ArtifactsProjectName"], strings.TrimSuffix(filepath.Base(st.project.ManifestPath), filepath.Ext(st.project.ManifestPath)))
+					output = filepath.Join(output, projectName)
+				}
+			}
+		}
+		if output == "" {
+			continue
+		}
+		uncertain := nugetUnresolved(output) || !nugetText(output, 4096)
+		for _, property := range []string{"MSBuildProjectExtensionsPath", "BaseIntermediateOutputPath", "UseArtifactsOutput", "ArtifactsPath", "ArtifactsProjectName", "IncludeProjectNameInArtifactsPaths", "UseArtifactsIntermediateOutput"} {
+			uncertain = uncertain || effective.conditional[property]
+		}
+		if uncertain {
+			st.project.SelectionStatus = "partial"
+			c.degrade(st.src, "path_unresolved")
+			continue
+		}
+		if !filepath.IsAbs(output) {
+			output = filepath.Join(dir, filepath.FromSlash(output))
+		}
+		path := filepath.Join(output, "project.assets.json")
+		if seen[c.key(path)] || c.stopped(st.src) {
+			continue
+		}
+		info, err := c.fs(path, 0).Stat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			c.degrade(st.src, c.reason(err, path))
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			c.degrade(st.src, "unsupported_entry")
+			continue
+		}
+		if src := c.source("project_assets", path, st.src.SourceID); src != nil {
+			c.assets = append(c.assets, &nugetAssetsState{src: src})
+			seen[c.key(path)] = true
 		}
 	}
 }
