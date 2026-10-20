@@ -174,7 +174,9 @@ jobs:
       - name: Test scheduled scan console suppression
         run: go test -race -count=1 -run 'Test(IsTaskRegistered|DetectInvocationMethod_Windows|HideWindow|StopUnderThenWaitReleased)' ./internal/schtasks/ ./internal/telemetry/ ./internal/winproc/
       - name: Test self-update fault injection + U0 kill matrix (selfupdate_faults tag)
-        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/ ./internal/telemetry/
+        run: |
+          go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
+          go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys -run 'Test(ScanPanicIsABadRun|ScanHangAfterStartedIsABadRun)' ./internal/telemetry/
       - name: Authenticode against test-signed binaries (verbose, shows skips)
         run: go test -count=1 -v -run 'TestVerify|TestForgedBag|TestTrustData|TestSameSeedPublisher' ./internal/authenticode/
       - name: Test launcher bootstrap mode and self-update tasks
