@@ -1127,7 +1127,7 @@
         "installation": {
           "path": "/home/nuget-fixture/.nuget/packages/orphaned/1.0.0",
           "path_status": "resolved",
-          "presence": "absent"
+          "presence": "unknown"
         },
         "checksum_status": "recorded",
         "recorded_checksums": [

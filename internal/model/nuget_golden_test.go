@@ -16,7 +16,7 @@ func TestNuGetGoldenContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(raw)
-	if hex.EncodeToString(digest[:]) != "1d7bd8d502573e91061ce6a6168e9f16ee86224956621f3019bc7811daad3d0c" {
+	if hex.EncodeToString(digest[:]) != "2524e51e20a70c3e6663e64ef6537b8eadcddab2669756291db278816ff969c6" {
 		t.Fatal("shared NuGet fixture digest changed; update both producer and consumer after review")
 	}
 	var pair struct {

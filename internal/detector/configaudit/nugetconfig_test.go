@@ -362,3 +362,37 @@ func TestNuGetConfigBoundedAudit(t *testing.T) {
 		t.Fatalf("audit overflow = %+v", audit)
 	}
 }
+
+func TestNuGetConfigInvalidAndIncompleteInputs(t *testing.T) {
+	for _, input := range []string{"", " ", `<Project/>`, `<configuration/><configuration/>`, `<configuration/>text`, `<configuration><config><add key="signatureValidationMode" value="invalid"/></config></configuration>`} {
+		m, scope := nugetConfigTest(t)
+		path := filepath.Join(scope.Home, ".nuget", "NuGet", "NuGet.Config")
+		m.SetFile(path, []byte(input))
+		a := NewNuGetConfigDetector(m).Detect(t.Context(), scope)
+		a.Ambient(scope.Home)
+		a.Restore(filepath.Join(scope.Home, "obj", "project.assets.json"), scope.Home, []string{path})
+		audit := a.Finish()
+		if f := nugetFile(t, audit, path); f.Status != "unreadable" || len(f.Settings) != 0 || !slices.Contains(f.Reasons, "parse_error") {
+			t.Errorf("input %q: %+v", input, f)
+		}
+		for _, c := range audit.Contexts {
+			if c.Status != "partial" || !slices.Contains(c.Reasons, "parse_error") {
+				t.Errorf("input %q: %+v", input, c)
+			}
+		}
+	}
+	m, scope := nugetConfigTest(t)
+	entries := make([]os.DirEntry, nugetSettingLimit+1)
+	for i := range entries {
+		entries[i] = executor.MockDirEntry("extra.config", false)
+	}
+	m.SetDirEntries(filepath.Join(scope.Home, ".nuget", "NuGet", "config"), entries)
+	a := NewNuGetConfigDetector(m).Detect(t.Context(), scope)
+	a.Ambient(scope.Home)
+	a.Restore(filepath.Join(scope.Home, "obj", "project.assets.json"), scope.Home, nil)
+	for _, c := range a.Finish().Contexts {
+		if c.Status != "partial" || !slices.Contains(c.Reasons, "entry_limit") {
+			t.Errorf("truncated config selection: %+v", c)
+		}
+	}
+}

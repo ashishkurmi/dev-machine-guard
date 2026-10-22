@@ -220,7 +220,7 @@ func (a *NuGetConfigSnapshot) userConfigs() {
 // configFiles lists *.config files directly inside dir, in name order.
 func (a *NuGetConfigSnapshot) configFiles(dir string) []string {
 	if a.ctx.Err() != nil {
-		a.degrade("deadline_exceeded")
+		a.selectionReason("deadline_exceeded")
 		return nil
 	}
 	entries, more, err := a.guarded(dir, 0).ReadDirLimit(dir, nugetSettingLimit)
@@ -228,11 +228,11 @@ func (a *NuGetConfigSnapshot) configFiles(dir string) []string {
 		return nil
 	}
 	if err != nil {
-		a.degrade(a.reason(err, dir))
+		a.selectionReason(a.reason(err, dir))
 		return nil
 	}
 	if more {
-		a.degrade("entry_limit")
+		a.selectionReason("entry_limit")
 	}
 	var out []string
 	for _, e := range entries {
@@ -458,7 +458,6 @@ func (a *NuGetConfigSnapshot) ProjectFile(path, status string, reasons []string,
 // approved roots, then user and machine configuration.
 func (a *NuGetConfigSnapshot) Ambient(dir string, leading ...*model.NuGetConfigFile) NuGetPaths {
 	result := NuGetPaths{}
-	reasons := slices.Clone(a.selectionReasons)
 	chain := []*model.NuGetConfigFile{}
 	for _, f := range leading {
 		if f != nil {
@@ -472,6 +471,7 @@ func (a *NuGetConfigSnapshot) Ambient(dir string, leading ...*model.NuGetConfigF
 		}
 	}
 	chain = append(chain, a.userChain...)
+	reasons := slices.Clone(a.selectionReasons)
 	ids := []string{}
 	for _, f := range chain {
 		ids = append(ids, f.SourceID)
@@ -507,7 +507,7 @@ func (a *NuGetConfigSnapshot) Restore(assets, project string, paths []string) {
 			continue
 		}
 		ids = append(ids, f.SourceID)
-		if f.Status != "read" && f.Status != "not_found" {
+		if f.Status != "not_found" {
 			reasons = append(reasons, f.Reasons...)
 		}
 	}
@@ -650,11 +650,13 @@ func (a *NuGetConfigSnapshot) parse(f *model.NuGetConfigFile, data []byte) {
 		a.fileReason(f, "unreadable", "parse_error")
 		return
 	}
-	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec := xml.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))))
 	dec.Strict = true
 	dec.Entity = map[string]string{}
 	base := filepath.Dir(f.Path)
 	a.paths[f.SourceID] = map[string]string{}
+	f.Status = "read"
+	rootSeen := false
 	var stack []xml.StartElement
 	var sources []nugetSourceEntry
 	disabled := map[string]bool{}
@@ -679,6 +681,13 @@ func (a *NuGetConfigSnapshot) parse(f *model.NuGetConfigFile, data []byte) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			if len(stack) == 0 {
+				if rootSeen || t.Name.Local != "configuration" {
+					a.fileReason(f, "unreadable", "parse_error")
+					return
+				}
+				rootSeen = true
+			}
 			stack = append(stack, t)
 			if len(stack) < 3 || !strings.EqualFold(stack[0].Name.Local, "configuration") {
 				continue
@@ -729,6 +738,11 @@ func (a *NuGetConfigSnapshot) parse(f *model.NuGetConfigFile, data []byte) {
 			case section == "apikeys" && len(stack) == 3 && name == "add":
 				auth = true
 			}
+		case xml.CharData:
+			if len(stack) == 0 && len(bytes.TrimSpace(t)) != 0 {
+				a.fileReason(f, "unreadable", "parse_error")
+				return
+			}
 		case xml.EndElement:
 			if len(stack) == 0 {
 				a.fileReason(f, "unreadable", "parse_error")
@@ -741,7 +755,10 @@ func (a *NuGetConfigSnapshot) parse(f *model.NuGetConfigFile, data []byte) {
 			}
 		}
 	}
-	f.Status = "read"
+	if !rootSeen {
+		a.fileReason(f, "unreadable", "parse_error")
+		return
+	}
 	for i, s := range sources {
 		prefix := "packageSources." + strconv.Itoa(i) + "."
 		alias, redacted := nugetAlias(s.name)

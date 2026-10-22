@@ -380,7 +380,7 @@ func TestNuGetScanFixtureEvidence(t *testing.T) {
 	if p := nugetPackages(inv, "restored_package", "transitive.dep"); len(p) != 1 || p[0].DependencyRelation != "transitive" || p[0].Origin.Kind != "local" || p[0].Origin.Path != filepath.Join(home, "feed") {
 		t.Errorf("transitive restored = %+v", p)
 	}
-	if p := nugetPackages(inv, "restored_package", "orphaned"); len(p) != 1 || p[0].Scope != "unknown" || p[0].ProjectPath != filepath.Join(root, "gone") || p[0].DependencyRelation != "unknown" || p[0].Installation == nil || p[0].Installation.Presence != "absent" {
+	if p := nugetPackages(inv, "restored_package", "orphaned"); len(p) != 1 || p[0].Scope != "unknown" || p[0].ProjectPath != filepath.Join(root, "gone") || p[0].DependencyRelation != "unknown" || p[0].Installation == nil || p[0].Installation.Presence != "unknown" {
 		t.Errorf("orphan restored = %+v", p)
 	}
 	for _, name := range []string{"absent.legacy", "empty.legacy"} {
@@ -831,7 +831,7 @@ func nugetAssertComplete(t *testing.T, budget int, owned map[string]int, inv *mo
 func TestNuGetScanLastConsumerBudget(t *testing.T) {
 	home := goTestHome(t)
 	root := filepath.Join(home, "code")
-	goWrite(t, filepath.Join(root, "Directory.Packages.props"), `<Project><ItemGroup><GlobalPackageReference Include="Shared.Analyzer" Version="1.0.0" /></ItemGroup></Project>`, 0o600)
+	goWrite(t, filepath.Join(root, "Directory.Packages.props"), `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><GlobalPackageReference Include="Shared.Analyzer" Version="1.0.0" /></ItemGroup></Project>`, 0o600)
 	goWrite(t, filepath.Join(root, "app", "App.csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`, 0o600)
 	goWrite(t, filepath.Join(root, "app", "packages.lock.json"), `{"version":1,"dependencies":{"net8.0":{"Example.Locked":{"type":"Direct","requested":"[1.0.0, )","resolved":"1.0.0","contentHash":"`+nugetHashA+`"}}}}`, 0o600)
 	scanner, _ := nugetTestScanner(t, home)
@@ -947,4 +947,107 @@ func TestNuGetScanConfiguredAssets(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNuGetScanIncompleteEvidence(t *testing.T) {
+	for _, mode := range []string{"disabled", "imported", "conditional", "expression", "central import"} {
+		t.Run(mode, func(t *testing.T) {
+			home := goTestHome(t)
+			root := filepath.Join(home, "code")
+			central := filepath.Join(root, "Directory.Packages.props")
+			goWrite(t, central, `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include="Example.Lib" Version="1.0.0"/><GlobalPackageReference Include="Example.Analyzer" Version="2.0.0"/></ItemGroup></Project>`, 0o600)
+			extra := `<PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup>`
+			switch mode {
+			case "imported":
+				extra = `<Import Project="shared.props"/>`
+			case "conditional":
+				extra = `<PropertyGroup><ManagePackageVersionsCentrally Condition="'$(Configuration)' == 'Debug'">false</ManagePackageVersionsCentrally></PropertyGroup>`
+			case "expression":
+				extra = `<PropertyGroup><ManagePackageVersionsCentrally>$(EnableCPM)</ManagePackageVersionsCentrally></PropertyGroup>`
+			case "central import":
+				extra = `<PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>`
+				goWrite(t, central, `<Project><Import Project="parent.props"/><ItemGroup><PackageVersion Include="Example.Lib" Version="1.0.0"/><GlobalPackageReference Include="Example.Analyzer" Version="2.0.0"/></ItemGroup></Project>`, 0o600)
+			}
+			manifest := filepath.Join(root, "app", "App.csproj")
+			goWrite(t, manifest, `<Project>`+extra+`<ItemGroup><PackageReference Include="Example.Lib"/></ItemGroup></Project>`, 0o600)
+			scanner, _ := nugetTestScanner(t, home)
+			inv, _ := scanner.Scan(t.Context(), goTestTarget(home), []string{root}, nil)
+			p := nugetPackages(inv, "declared_requirement", "example.lib")
+			if len(p) != 1 || p[0].RequestedVersion != "" || len(nugetPackages(inv, "declared_requirement", "example.analyzer")) != 0 {
+				t.Fatalf("central values applied: %+v", inv.Packages)
+			}
+			if mode != "disabled" {
+				for _, path := range []string{manifest, central} {
+					kind := "project_manifest"
+					if path == central {
+						kind = "central_versions"
+					}
+					if src := nugetSource(t, inv, kind, path); src.Status != "partial" || !slices.Contains(src.Reasons, "unsupported_format") {
+						t.Errorf("unevaluated source proves absence: %+v", src)
+					}
+				}
+			}
+		})
+	}
+	for _, fallbackComplete := range []bool{false, true} {
+		c := &nugetScan{goos: "linux", cacheDone: map[string]bool{"/primary": true, "/fallback": fallbackComplete}}
+		p := model.NuGetPackage{PackageName: "example.lib", VersionNormalized: "1.0.0"}
+		c.locate(&p, []string{"/primary", "/fallback"}, "")
+		want := "unknown"
+		if fallbackComplete {
+			want = "absent"
+		}
+		if p.Installation.Presence != want {
+			t.Errorf("fallback complete %v: %+v", fallbackComplete, p.Installation)
+		}
+	}
+	for _, blocked := range []string{".nuget/NuGet/config", "code/NuGet.Config"} {
+		t.Run("config selection "+blocked, func(t *testing.T) {
+			home := goTestHome(t)
+			root := filepath.Join(home, "code")
+			goWrite(t, filepath.Join(root, "App.csproj"), `<Project/>`, 0o600)
+			scanner, _ := nugetTestScanner(t, home)
+			scanner.protection = func(string, *bool) (func(string) string, func(string) bool) {
+				return func(path string) string {
+					if path == filepath.Join(home, filepath.FromSlash(blocked)) {
+						return "skipped_protected"
+					}
+					return ""
+				}, func(string) bool { return false }
+			}
+			_, audit := scanner.Scan(t.Context(), goTestTarget(home), []string{root}, nil)
+			if len(audit.Contexts) == 0 {
+				t.Fatal("no ambient context")
+			}
+			for _, c := range audit.Contexts {
+				if c.Status != "partial" || !slices.Contains(c.Reasons, "skipped_protected") {
+					t.Errorf("incomplete selection: %+v", c)
+				}
+			}
+		})
+	}
+	t.Run("orphan receipts", func(t *testing.T) {
+		home := goTestHome(t)
+		root := filepath.Join(home, "code")
+		nugetWriteFixture(t, home, root)
+		scanner, x := nugetTestScanner(t, home)
+		nugetFixtureEnv(x)
+		for _, path := range []string{
+			filepath.Join(home, ".dotnet", "tools", ".store", "dotnet-format", "8.0.0", "dotnet-format", "8.0.0", "tools", "net8.0", "any", "DotnetToolSettings.xml"),
+			filepath.Join(home, ".templateengine", "packages", "Example.Templates.1.0.0.nupkg"),
+		} {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		inv, _ := scanner.Scan(t.Context(), goTestTarget(home), []string{root}, nil)
+		for _, p := range nugetPackages(inv, "installed_tool", "dotnet-format") {
+			if p.Scope == "user" {
+				t.Errorf("orphan tool installed: %+v", p)
+			}
+		}
+		if len(nugetPackages(inv, "installed_template", "example.templates")) != 0 {
+			t.Error("missing template archive installed")
+		}
+	})
 }

@@ -806,7 +806,7 @@ func (c *nugetScan) scanCache(root string) {
 	if !complete {
 		c.degrade(src, "entry_limit")
 	}
-	c.cacheDone[c.key(root)] = complete
+	c.cacheDone[c.key(root)] = complete && src.Status == "complete"
 }
 
 // nugetPackageDir is the identity one extracted package directory proves,
@@ -974,6 +974,28 @@ func (c *nugetScan) emitProjects() {
 			}
 		}
 		effective := nugetEffective(layers...)
+		if effective.imports {
+			c.degrade(st.src, "unsupported_format")
+		}
+		// Central versions apply only when the literal settings enable them.
+		managed := effective.properties["ManagePackageVersionsCentrally"]
+		uncertain := effective.conditional["ManagePackageVersionsCentrally"] || effective.imports
+		if central != nil && central.file != nil {
+			if managed == "" {
+				managed = central.file.properties["ManagePackageVersionsCentrally"]
+				uncertain = uncertain || central.file.conditional["ManagePackageVersionsCentrally"]
+			}
+			uncertain = uncertain || central.file.imports
+		}
+		uncertain = uncertain || nugetUnresolved(managed)
+		if uncertain && central != nil {
+			c.degrade(st.src, "unsupported_format")
+			c.degrade(central.src, "unsupported_format")
+			st.project.SelectionStatus = "partial"
+		}
+		if !strings.EqualFold(managed, "true") || uncertain {
+			central = nil
+		}
 		props := map[string]string{}
 		if st.file != nil {
 			props = maps.Clone(st.file.properties)
@@ -1306,9 +1328,12 @@ func (c *nugetScan) locate(p *model.NuGetPackage, folders []string, hash string)
 		return
 	}
 	p.Installation = &model.NuGetInstallation{Path: filepath.Join(folders[0], p.PackageName, p.VersionNormalized), PathStatus: "resolved", Presence: "unknown"}
-	if c.cacheDone[c.key(folders[0])] {
-		p.Installation.Presence = "absent"
+	for _, folder := range folders {
+		if !c.cacheDone[c.key(folder)] {
+			return
+		}
 	}
+	p.Installation.Presence = "absent"
 }
 
 // toolStore reads a global tool store: each tool keeps its own restore graph
@@ -1408,6 +1433,10 @@ func (c *nugetScan) installedTool(src *model.NuGetSource, files executor.Executo
 				}
 			}
 		}
+	}
+	if len(commands) == 0 {
+		c.degrade(src, "extraction_incomplete")
+		return
 	}
 	want, _ := nugetNormalizeVersion(version)
 	for gi, a := range graphs {
@@ -1607,6 +1636,8 @@ func (c *nugetScan) templates() {
 			// must stay stale rather than retire.
 			var reason string
 			switch p.Installation.Presence {
+			case "absent":
+				continue
 			case "unreadable":
 				reason = p.Reasons[len(p.Reasons)-1]
 			case "present":
@@ -1626,8 +1657,9 @@ func (c *nugetScan) templates() {
 				c.degrade(src, reason)
 				continue
 			}
-		} else if e.mount != "" {
-			p.Installation = &model.NuGetInstallation{PathStatus: "unresolved", Presence: "unknown"}
+		} else {
+			c.degrade(src, "path_unresolved")
+			continue
 		}
 		c.add(src, p, "installed_template", "", "user")
 	}

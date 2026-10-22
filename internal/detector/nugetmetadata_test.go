@@ -80,7 +80,7 @@ func TestNuGetProjectParser(t *testing.T) {
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" PrivateAssets="all" />
-    <PackageReference Include="Serilog"><Version>3.*</Version><IncludeAssets>runtime</IncludeAssets></PackageReference>
+    <PackageReference Include="Serilog"><Version Condition="'$(TargetFramework)' == 'net8.0'">3.*</Version><IncludeAssets>runtime</IncludeAssets></PackageReference>
     <PackageReference Include="Central" VersionOverride="2.0.0" />
     <PackageVersion Include="Central" Version="1.0.0" />
     <PackageDownload Include="Downloaded" Version="[1.0.0]" />
@@ -104,7 +104,7 @@ func TestNuGetProjectParser(t *testing.T) {
 	}
 	wantItems := []nugetItem{
 		{kind: "PackageReference", id: "Newtonsoft.Json", version: "13.0.1", privateAssets: "all"},
-		{kind: "PackageReference", id: "Serilog", version: "3.*", includeAssets: "runtime"},
+		{kind: "PackageReference", id: "Serilog", version: "3.*", includeAssets: "runtime", conditional: true},
 		{kind: "PackageReference", id: "Central", versionOverride: "2.0.0"},
 		{kind: "PackageVersion", id: "Central", version: "1.0.0"},
 		{kind: "PackageDownload", id: "Downloaded", version: "[1.0.0]"},
@@ -115,9 +115,13 @@ func TestNuGetProjectParser(t *testing.T) {
 		t.Errorf("items = %+v", f.items)
 	}
 	for name, bad := range map[string]string{
-		"doctype":    `<!DOCTYPE Project [<!ENTITY x SYSTEM "file:///etc/passwd">]><Project>&x;</Project>`,
-		"unbalanced": `<Project><ItemGroup></Project>`,
-		"binary":     "\xff\xfe<Project/>",
+		"doctype":        `<!DOCTYPE Project [<!ENTITY x SYSTEM "file:///etc/passwd">]><Project>&x;</Project>`,
+		"unbalanced":     `<Project><ItemGroup></Project>`,
+		"empty":          "",
+		"wrong root":     `<configuration/>`,
+		"multiple roots": `<Project/><Project/>`,
+		"outside text":   `<Project/>text`,
+		"binary":         "\xff\xfe<Project/>",
 	} {
 		if _, err := parseNuGetProject([]byte(bad)); err == nil {
 			t.Errorf("%s accepted", name)
@@ -299,15 +303,17 @@ func TestNuGetToolTemplateAndDepsParsers(t *testing.T) {
 func TestNuGetScriptDirectives(t *testing.T) {
 	// A built-in SDK name is not a package; only a versioned #:sdk is a declaration.
 	cs := []byte("#!/usr/bin/env dotnet\n// comment\n/* block\n   comment */ #:sdk Microsoft.NET.Sdk.Web\n#:sdk Aspire.AppHost.Sdk@9.0.0\n#:package Humanizer@2.14.1\n#:package NoVersion\n#:property LangVersion=preview\nusing System;\n#:package Late@1.0.0\n")
-	got := parseNuGetCSharpDirectives(cs)
 	want := []nugetDirective{{kind: "sdk", id: "Aspire.AppHost.Sdk", version: "9.0.0"}, {kind: "package", id: "Humanizer", version: "2.14.1"}, {kind: "package", id: "NoVersion"}}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("csharp = %+v", got)
+	for _, prefix := range []string{"", "\xef\xbb\xbf"} {
+		if got := parseNuGetCSharpDirectives(append([]byte(prefix), cs...)); !reflect.DeepEqual(got, want) {
+			t.Errorf("csharp prefix %q = %+v", prefix, got)
+		}
 	}
 	fsx := []byte("#r \"nuget: FSharp.Data, 6.3.0\"\n#r \"nuget:Newtonsoft.Json\"\n#r \"nuget: bad/id\"\n#i \"nuget: https://private.example.invalid/v3/index.json\"\nlet x = 1\n")
-	got = parseNuGetFSharpDirectives(fsx)
 	want = []nugetDirective{{kind: "package", id: "FSharp.Data", version: "6.3.0"}, {kind: "package", id: "Newtonsoft.Json"}}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("fsharp = %+v", got)
+	for _, prefix := range []string{"", "\xef\xbb\xbf"} {
+		if got := parseNuGetFSharpDirectives(append([]byte(prefix), fsx...)); !reflect.DeepEqual(got, want) {
+			t.Errorf("fsharp prefix %q = %+v", prefix, got)
+		}
 	}
 }

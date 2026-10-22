@@ -214,7 +214,7 @@ var nugetProjectProperties = []string{
 // parseNuGetProject reads project, Directory.Packages.props and similar
 // MSBuild files. Conditions are observed as a flag; their text is not kept.
 func parseNuGetProject(data []byte) (*nugetProjectFile, error) {
-	dec, err := nugetXML(data)
+	dec, err := nugetXML(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")))
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +224,7 @@ func parseNuGetProject(data []byte) (*nugetProjectFile, error) {
 		conditional bool
 		item        *nugetItem
 	}
+	rootSeen := false
 	var stack []frame
 	addSDK := func(spec string, conditional bool) {
 		for entry := range strings.SplitSeq(spec, ";") {
@@ -243,6 +244,12 @@ func parseNuGetProject(data []byte) (*nugetProjectFile, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			if len(stack) == 0 {
+				if rootSeen || t.Name.Local != "Project" {
+					return nil, errors.New("expected one Project root")
+				}
+				rootSeen = true
+			}
 			cond, hasCond := nugetAttr(t, "Condition")
 			conditional := hasCond && cond != "" || len(stack) > 0 && stack[len(stack)-1].conditional
 			fr := frame{name: t.Name.Local, conditional: conditional}
@@ -291,6 +298,7 @@ func parseNuGetProject(data []byte) (*nugetProjectFile, error) {
 				fr.item = item
 			case len(stack) > 0 && stack[len(stack)-1].item != nil:
 				item := stack[len(stack)-1].item
+				item.conditional = item.conditional || conditional
 				var text string
 				if err := dec.DecodeElement(&text, &t); err != nil {
 					return nil, err
@@ -311,6 +319,10 @@ func parseNuGetProject(data []byte) (*nugetProjectFile, error) {
 				continue
 			}
 			stack = append(stack, fr)
+		case xml.CharData:
+			if len(stack) == 0 && len(bytes.TrimSpace(t)) != 0 {
+				return nil, errors.New("text outside Project root")
+			}
 		case xml.EndElement:
 			if len(stack) == 0 {
 				return nil, errors.New("unbalanced element")
@@ -321,6 +333,9 @@ func parseNuGetProject(data []byte) (*nugetProjectFile, error) {
 				f.items = append(f.items, *top.item)
 			}
 		}
+	}
+	if !rootSeen {
+		return nil, errors.New("missing Project root")
 	}
 	return f, nil
 }
@@ -967,6 +982,7 @@ func parseNuGetCSharpDirectives(data []byte) []nugetDirective {
 	if !utf8.Valid(data) {
 		return nil
 	}
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	var out []nugetDirective
 	inComment := false
 	for line := range strings.SplitSeq(string(data), "\n") {
@@ -1014,6 +1030,7 @@ func parseNuGetFSharpDirectives(data []byte) []nugetDirective {
 	if !utf8.Valid(data) {
 		return nil
 	}
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	var out []nugetDirective
 	for _, m := range nugetFSharpReference.FindAllStringSubmatch(string(data), 1000) {
 		if _, ok := nugetID(m[1]); ok {
