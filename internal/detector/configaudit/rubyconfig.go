@@ -409,7 +409,8 @@ func (a *RubyConfigSnapshot) readFile(manager, scope, p string, parse func(*mode
 		a.fileReason(f, "unreadable", "deadline_exceeded")
 		return f
 	}
-	files := a.exec.GuardedFiles([]string{p}, a.scope.Protected, rubyConfigBytes)
+	// A missing file cannot establish its own root through a parent symlink.
+	files := a.exec.GuardedFiles([]string{filepath.Dir(p), p}, a.scope.Protected, rubyConfigBytes)
 	info, err := files.Stat(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return f

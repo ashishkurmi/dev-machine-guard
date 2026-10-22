@@ -406,7 +406,7 @@ func (c *rubyScan) knownRoots() ([]string, []string) {
 		brew("/usr/local")
 	case model.PlatformLinux:
 		prefixes = append(prefixes, root{"/usr", nil}, root{"/usr/local", nil}, root{"/opt/rubies", []string{"*"}})
-		homes = append(homes, root{"/var/lib/gems", []string{"*"}}, root{"/usr/share/rubygems-integration", []string{"*"}})
+		homes = append(homes, root{"/var/lib/gems", []string{"*"}}, root{"/usr/share/rubygems-integration", []string{"*"}}, root{"/usr/lib", []string{"*-linux-gnu*", "rubygems-integration", "*"}})
 		brew("/home/linuxbrew/.linuxbrew")
 	case model.PlatformWindows:
 		prefixes = append(prefixes, root{filepath.Join(home, "AppData", "Local", "Programs"), []string{"Ruby*"}},
@@ -432,17 +432,17 @@ func (c *rubyScan) knownRoots() ([]string, []string) {
 			seen[c.key(phys)] = true
 			scope := c.scopeOf(p)
 			found := false
-			gemHomes, reasons := c.expand(p, "lib", "ruby", "gems", "*")
+			gemHomes, reasons := c.expand(phys, "lib", "ruby", "gems", "*")
 			incomplete = append(incomplete, reasons...)
 			for _, h := range gemHomes {
 				found = c.gemHome(h, scope, "", "") || found
 			}
 			// TruffleRuby keeps its gem home directly under lib.
-			found = c.gemHome(filepath.Join(p, "lib", "gems"), scope, "", "") || found
+			found = c.gemHome(filepath.Join(phys, "lib", "gems"), scope, "", "") || found
 			if !found {
 				continue
 			}
-			out = append(out, p)
+			out = append(out, phys)
 			if scope == "user" {
 				// A manager-installed interpreter is never a project tree;
 				// shared system prefixes like /usr can still contain projects.

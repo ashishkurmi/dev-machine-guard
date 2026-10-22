@@ -681,6 +681,26 @@ func TestRubyScanRootsAndTargetedGemfile(t *testing.T) {
 	if n := len(rubyPackages(inv, "installed_package", "json")); n != 1 {
 		t.Fatalf("aliased gem home duplicated facts: %d", n)
 	}
+
+	// A runtime alias must not turn missing optional directories into refusals.
+	prefix := filepath.Join(home, ".rbenv", "versions", "3.3.0")
+	physical := filepath.Join(home, "ruby-keg")
+	if err := os.Rename(prefix, physical); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(physical, prefix); err != nil {
+		t.Fatal(err)
+	}
+	inv, audit = scanner.Scan(t.Context(), goTestTarget(home), []string{root}, nil)
+	gemHome := filepath.Join(physical, "lib", "ruby", "gems", "3.3.0")
+	if src := rubySource(t, inv, "gem_home", gemHome); src.Status != "complete" {
+		t.Errorf("aliased runtime gem home = %+v", src)
+	}
+	for _, f := range audit.Files {
+		if slices.Contains(f.Reasons, "outside_approved_roots") {
+			t.Errorf("aliased runtime config = %+v", f)
+		}
+	}
 }
 
 // A shared evaluated Gemfile is complete only when every consumer that could

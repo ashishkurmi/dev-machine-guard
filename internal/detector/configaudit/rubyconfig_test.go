@@ -3,11 +3,13 @@ package configaudit
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
 )
 
@@ -268,6 +270,25 @@ func TestRubyConfigRejectsUnsafeYAMLAndUnverifiedProcess(t *testing.T) {
 }
 
 func TestRubyConfigGemrcSelection(t *testing.T) {
+	t.Run("missing file under directory alias", func(t *testing.T) {
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		physical, alias := filepath.Join(root, "physical"), filepath.Join(root, "alias")
+		if err := os.Mkdir(physical, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(physical, alias); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		a := NewRubyConfigDetector(executor.NewReal()).Detect(t.Context(), RubyConfigScope{Username: "dev", Home: root})
+		p := filepath.Join(alias, "gemrc")
+		f := a.readFile("rubygems", "system", p, a.parseGemrc)
+		if f.Status != "absent" || len(f.Reasons) != 0 {
+			t.Fatalf("missing config = %+v", f)
+		}
+	})
 	m, scope := rubyConfigTest(t)
 	home := scope.Home
 	first, second := filepath.Join(home, "one.gemrc"), filepath.Join(home, "two.gemrc")
