@@ -976,6 +976,10 @@ func (c *rubyScan) project(path, parent string, targeted bool) {
 		}
 	}
 	leads := c.config.Project(configaudit.RubyProject{Dir: dir, Manifests: manifests})
+	if leads.Partial && src.Status == "complete" && src.Presence == "present" {
+		// Config may hide installed roots that this source previously owned.
+		c.degrade(src, "path_unresolved")
+	}
 	// Several lockfile directives depend on evaluation order this reader
 	// does not model; the default lock is then only a candidate.
 	partial := !complete || leads.Partial || directives > 1
@@ -998,7 +1002,11 @@ func (c *rubyScan) project(path, parent string, targeted bool) {
 	}
 	if leads.Path != "" {
 		// A configured path appends engine/ABI; discover rather than guess them.
-		homes, _ := c.expand(leads.Path, "*", "*")
+		homes, reasons := c.expand(leads.Path, "*", "*")
+		for _, reason := range reasons {
+			c.degrade(src, reason)
+			partial = true
+		}
 		for _, h := range homes {
 			c.gemHome(h, "project", src.SourceID, dir)
 		}
