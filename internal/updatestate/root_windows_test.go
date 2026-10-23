@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // A custom root outside any user profile, owned by SYSTEM with a
@@ -33,5 +35,20 @@ func TestDataRootIsProgramDataKnownFolder(t *testing.T) {
 	want := filepath.Join(os.Getenv("ProgramData"), "StepSecurity")
 	if got := DataRoot(); !strings.EqualFold(got, want) {
 		t.Fatalf("DataRoot = %q, want %q", got, want)
+	}
+}
+
+// The real Program Files (owned by TrustedInstaller) passes, as an MSI
+// INSTALLFOLDER under it must.
+func TestCheckRootProtected_ProgramFiles(t *testing.T) {
+	sid, _, _, err := windows.LookupSID("", `NT SERVICE\TrustedInstaller`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sid.String() != trustedInstallerSID {
+		t.Fatalf("TrustedInstaller SID = %s, constant %s", sid, trustedInstallerSID)
+	}
+	if err := checkRootProtected(os.Getenv("ProgramFiles")); err != nil {
+		t.Fatalf("Program Files refused: %v", err)
 	}
 }

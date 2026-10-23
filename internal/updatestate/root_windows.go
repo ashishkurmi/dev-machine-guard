@@ -22,7 +22,7 @@ func DataRoot() string {
 
 // trustedInstallerSID is NT SERVICE\TrustedInstaller, owner of
 // C:\Program Files and the system drive's root.
-const trustedInstallerSID = "S-1-5-80-956008885-3418522649-1831038044-1851658709-2256601218"
+const trustedInstallerSID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
 
 const (
 	aceInheritOnly = 0x08 // INHERIT_ONLY_ACE: doesn't apply to the object itself
