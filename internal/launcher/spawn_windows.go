@@ -26,7 +26,7 @@ func SpawnHidden(path string, args, env []string, deadline time.Duration, onStar
 	if err := cmd.Start(); err != nil {
 		return SpawnResult{Err: err}
 	}
-	job, jerr := NewKillOnCloseJob()
+	job, jerr := newJob()
 	if jerr == nil {
 		if aerr := AssignToJob(job, cmd.Process.Pid); aerr != nil {
 			_ = windows.CloseHandle(job)
@@ -49,6 +49,9 @@ func SpawnHidden(path string, args, env []string, deadline time.Duration, onStar
 		_ = cmd.Process.Kill()
 	})
 }
+
+// newJob is NewKillOnCloseJob; tests replace it.
+var newJob = NewKillOnCloseJob
 
 // NewKillOnCloseJob creates a job whose processes die when its last handle
 // closes. BREAKAWAY_OK lets the agent's CREATE_BREAKAWAY_FROM_JOB spawns
