@@ -14,13 +14,6 @@ import (
 	"strings"
 )
 
-// Production MSI roots. Everything takes the roots as parameters so tests
-// and loader installs can use others.
-const (
-	DefaultInstallRoot = `C:\Program Files\StepSecurity`
-	DefaultDataRoot    = `C:\ProgramData\StepSecurity`
-)
-
 const (
 	// ManifestName is the per-version manifest written before the rename in.
 	ManifestName = "manifest.json"
@@ -30,15 +23,11 @@ const (
 )
 
 // Layout resolves every self-update path from an install root (versions,
-// seed, state) and a data root (runs).
+// seed, state) and a data root (runs). Production code derives it from the
+// running binary (ResolveLayout); nothing hard-codes the MSI's folders.
 type Layout struct {
 	InstallRoot string
 	DataRoot    string
-}
-
-// MSILayout is the production MSI layout.
-func MSILayout() Layout {
-	return Layout{InstallRoot: DefaultInstallRoot, DataRoot: DefaultDataRoot}
 }
 
 func (l Layout) VersionsDir() string { return filepath.Join(l.InstallRoot, "versions") }

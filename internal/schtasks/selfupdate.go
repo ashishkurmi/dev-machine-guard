@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"html"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
-	"github.com/step-security/dev-machine-guard/internal/launcher"
 	"github.com/step-security/dev-machine-guard/internal/progress"
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
 )
@@ -45,18 +43,7 @@ var executablePath = os.Executable
 // layout) or, for an agent under seed\<v>\ or versions\<v>\, two levels
 // up. ok is false when no bootstrap sits in that root.
 func resolveBootstrapRoot(exec executor.Executor, agentPath string) (string, bool) {
-	dir := filepath.Dir(agentPath)
-	candidates := []string{dir}
-	parent := filepath.Dir(dir)
-	if b := strings.ToLower(filepath.Base(parent)); b == "seed" || b == "versions" {
-		candidates = append(candidates, filepath.Dir(parent))
-	}
-	for _, root := range candidates {
-		if exec.FileExists(filepath.Join(root, launcher.BootstrapBinary)) {
-			return root, true
-		}
-	}
-	return "", false
+	return updatestate.BootstrapRoot(agentPath, exec.FileExists)
 }
 
 // updateTaskXML renders the full task definition. Only a full XML import can

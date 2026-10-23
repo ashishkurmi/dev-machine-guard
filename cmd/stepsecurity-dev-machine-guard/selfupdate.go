@@ -84,10 +84,15 @@ func runSelfCheck() int {
 	sc := selfupdate.SelfCheck{
 		Version:  buildinfo.Version,
 		ConfigOK: config.LoadError() == nil && config.IsEnterpriseMode(),
-		DeviceID: selfCheckDeviceID(context.Background(), executor.NewReal(),
-			runtime.GOOS == model.PlatformWindows && winproc.IsLocalSystem(),
-			filepath.Join(updatestate.MSILayout().StateDir(), "device-id")),
 	}
+	system := runtime.GOOS == model.PlatformWindows && winproc.IsLocalSystem()
+	cachePath := ""
+	if system {
+		if l, err := ownLayout(); err == nil {
+			cachePath = filepath.Join(l.StateDir(), "device-id")
+		}
+	}
+	sc.DeviceID = selfCheckDeviceID(context.Background(), executor.NewReal(), system, cachePath)
 	if err := json.NewEncoder(os.Stdout).Encode(sc); err != nil {
 		return selfCheckExitFailed
 	}
@@ -105,7 +110,18 @@ func runSelfUpdate(args []string) int {
 		fmt.Fprintln(os.Stderr, "self-update --system is only supported on Windows MSI installs")
 		return 2
 	}
-	layout := updatestate.MSILayout()
+	selfExe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "self-update: own path: %v\n", err)
+		return selfupdate.ExitFailed
+	}
+	// The root comes from our own path (any INSTALLFOLDER), by the
+	// bootstrap's rule; an untrusted root is refused, never guessed.
+	layout, err := updatestate.ResolveLayout(selfExe)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "self-update: %s: %v\n", selfupdate.EventStateCorrupt, err)
+		return selfupdate.ExitFailed
+	}
 	logf := newUpdateLog(layout.LogFile())
 
 	config.Load()
@@ -119,11 +135,6 @@ func runSelfUpdate(args []string) int {
 	self, err := updatestate.ParseVersion(buildinfo.Version)
 	if err != nil {
 		logf("self-update: own version %q is not x.y.z", buildinfo.Version)
-		return selfupdate.ExitFailed
-	}
-	selfExe, err := os.Executable()
-	if err != nil {
-		logf("self-update: own path: %v", err)
 		return selfupdate.ExitFailed
 	}
 	httpClient := selfupdate.NewHTTPClient()
@@ -252,8 +263,10 @@ func reportBootstrapFallback() {
 		return
 	}
 	named := ""
-	if st, _, err := updatestate.Load(updatestate.MSILayout().StateFile()); err == nil && st != nil {
-		named = st.Current
+	if l, err := ownLayout(); err == nil {
+		if st, _, err := updatestate.Load(l.StateFile()); err == nil && st != nil {
+			named = st.Current
+		}
 	}
 	reason, from, to := parseBootstrapFallback(env, named, os.Getenv(telemetry.EnvBootstrapVersion), buildinfo.Version)
 	ctx, cancel := context.WithTimeout(context.Background(), deviceProbeTimeout)
@@ -265,4 +278,13 @@ func reportBootstrapFallback() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[warn] update_pointer_invalid not sent: %v\n", err)
 	}
+}
+
+// ownLayout is the MSI layout of this binary (updatestate.ResolveLayout).
+func ownLayout() (updatestate.Layout, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return updatestate.Layout{}, err
+	}
+	return updatestate.ResolveLayout(exe)
 }

@@ -119,10 +119,10 @@ type Bootstrap struct {
 }
 
 // NewBootstrap returns a production bootstrap rooted at the directory of
-// exePath, with runs under the default data root.
+// exePath, with runs under the ProgramData data root.
 func NewBootstrap(exePath string, isSystem func() bool) *Bootstrap {
 	return &Bootstrap{
-		Layout:            updatestate.Layout{InstallRoot: filepath.Dir(exePath), DataRoot: updatestate.DefaultDataRoot},
+		Layout:            updatestate.Layout{InstallRoot: filepath.Dir(exePath), DataRoot: updatestate.DataRoot()},
 		Spawn:             SpawnHidden,
 		IsSystem:          isSystem,
 		Now:               time.Now,

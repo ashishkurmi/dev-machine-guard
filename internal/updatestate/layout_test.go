@@ -26,9 +26,6 @@ func TestLayoutPaths(t *testing.T) {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	}
-	if m := MSILayout(); m.InstallRoot != `C:\Program Files\StepSecurity` || m.DataRoot != `C:\ProgramData\StepSecurity` {
-		t.Errorf("MSILayout = %+v", m)
-	}
 }
 
 func TestStagingDir(t *testing.T) {

@@ -914,3 +914,27 @@ func TestRunOutcomeKillIsWatchdog(t *testing.T) {
 		t.Fatalf("exit 3: code %d killed %v", code, killed)
 	}
 }
+
+// Copilot 4356483380: the updater, run from versions\<v>\, resolves the
+// same install root as the bootstrap that launched it, wherever the MSI
+// put INSTALLFOLDER.
+func TestUpdaterRootMatchesBootstrapRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "D", "Apps", "StepSecurity")
+	exe := filepath.Join(root, BootstrapBinary)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBootstrap(exe, func() bool { return true })
+	v, _ := updatestate.ParseVersion("1.20.0")
+	updater := b.Layout.VersionDir(v)
+	got, ok := updatestate.BootstrapRoot(filepath.Join(updater, updatestate.AgentFile), func(p string) bool {
+		_, err := os.Stat(p)
+		return err == nil
+	})
+	if !ok || got != b.Layout.InstallRoot {
+		t.Fatalf("updater root = %q (%v), bootstrap root = %q", got, ok, b.Layout.InstallRoot)
+	}
+}
