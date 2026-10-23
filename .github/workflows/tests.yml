@@ -173,17 +173,21 @@ jobs:
       - run: go test -race -count=1 -run '^TestReal_' ./internal/detector/
       - name: Test scheduled scan console suppression
         run: go test -race -count=1 -run 'Test(IsTaskRegistered|DetectInvocationMethod_Windows|HideWindow|StopUnderThenWaitReleased)' ./internal/schtasks/ ./internal/telemetry/ ./internal/winproc/
+      # One command per step: the default pwsh shell only fails a step on the
+      # LAST native command's exit code, so a multi-line run would mask an
+      # earlier failure.
       - name: Test self-update fault injection + U0 kill matrix (selfupdate_faults tag)
-        run: |
-          go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
-          go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys -run 'Test(ScanPanicIsABadRun|ScanHangAfterStartedIsABadRun)' ./internal/telemetry/
+        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys ./internal/faultinject/ ./internal/updatestate/ ./internal/selfupdate/ ./internal/authenticode/
+      - name: Test scan panic/hang run classification (selfupdate_faults tag)
+        run: go test -race -count=1 -tags selfupdate_faults,selfupdate_testkeys -run 'Test(ScanPanicIsABadRun|ScanHangAfterStartedIsABadRun)' ./internal/telemetry/
       - name: Authenticode against test-signed binaries (verbose, shows skips)
         run: go test -count=1 -v -run 'TestVerify|TestForgedBag|TestTrustData|TestSameSeedPublisher' ./internal/authenticode/
-      - name: Test launcher bootstrap mode and self-update tasks
-        run: |
-          go test -race -count=1 ./internal/launcher/
-          go test -race -count=1 -tags selfupdate_faults ./internal/launcher/
-          go test -race -count=1 -run 'Test(UpdateTask|ResolveBootstrapRoot|BuildCreateArgs_Bootstrap|InstallUpdateTask|Uninstall_|TerminateUnder|WaitForInstanceMutex|StopProcess)' ./internal/schtasks/
+      - name: Test launcher bootstrap mode
+        run: go test -race -count=1 ./internal/launcher/
+      - name: Test launcher bootstrap fault checkpoints (selfupdate_faults tag)
+        run: go test -race -count=1 -tags selfupdate_faults ./internal/launcher/
+      - name: Test self-update scheduled tasks
+        run: go test -race -count=1 -run 'Test(UpdateTask|ResolveBootstrapRoot|BuildCreateArgs_Bootstrap|InstallUpdateTask|Uninstall_|TerminateUnder|WaitForInstanceMutex|StopProcess)' ./internal/schtasks/
 
   smoke:
     name: Smoke Tests
