@@ -685,6 +685,42 @@ func (b *Bootstrap) adoptSnapshot(v updatestate.Version) *updatestate.AdoptSnaps
 	return snap
 }
 
+// renameDir and stopUnder are os.Rename and winproc.StopUnder; tests
+// replace them.
+var (
+	renameDir = os.Rename
+	stopUnder = winproc.StopUnder
+)
+
+// rollbackRemoveWait bounds the rollback's retries to remove the version
+// dir adopt-seed created; rollbackRemovePoll spaces them.
+const (
+	rollbackRemoveWait = 30 * time.Second
+	rollbackRemovePoll = 250 * time.Millisecond
+)
+
+// removeAdoptedDir moves dir to trash and deletes it. A scan the failed
+// install started may still run from dir, so it stops what runs from there
+// and retries until the rename succeeds or rollbackRemoveWait passes.
+func (b *Bootstrap) removeAdoptedDir(dir, trash string) error {
+	var err error
+	for waited := time.Duration(0); ; waited += rollbackRemovePoll {
+		if stopped, serr := stopUnder(dir); serr != nil {
+			b.logf("adopt-seed --rollback: stopping processes under %s: %v", dir, serr)
+		} else if len(stopped) > 0 {
+			b.logf("adopt-seed --rollback: stopped %s", strings.Join(stopped, ", "))
+		}
+		if err = renameDir(dir, trash); err == nil {
+			_ = os.RemoveAll(trash)
+			return nil
+		}
+		if waited >= rollbackRemoveWait {
+			return err
+		}
+		b.Sleep(rollbackRemovePoll)
+	}
+}
+
 // adoptRollback is `adopt-seed --rollback`, the MSI's rollback action for
 // adopt-seed (DMG-I5-2): when the transaction fails after adopt-seed ran,
 // restore the state.json it changed (only if nobody wrote it since) and
@@ -732,8 +768,9 @@ func (b *Bootstrap) adoptRollback() int {
 		if err == nil && (p == nil || (p.Current != snap.Seed && p.Previous != snap.Seed)) {
 			dir := b.Layout.VersionDir(v)
 			trash := filepath.Join(b.Layout.VersionsDir(), fmt.Sprintf("%s%s-rollback", updatestate.TrashPrefix, snap.Seed))
-			if os.Rename(dir, trash) == nil {
-				_ = os.RemoveAll(trash)
+			if err := b.removeAdoptedDir(dir, trash); err != nil {
+				b.logf("adopt-seed --rollback: could not remove %s: %v; left in place", dir, err)
+			} else {
 				b.logf("adopt-seed --rollback: removed %s", dir)
 			}
 		}

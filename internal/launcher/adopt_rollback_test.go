@@ -3,10 +3,12 @@ package launcher
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
+	"github.com/step-security/dev-machine-guard/internal/winproc"
 )
 
 func (f *fixture) adoptFlag(flag string) {
@@ -115,5 +117,47 @@ func TestAdoptSeedRollback_IgnoresStaleSnapshot(t *testing.T) {
 	f.adoptFlag("--rollback")
 	if f.load().Current != "1.5.0" || exists(f.layout.AdoptSnapshotFile()) {
 		t.Fatalf("stale snapshot applied or kept: %+v", f.load())
+	}
+}
+
+// msi-smoke 39915353203: a scan started by the failed install still held
+// versions\<seed> when the rollback ran, the rename failed and the dir was
+// silently kept. The rollback stops what runs from it, retries for a
+// bounded time, and logs loudly if it must give up.
+func TestAdoptSeedRollback_RetriesHeldVersionDir(t *testing.T) {
+	for name, fails := range map[string]int{"released": 3, "never released": 1 << 30} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.adopt(f.seed("1.5.0"))
+			dir := f.layout.VersionDir(updatestate.Version{Major: 1, Minor: 5})
+			var stopped []string
+			n := 0
+			renameDir = func(from, to string) error {
+				if from == dir && n < fails {
+					n++
+					return os.ErrPermission
+				}
+				return os.Rename(from, to)
+			}
+			stopUnder = func(root string) ([]string, error) { stopped = append(stopped, root); return nil, nil }
+			t.Cleanup(func() { renameDir, stopUnder = os.Rename, winproc.StopUnder })
+			f.b.Sleep = func(time.Duration) {}
+			f.adoptFlag("--rollback")
+			if len(stopped) == 0 || stopped[0] != dir {
+				t.Fatalf("processes under %s not stopped: %v", dir, stopped)
+			}
+			if fails < 10 {
+				if exists(dir) {
+					t.Fatal("held versions dir kept after it was released")
+				}
+				return
+			}
+			if !exists(dir) {
+				t.Fatal("dir gone though the rename never succeeded")
+			}
+			if !strings.Contains(f.out.String(), "could not remove "+dir) {
+				t.Fatalf("giving up was not logged:\n%s", f.out.String())
+			}
+		})
 	}
 }
