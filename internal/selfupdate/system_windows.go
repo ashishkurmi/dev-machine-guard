@@ -11,13 +11,13 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+
+	"github.com/step-security/dev-machine-guard/internal/winproc"
 )
 
 func prepareSmoke(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 }
-
-var procNtResumeProcess = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtResumeProcess")
 
 // runSmokeCmd runs the self-check inside a kill-on-close job (spec S5 "in a
 // job"): the child starts suspended, joins the job, then resumes, so
@@ -42,23 +42,7 @@ func runSmokeCmd(cmd *exec.Cmd) error {
 		}
 		return cmd.Process.Kill()
 	}
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SUSPEND_RESUME, false, uint32(cmd.Process.Pid)) // #nosec G115 -- a live pid
-	if err == nil {
-		err = windows.AssignProcessToJobObject(job, h)
-		if err == nil {
-			if status, _, _ := procNtResumeProcess.Call(uintptr(h)); status != 0 {
-				err = fmt.Errorf("resume self-check: NTSTATUS 0x%x", status)
-			}
-		}
-		_ = windows.CloseHandle(h)
-	}
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+	if err := winproc.StartInJob(cmd, job); err != nil {
 		return fmt.Errorf("smoke job: %w", err)
 	}
 	return cmd.Wait()

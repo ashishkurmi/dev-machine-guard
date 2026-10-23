@@ -3,12 +3,15 @@
 package launcher
 
 import (
+	"fmt"
 	"os/exec"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/step-security/dev-machine-guard/internal/winproc"
 )
 
 // CreateNoWindow is CREATE_NO_WINDOW: the console-subsystem child gets no
@@ -16,37 +19,28 @@ import (
 const CreateNoWindow uint32 = 0x08000000
 
 // SpawnHidden starts the child under CREATE_NO_WINDOW inside a kill-on-close
-// job, so the child's whole tree dies with this process (Stop-ScheduledTask
+// job (joined before the child runs; if it can't be, nothing runs), so the child's whole tree dies with this process (Stop-ScheduledTask
 // and the task's ExecutionTimeLimit only terminate the action's PID) and a
 // deadline terminates the whole tree, nested launcher job included.
 func SpawnHidden(path string, args, env []string, deadline time.Duration, onStart func()) SpawnResult {
 	cmd := exec.Command(path, args...) // #nosec G204 -- the bootstrap launches its own resolved version binaries
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: CreateNoWindow}
-	if err := cmd.Start(); err != nil {
+	job, err := newJob()
+	if err != nil {
+		return SpawnResult{Err: fmt.Errorf("kill-on-close job: %w", err)}
+	}
+	defer func() { _ = windows.CloseHandle(job) }()
+	if err := winproc.StartInJob(cmd, job); err != nil {
 		return SpawnResult{Err: err}
-	}
-	job, jerr := newJob()
-	if jerr == nil {
-		if aerr := AssignToJob(job, cmd.Process.Pid); aerr != nil {
-			_ = windows.CloseHandle(job)
-			job = 0
-		}
-	} else {
-		job = 0
-	}
-	if job != 0 {
-		defer func() { _ = windows.CloseHandle(job) }()
 	}
 	if onStart != nil {
 		onStart()
 	}
 	return waitWithDeadline(cmd, deadline, func() {
-		if job != 0 {
-			_ = windows.TerminateJobObject(job, uint32(ExitKilled))
-			return
+		if windows.TerminateJobObject(job, uint32(ExitKilled)) != nil {
+			_ = cmd.Process.Kill()
 		}
-		_ = cmd.Process.Kill()
 	})
 }
 
