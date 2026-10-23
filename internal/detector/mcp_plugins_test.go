@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -37,7 +38,7 @@ func TestDiscoverWalkedMCPConfigs_PluginPackages(t *testing.T) {
 	project := writeFile(t, root, "proj/.mcp.json")
 
 	d := &MCPDetector{}
-	got := gotSpecMap(d.discoverWalkedMCPConfigs([]string{root}, ""))
+	got := gotSpecMap(d.discoverWalkedMCPConfigs(context.Background(), []string{root}, ""))
 
 	for _, p := range []string{catalogClaude, catalogCodex, vendored} {
 		if _, ok := got[p]; ok {
@@ -67,7 +68,7 @@ func TestDiscoverWalkedMCPConfigs_CodexInstalledPlugin(t *testing.T) {
 	installed := writeFile(t, root, ".codex/plugins/cache/openai-curated-remote/github/.mcp.json")
 
 	d := &MCPDetector{}
-	got := gotSpecMap(d.discoverWalkedMCPConfigs([]string{root}, ""))
+	got := gotSpecMap(d.discoverWalkedMCPConfigs(context.Background(), []string{root}, ""))
 
 	s, ok := got[installed]
 	if !ok {
@@ -75,6 +76,36 @@ func TestDiscoverWalkedMCPConfigs_CodexInstalledPlugin(t *testing.T) {
 	}
 	if s.SourceName != "codex_plugin" || s.Vendor != "OpenAI" {
 		t.Errorf("got source=%q vendor=%q", s.SourceName, s.Vendor)
+	}
+}
+
+func TestDiscoverWalkedMCPConfigs_CopilotCatalogPayload(t *testing.T) {
+	for _, manifest := range []string{".plugin/plugin.json", ".github/plugin/plugin.json"} {
+		t.Run(manifest, func(t *testing.T) {
+			root := t.TempDir()
+			payload := "catalog/plugins/review/"
+			writeFile(t, root, payload+manifest)
+			leftover := writeFile(t, root, payload+".mcp.json")
+			vendored := writeFile(t, root, payload+".github/mcp.json")
+			independent := writeFile(t, root, "catalog/.github/mcp.json")
+			project := writeFile(t, root, "project/.mcp.json")
+
+			d := &MCPDetector{}
+			got := gotSpecMap(d.discoverWalkedMCPConfigs(context.Background(), []string{root}, ""))
+			for _, path := range []string{leftover, vendored} {
+				if _, ok := got[path]; ok {
+					t.Errorf("reported uninstalled Copilot payload config %s", path)
+				}
+			}
+			for _, path := range []string{independent, project} {
+				if spec, ok := got[path]; !ok || spec.SourceName != "discovered_mcp" {
+					t.Errorf("independent config %s: got %+v, present=%v", path, spec, ok)
+				}
+			}
+			if len(got) != 2 {
+				t.Errorf("got %d configs, want 2", len(got))
+			}
+		})
 	}
 }
 

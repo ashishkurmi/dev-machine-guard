@@ -137,16 +137,17 @@ Per skill, the scan records identity and frontmatter (name, description, version
 
 ## Agent Plugins, Commands and Recorded Skill Use
 
-Claude Code and Codex plugin inventory runs in its own `agent_plugins_scan` phase after `agent_skills_scan`, with no feature gate. Standalone commands and recorded usage remain in the skills phase. Both phases reuse project discovery and parsed definitions, with separate deadlines and progress. Plugin collection reads native registration/configuration, selected materialized payloads and manifests. Installed, files present, configured enabled and effective enabled are separate observations; an unavailable value remains unknown. An old cache directory alone is not an installation.
+Claude Code, Codex and GitHub Copilot plugin inventory runs in its own `agent_plugins_scan` phase after `agent_skills_scan`, with no feature gate. Standalone commands and recorded usage remain in the skills phase. Both phases reuse project discovery and parsed definitions, with separate deadlines and progress. Plugin collection reads native registration/configuration, selected materialized payloads and manifests. Installed, files present, configured enabled and effective enabled are separate observations; an unavailable value remains unknown. An old cache directory alone is not an installation.
 
 - **Claude Code:** scoped version-2 installation records, registered and settings-declared catalogs, visible seed roots, manifest-bearing skill directories and synced payloads. Local directory catalogs use the original source. Skills, legacy commands, MCP servers, agents, hooks, LSP servers and declared apps retain their supplying plugin.
 - **Codex:** configured local/Git marketplaces, personal and discovered-project catalogs, selected versioned store payloads and recognized account markers. Portable manifests take precedence over compatible manifests. Portable skills and MCP roots are fixed; supported apps/hooks remain descriptive metadata. Account effective enablement remains unknown.
+- **GitHub Copilot:** CLI and standalone-app recorded installations and selected live directory-marketplace payloads, including disabled selections. VS Code and Insiders use separate installed receipts and user/profile/project `chat.pluginLocations` registrations. Collects skills, custom agents, commands, rules, hooks, LSP declarations and shared/agent MCP declarations. Portable 1.0/1.1 and native legacy manifests use their own precedence; editor component selection follows its own defaults and settings. User `mcp-config.json` and discovered-project `.mcp.json`/`.github/mcp.json` retain sanitized standalone declarations. Runtime activation, credentials and usage are outside this extension. Native editor Disable/Enable state stored in SQLite is not read; JSON registration preferences do not prove effective activation. Editor versions remain unknown rather than inheriting the CLI version. Root-only skill fallback and path-valued MCP declarations follow pinned native fixtures. Unavailable or unverified catalog evidence remains incomplete.
 - **Standalone Claude commands:** user and discovered-project `commands/**/*.md` files retain their own paths and raw-byte hashes, independently of ordinary `SKILL.md` definitions.
 - **Recorded skill use:** Claude's `skillUsage` keys, cumulative counts (including zero) and native millisecond timestamps. Selected snapshots are attached to uniquely matching standalone or plugin definitions, including shared skills exposed through Claude symlinks. Ambiguous and unavailable usage is not zero; aliases and installation scopes are not summed. Unmatched counters are not uploaded separately.
 
 The collector never executes plugins, hooks, scripts, agent CLIs or network requests. MCP content uses the existing field allowlist and redaction. Plugin metadata and definition hashes are reported; instruction bodies, commands, credentials and complete settings files are not uploaded. Plugin-owned and stale-cache MCP declarations are excluded from ordinary MCP results, while unrelated MCP configurations retain existing coverage.
 
-Reads are guarded and bounded: 5 MiB metadata, 1 MiB definitions, 1,024 plugin observations, 4,096 components, 2,000 new parsed definitions, 10,000 inspected native usage counters and an 8 MiB plugin envelope. Malformed, unreadable, unsupported or truncated scopes report incomplete coverage independently. Visible `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR`, `CLAUDE_CODE_PLUGIN_SEED_DIR` and `CODEX_HOME` overrides are respected; overrides hidden from the scanning process cannot be discovered. Project presence does not prove session trust or activation. Native Windows project-plugin activation and account-synced delivery lifecycle remain outside the completed fixture validation.
+Reads are guarded and bounded: 5 MiB metadata, 1 MiB definitions, 1,024 plugin observations, 4,096 components, 2,000 new parsed definitions, 10,000 inspected native usage counters and an 8 MiB plugin envelope. Malformed, unreadable, unsupported or truncated scopes report incomplete coverage independently. Visible `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR`, `CLAUDE_CODE_PLUGIN_SEED_DIR`, `CODEX_HOME`, `COPILOT_HOME` and independent `COPILOT_CACHE_HOME` overrides are respected; overrides hidden from the scanning process cannot be discovered. Project presence does not prove session trust or activation. Native Windows project-plugin activation and account-synced delivery lifecycle remain outside the completed fixture validation.
 
 ## IDE Extensions & Plugins
 
@@ -279,6 +280,69 @@ Enterprise telemetry reports Go module evidence for the logged-in developer as t
 **Bounded.** Reads, directory listings, walk depth, record count and output size are capped. Any cap, refusal, or failure makes the affected source and section `partial` with a reason code, never silently incomplete.
 
 **Privacy: URL credentials, query strings, and fragments are removed from proxy and checksum-database URLs on the device, `GOAUTH` arguments and non-module `GOFLAGS` are dropped, and non-allowlisted environment values, `.netrc` content, and build settings are never collected.**
+
+## Rust Packages
+
+Enterprise telemetry reports Rust package evidence managed by Cargo for the logged-in developer as two sections, `cargo_inventory` and `cargo_config_audit`. Everything is read statically: **no `cargo`, `rustc` or `git` command, shell, or network call is ever run**, and a root or service account is never scanned in the developer's place. Each evidence kind is reported separately; none of them means a package was compiled or executed.
+
+| Evidence | Source |
+|----------|--------|
+| Declared requirements | `Cargo.toml` files found under the search directories: normal, dev, build and target-specific dependencies with aliases, requirement text, features, optional and explicit `default-features`, and registry, Git or path selectors. Workspace inheritance is applied; unused `workspace.dependencies` entries are not reported. |
+| Workspaces | `[workspace]` members (literal paths and single-level globs), `exclude`, in-root path dependencies and explicit `package.workspace`. Membership that cannot be established is reported as `workspace_unresolved`. |
+| Locked packages | `Cargo.lock` formats 3 and 4, once per workspace root, including a custom `resolver.lockfile-path`. Other formats are `unsupported_format`. Unused patches are not reported. |
+| Cached packages | Every `registry/cache/<id>/*.crate` and `registry/src/<id>/<name>-<version>/` in the default `~/.cargo` and an effective `CARGO_HOME`, merged into one record per registry ID, name and version. Archives are never unpacked; only their `Cargo.toml` member is read when no extracted copy establishes the identity. |
+| Git checkouts | Package manifests in `git/checkouts/<repo>/<rev>/`, with the full commit from the checkout's `.git/HEAD` when recorded. |
+| Vendored packages | Packages in directories holding `.cargo-checksum.json`, found by the walk or configured as `source.<name>.directory`, and `.crate` archives in a configured `local-registry`. |
+| Installed tools | `.crates.toml` receipts (enriched by `.crates2.json`) in each Cargo home, `install.root` and `CARGO_INSTALL_ROOT`, with each recorded bin checked by presence alone. |
+| Recorded checksums | Lockfile and `.cargo-checksum.json` package SHA-256 values, marked `not_verified`. |
+| Cargo configuration | `.cargo/config` and `.cargo/config.toml` of each project and its ancestors inside the search directories, the Cargo home config, included files, and the verified process environment: an allowlist of registry, source-replacement, network, install-root and lockfile-path settings, per invocation context, with findings `cargo-001`…`cargo-004`. Credentials files are checked for presence only. |
+
+**Scope.** The home and configured search directories are walked; `.git`, `.hg`, `.svn`, `node_modules`, `target`, `.rustup` and Cargo's own `registry` and `git` directories are not walked as projects, and directory symlinks are not followed. Paths a manifest or config names exactly (workspace members, path dependencies, includes, lockfile paths, Cargo homes, install roots, configured source directories) are read as targeted files, one level deep for source directories. `.cargo` configs above the search directories are not probed, and a workspace root above them is not found. TCC-protected directories and skipped network volumes stay excluded even when `include_tcc_protected` is set. The process environment counts only when the agent runs as the developer.
+
+**Origins.** Registry cache directory names are opaque, so cached packages carry `cache_unknown` origin scoped to their Cargo home and cache ID. Git checkouts carry `git_unknown`, vendored and local-registry packages `vendor_unknown`, and a lockfile entry without a source that matches no single known manifest `local_unknown`, scoped to its lockfile.
+
+**Bounded.** Reads, directory listings, walk depth, archive headers and decompressed bytes, config includes, record count and output size are capped. Any cap, refusal, or failure makes the affected source and section `partial` with a reason code, never silently incomplete.
+
+**Privacy: URL credentials, query strings, and fragments are removed on the device, registry tokens are reported only as configured, custom credential providers are shown as `custom` with their arguments dropped, and non-allowlisted settings, credentials-file contents, and binary contents are never collected.**
+
+## PHP Packages
+
+Enterprise telemetry emits `composer_inventory` and `composer_config_audit` for the resolved developer. Collection is static: PHP, Composer, plugins, scripts and generated PHP metadata are never executed or parsed.
+
+| Evidence | Source and meaning |
+|---|---|
+| Declared requirements | Root `composer.json` require/require-dev maps, preserving literal constraints. Platform requirements and dependency manifests inside vendor trees are excluded. |
+| Locked packages | `composer.lock` packages/packages-dev snapshots, including transitive packages. A lock does not prove installation. |
+| Installed packages | Composer 1 array or Composer 2 object `composer/installed.json` receipts. Package-directory presence is a separate guarded check; metapackages need no directory. |
+| Global packages | Default and safely resolved custom Composer homes, using their own manifests and receipts. |
+| Configuration | Selected global config, project manifests and verified process overrides, with allowlisted TLS, plugin, path, repository and policy settings. Auth files are checked for presence only. |
+
+**Discovery.** Uses the existing selected search roots, including hidden projects, with protected-path and network-volume guards. Observed vendor/cache paths and known build/VCS directories are pruned. Absolute verified alternate manifests and custom vendor paths receive targeted reads. Orphan receipts have unknown project scope. Directory symlinks are not walked; referenced package paths are resolved through the guard.
+
+**Meaning.** Declared constraints, locked versions and installed versions remain independent when they disagree. Receipt presence does not verify package contents. A valid `dist.shasum` is recorded SHA-1 evidence, marked `not_verified`. Source and dist URLs are observed origins, never inferred registry identity. Missing package directories do not erase receipts.
+
+**Limits and privacy.** Each JSON input is capped at 2 MiB; discovery at 100,000 entries per root and depth 128; inventory at 50,000 records; audit at 256 KiB; combined sections at 16 MiB. Failures and limits carry partial coverage. URL credentials, queries and fragments are removed before telemetry. Auth objects become presence flags; arbitrary config, headers, scripts and auth-file contents are not collected. Standalone caches, PHARs, copied PHP without supported receipts, historical shell overrides and `installed.php`-only metadata are outside v1 coverage. Native VM and live API acceptance is tracked separately from local parser tests.
+
+## .NET Packages
+
+Enterprise telemetry emits `nuget_inventory` and `nuget_config_audit` for the resolved developer. Collection is static: `dotnet`, `nuget`, MSBuild, credential providers, scripts and discovered binaries are never executed, and no feed is contacted.
+
+| Evidence | Source and meaning |
+|---|---|
+| Declared requirements | `PackageReference`, `PackageDownload` and versioned `Sdk` items in `.csproj`/`.fsproj`/`.vbproj` files, with versions from the nearest `Directory.Packages.props` when central management applies; `packages.config` entries; `dotnet-tools.json` tools; `#:package`/`#:sdk` directives in file-based C# apps and `#r "nuget:"` in F# scripts. Conditional items are flagged. Build-time imports, property functions and `global.json` are not evaluated; a project that needs them is `partial`. |
+| Locked packages | `packages.lock.json` formats 1–3, with the direct/transitive dependency type and recorded content hash. A lock does not prove a restore. |
+| Restored packages | `project.assets.json` v3/v4 libraries and per-framework targets, including orphan assets whose project is unresolved. Each restored package is joined to the cache it was restored from for presence and origin; a `packages.config` package counts as restored only when its directory exists under the repository path. |
+| Cached packages | `<id>/<version>/` entries in the global packages folder, configured fallback and custom folders: `.nuspec` identity (loose or read from the `.nupkg` without unpacking), `.nupkg.metadata` content hash and source, `.nupkg.sha512` archive hash. Missing markers or a mismatched identity are reported, never guessed. |
+| Installed tools | Global tool store receipts, `DotnetToolSettings.xml` commands and shim presence; local manifests upgraded through the tool resolver cache. |
+| Installed templates | The template engine `packages.json` receipt. |
+| Binary dependencies | `*.deps.json` package libraries with their recorded hash, attributed to the owning project when one is found. |
+| Configuration | Project and ancestor `NuGet.Config` files inside the search roots, user and additional user configs, machine-wide configs and the verified process environment, with allowlisted package source, mapping, fallback folder, path, proxy, TLS, signer, audit and lock settings per ambient and restore context, and findings `nuget-001`…`nuget-004`. Credentials and API keys are recorded as configured only. |
+
+**Discovery.** Uses the selected search roots with protected-path and network-volume guards. VCS, `node_modules` and cache directories, conventional NuGet homes and directories holding `.nupkg` files are pruned from the project walk; `bin`/`obj` are walked so receipts are found by name. Directory symlinks are not followed. Paths named by configuration or restore metadata are resolved through the guard.
+
+**Meaning.** Declared, locked, restored and cached evidence stay independent when they disagree. Recorded SHA-512 values are reported as `recorded` and never verified. A feed origin comes only from a restore marker that names the source; everything else is `local` or `unknown`. Effective sources are not computed from `<clear/>` order.
+
+**Limits and privacy.** Each metadata file is capped at 2 MiB and each `.nupkg` read at 32 MiB; discovery at 100,000 entries per root and depth 128; inventory at 50,000 records; audit at 256 KiB; combined sections at 16 MiB. Failures and limits carry partial coverage. URL credentials, queries and fragments are removed before telemetry; `ClearTextPassword`, `Password`, API keys and credential-provider arguments are never collected, and an environment-variable reference is not reported as a stored password. `project.json`, `.ridpackage.json`, `#i` script sources and `global.json` SDK resolution are outside v1 coverage.
 
 ## System Package Scanning (Linux)
 

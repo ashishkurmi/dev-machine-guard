@@ -1184,3 +1184,605 @@ type GoConfigFinding struct {
 	Key      string `json:"key"`
 	Detail   string `json:"detail"`
 }
+
+// CargoInventorySchemaVersion versions the cargo_inventory and
+// cargo_config_audit sections independently of the outer payload_schema_version.
+const CargoInventorySchemaVersion = 1
+
+// Cargo inventory source kinds.
+const (
+	CargoSourceProjectSearchRoot = "project_search_root"
+	CargoSourceManifest          = "manifest"
+	CargoSourceLockfile          = "lockfile"
+	CargoSourceRegistryCache     = "registry_cache"    // <cargo home>/registry
+	CargoSourceGitCheckoutRoot   = "git_checkout_root" // <cargo home>/git/checkouts
+	CargoSourceDirectorySource   = "directory_source"
+	CargoSourceLocalRegistry     = "local_registry"
+	CargoSourceInstallRoot       = "install_root"
+)
+
+// Cargo section and source statuses. A source that was refused or could not
+// be read is partial with a reason, never absent.
+const (
+	CargoStatusComplete = "complete"
+	CargoStatusPartial  = "partial"
+)
+
+// Cargo presence, for sources, artifacts and installed bins. Only a permitted
+// lookup that found nothing is absent.
+const (
+	CargoPresencePresent = "present"
+	CargoPresenceAbsent  = "absent"
+	CargoPresenceUnknown = "unknown"
+	// CargoBinUnreadable is a bin whose lookup failed; bins alone use it in
+	// place of unknown.
+	CargoBinUnreadable = "unreadable"
+)
+
+// Cargo package evidence kinds; each is owned by exactly one source kind.
+const (
+	CargoEvidenceDeclaredRequirement = "declared_requirement" // manifest
+	CargoEvidenceLockedPackage       = "locked_package"       // lockfile
+	CargoEvidenceCachedPackage       = "cached_package"       // registry_cache or local_registry
+	CargoEvidenceGitCachedPackage    = "git_cached_package"   // git_checkout_root
+	CargoEvidenceVendoredPackage     = "vendored_package"     // directory_source
+	CargoEvidenceInstalledTool       = "installed_tool"       // install_root
+)
+
+// Cargo package attributes.
+const (
+	CargoRelationDirect  = "direct" // declared_requirement only
+	CargoRelationUnknown = "unknown"
+
+	CargoVersionKnown   = "known" // an exact version from lock, manifest, archive or receipt
+	CargoVersionUnknown = "unknown"
+
+	CargoIdentityMetadata         = "metadata"
+	CargoIdentityFilenameInferred = "filename_inferred" // cache file name only; its metadata could not be read
+
+	CargoDependencyNormal = "normal"
+	CargoDependencyDev    = "dev"
+	CargoDependencyBuild  = "build"
+)
+
+// Cargo origin kinds. The *_unknown kinds carry the scope that bounds them
+// (project, lockfile, cache or directory) instead of a guessed URL.
+const (
+	CargoOriginRegistry        = "registry"
+	CargoOriginGit             = "git"
+	CargoOriginLocal           = "local"
+	CargoOriginLocalUnknown    = "local_unknown"    // path is the lockfile, not a package directory
+	CargoOriginRegistryUnknown = "registry_unknown" // registry alias whose index was not observed
+	CargoOriginCacheUnknown    = "cache_unknown"    // opaque registry cache directory
+	CargoOriginGitUnknown      = "git_unknown"      // Git checkout with no recorded repository URL
+	CargoOriginVendorUnknown   = "vendor_unknown"   // directory source or local registry
+)
+
+// Cargo artifact kinds and installation statuses.
+const (
+	CargoArtifactArchive     = "archive"
+	CargoArtifactExtracted   = "extracted"
+	CargoArtifactVendor      = "vendor"
+	CargoArtifactGitCheckout = "git_checkout"
+
+	CargoInstallComplete    = "complete"     // every recorded bin is present
+	CargoInstallPartial     = "partial"      // some bins present or unreadable
+	CargoInstallReceiptOnly = "receipt_only" // tracked receipt, every bin absent
+)
+
+// Cargo recorded-checksum vocabulary. A recorded checksum is metadata, never
+// an integrity verdict.
+const (
+	CargoChecksumAbsent     = "absent"
+	CargoChecksumRecorded   = "recorded"
+	CargoChecksumUnreadable = "unreadable"
+	CargoChecksumPartial    = "partial" // conflicting or invalid values were recorded
+
+	CargoChecksumSHA256 = "sha256"
+
+	CargoChecksumSourceLockfile       = "lockfile"
+	CargoChecksumSourceVendorChecksum = "vendor_checksum" // .cargo-checksum.json package value
+
+	CargoChecksumNotVerified = "not_verified"
+)
+
+// Cargo config-audit scopes, file statuses and context selection statuses.
+const (
+	CargoConfigScopeUser     = "user"     // Cargo home config
+	CargoConfigScopeProject  = "project"  // <dir>/.cargo config
+	CargoConfigScopeProcess  = "process"  // DMG's own verified process environment
+	CargoConfigScopeIncluded = "included" // loaded through an include
+
+	CargoConfigPresent          = "present"
+	CargoConfigAbsent           = "absent"
+	CargoConfigSkippedProtected = "skipped_protected"
+	CargoConfigUnreadable       = "unreadable"
+	CargoConfigInvalid          = "invalid"
+	CargoConfigUnsupported      = "unsupported"
+
+	CargoSelectionObserved = "observed"
+	CargoSelectionPartial  = "partial"
+)
+
+// Cargo reason codes, shared by both sections. Spellings shared with Go are
+// aliases so the two vocabularies cannot drift apart.
+const (
+	CargoReasonUserUnresolved          = GoReasonUserUnresolved
+	CargoReasonPathUnresolved          = GoReasonPathUnresolved
+	CargoReasonSkippedProtected        = GoReasonSkippedProtected
+	CargoReasonOutsideApprovedRoots    = GoReasonOutsideApprovedRoots
+	CargoReasonRefusedNetworkVolume    = "refused_network_volume"
+	CargoReasonPermissionDenied        = GoReasonPermissionDenied
+	CargoReasonUnreadable              = "unreadable"
+	CargoReasonChangedDuringScan       = GoReasonChangedDuringScan
+	CargoReasonUnsupportedEntry        = GoReasonUnsupportedEntry
+	CargoReasonDeadlineExceeded        = GoReasonDeadlineExceeded
+	CargoReasonParseError              = GoReasonParseError
+	CargoReasonSizeLimit               = GoReasonSizeLimit
+	CargoReasonEntryLimit              = GoReasonEntryLimit
+	CargoReasonDepthLimit              = GoReasonDepthLimit
+	CargoReasonRecordLimit             = GoReasonRecordLimit
+	CargoReasonOutputSizeLimit         = GoReasonOutputSizeLimit
+	CargoReasonExtractionIncomplete    = GoReasonExtractionIncomplete
+	CargoReasonUnsupportedFormat       = "unsupported_format"
+	CargoReasonWorkspaceUnresolved     = "workspace_unresolved"
+	CargoReasonConfigIncludeUnresolved = "config_include_unresolved"
+	CargoReasonOriginUnresolved        = "origin_unresolved"
+	CargoReasonChecksumInvalid         = "checksum_invalid"
+	CargoReasonChecksumMismatch        = "checksum_mismatch"
+)
+
+// CargoInventory is the enterprise cargo_inventory section: a full bounded
+// snapshot of statically read Rust package evidence. Nil means the phase did
+// not run.
+type CargoInventory struct {
+	SchemaVersion int              `json:"schema_version"`
+	Status        string           `json:"status"`  // CargoStatusComplete | CargoStatusPartial
+	Reasons       []string         `json:"reasons"` // global reasons plus those of every partial source
+	Sources       []CargoSource    `json:"sources"`
+	Projects      []CargoProject   `json:"projects"`
+	Workspaces    []CargoWorkspace `json:"workspaces"`
+	Packages      []CargoPackage   `json:"packages"`
+}
+
+// CargoSource is one thing the collector looked at. Its ID hashes the
+// developer identity, kind and absolute logical path.
+type CargoSource struct {
+	SourceID string   `json:"source_id"`
+	Kind     string   `json:"kind"` // CargoSource*
+	Path     string   `json:"path"`
+	Status   string   `json:"status"`   // CargoStatus*
+	Presence string   `json:"presence"` // CargoPresence*
+	Reasons  []string `json:"reasons"`
+	// ParentSourceID names the discovery source or referencing manifest.
+	ParentSourceID string `json:"parent_source_id,omitempty"`
+	// DiscoveredSources lists every child, including unreadable ones.
+	DiscoveredSources []string `json:"discovered_sources"`
+}
+
+// CargoProject is one parsed Cargo.toml. A virtual workspace root has no
+// package name. Lock contents are carried once, by the lockfile's packages.
+type CargoProject struct {
+	ManifestSourceID      string   `json:"manifest_source_id"`
+	ManifestPath          string   `json:"manifest_path"`
+	ProjectPath           string   `json:"project_path"`
+	PackageName           string   `json:"package_name,omitempty"`
+	PackageVersion        string   `json:"package_version,omitempty"`
+	WorkspaceManifestPath string   `json:"workspace_manifest_path,omitempty"`
+	LockfilePaths         []string `json:"lockfile_paths"` // lockfiles selected from this project's context
+}
+
+// CargoWorkspace is a manifest with a [workspace] table. It is context, not a
+// package dependency.
+type CargoWorkspace struct {
+	ManifestSourceID string                 `json:"manifest_source_id"`
+	ManifestPath     string                 `json:"manifest_path"`
+	RootPackageName  string                 `json:"root_package_name,omitempty"`
+	Members          []CargoWorkspaceMember `json:"members"`
+}
+
+type CargoWorkspaceMember struct {
+	ManifestPath string `json:"manifest_path"`
+	Status       string `json:"status"`           // CargoStatus*
+	Reason       string `json:"reason,omitempty"` // why the member is partial
+}
+
+// CargoPackage is one evidence fact about a package. SourceID is the source
+// that owns the evidence; the same package seen by two sources is two records.
+type CargoPackage struct {
+	SourceID           string                  `json:"source_id"`
+	Evidence           string                  `json:"evidence"` // CargoEvidence*
+	PackageName        string                  `json:"package_name"`
+	DependencyRelation string                  `json:"dependency_relation"` // CargoRelation*
+	Reasons            []string                `json:"reasons"`             // record-level attribution notes
+	RequestedVersion   string                  `json:"requested_version,omitempty"`
+	ObservedVersion    string                  `json:"observed_version,omitempty"`
+	VersionStatus      string                  `json:"version_status"`  // CargoVersion*
+	IdentityStatus     string                  `json:"identity_status"` // CargoIdentity*
+	Origin             CargoOrigin             `json:"origin"`
+	SourcePath         string                  `json:"source_path"`
+	ProjectPath        string                  `json:"project_path,omitempty"`
+	WorkspacePath      string                  `json:"workspace_path,omitempty"`
+	Declaration        *CargoDeclaration       `json:"declaration,omitempty"` // declared_requirement only
+	Artifacts          []CargoArtifact         `json:"artifacts"`
+	Installation       *CargoInstallation      `json:"installation,omitempty"` // installed_tool only
+	ChecksumStatus     string                  `json:"checksum_status"`        // CargoChecksum* status
+	RecordedChecksums  []CargoRecordedChecksum `json:"recorded_checksums"`
+}
+
+// CargoOrigin is where a package comes from, as far as local metadata shows.
+// URLs are sanitized; unknown kinds keep their scoping root instead of a URL.
+type CargoOrigin struct {
+	Kind             string `json:"kind"` // CargoOrigin*
+	URL              string `json:"url,omitempty"`
+	RegistryName     string `json:"registry_name,omitempty"` // contextual alias, not identity
+	Path             string `json:"path,omitempty"`
+	CacheRoot        string `json:"cache_root,omitempty"`
+	CacheID          string `json:"cache_id,omitempty"`
+	Branch           string `json:"branch,omitempty"`
+	Tag              string `json:"tag,omitempty"`
+	Rev              string `json:"rev,omitempty"`
+	ResolvedRevision string `json:"resolved_revision,omitempty"` // full commit, only from recorded metadata
+	IsLocal          bool   `json:"is_local,omitempty"`
+}
+
+// CargoDeclaration is a dependency entry as written in its manifest.
+type CargoDeclaration struct {
+	DeclaredName       string   `json:"declared_name"`
+	DependencyKind     string   `json:"dependency_kind"` // CargoDependency*
+	Target             string   `json:"target,omitempty"`
+	Optional           bool     `json:"optional,omitempty"`
+	DefaultFeatures    *bool    `json:"default_features,omitempty"` // set only when written
+	Features           []string `json:"features"`
+	WorkspaceInherited bool     `json:"workspace_inherited"`
+	PublishingRegistry string   `json:"publishing_registry,omitempty"` // registry fallback of a Git dependency
+}
+
+type CargoArtifact struct {
+	Kind     string   `json:"kind"` // CargoArtifact*
+	Path     string   `json:"path"`
+	Presence string   `json:"presence"` // CargoPresence*
+	Status   string   `json:"status"`   // CargoStatus*
+	Reasons  []string `json:"reasons"`
+}
+
+// CargoInstallation is what the install receipts record for one package.
+type CargoInstallation struct {
+	RootPath          string     `json:"root_path"`
+	Bins              []CargoBin `json:"bins"`
+	Status            string     `json:"status"` // CargoInstall*
+	VersionReq        string     `json:"version_req,omitempty"`
+	Features          []string   `json:"features,omitempty"`
+	AllFeatures       *bool      `json:"all_features,omitempty"`
+	NoDefaultFeatures *bool      `json:"no_default_features,omitempty"`
+	Target            string     `json:"target,omitempty"`
+	Profile           string     `json:"profile,omitempty"`
+	Rustc             string     `json:"rustc,omitempty"` // receipt text
+}
+
+// CargoBin is one recorded binary.
+type CargoBin struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Presence string `json:"presence"` // present, absent or CargoBinUnreadable
+}
+
+// CargoRecordedChecksum is one recorded SHA-256 value. SourceID is the
+// evidence owner; SourcePath is the file that held the value.
+type CargoRecordedChecksum struct {
+	Algorithm    string `json:"algorithm"` // CargoChecksumSHA256
+	Value        string `json:"value"`     // 64 lowercase hex
+	SourceKind   string `json:"source_kind"`
+	SourcePath   string `json:"source_path"`
+	SourceID     string `json:"source_id"`
+	Verification string `json:"verification"` // always CargoChecksumNotVerified
+}
+
+// CargoConfigAudit is the enterprise cargo_config_audit section: observed
+// Cargo settings per source, sanitized on the device, with per-context source
+// order and no device-wide effective verdict.
+type CargoConfigAudit struct {
+	SchemaVersion   int                   `json:"schema_version"`
+	Status          string                `json:"status"`
+	Reasons         []string              `json:"reasons"`
+	Files           []CargoConfigFile     `json:"files"`
+	Findings        []CargoConfigFinding  `json:"findings"`
+	Contexts        []CargoConfigContext  `json:"contexts"`
+	CredentialFiles []CargoCredentialFile `json:"credential_files"`
+}
+
+// CargoConfigFile is one configuration source. The process scope has no path.
+type CargoConfigFile struct {
+	SourceID string               `json:"source_id"`
+	Scope    string               `json:"scope"` // CargoConfigScope*
+	Path     string               `json:"path,omitempty"`
+	Status   string               `json:"status"` // CargoConfig* status
+	Reasons  []string             `json:"reasons"`
+	Settings []CargoConfigSetting `json:"settings"`
+	// ShadowedBy names the legacy .cargo/config that wins over this file.
+	ShadowedBy string `json:"shadowed_by,omitempty"`
+	// IncludeParentSourceID names the file whose include loaded this one.
+	IncludeParentSourceID string `json:"include_parent_source_id,omitempty"`
+}
+
+// CargoConfigSetting is an allowlisted key with a sanitized display value.
+// Redacted marks that a credential, query, argument or custom command was removed.
+type CargoConfigSetting struct {
+	Key      string `json:"key"`
+	Display  string `json:"display"`
+	SourceID string `json:"source_id"`
+	Redacted bool   `json:"redacted"`
+}
+
+// CargoConfigFinding is a stable-coded observation tied to the source where
+// the value was seen. Detail never contains a value.
+type CargoConfigFinding struct {
+	Code     string `json:"code"`     // cargo-001 …
+	Severity string `json:"severity"` // CRITICAL | HIGH | MEDIUM | LOW | INFO
+	SourceID string `json:"source_id"`
+	Key      string `json:"key"`
+	Detail   string `json:"detail"`
+}
+
+// CargoConfigContext is the config sources Cargo would load when invoked in
+// ProjectPath, highest precedence first. It does not describe CLI flags or
+// other shells. The Cargo-home context has no paths.
+type CargoConfigContext struct {
+	ProjectPath     string   `json:"project_path,omitempty"`
+	WorkspacePath   string   `json:"workspace_path,omitempty"`
+	ConfigSourceIDs []string `json:"config_source_ids"`
+	SelectionStatus string   `json:"selection_status"` // CargoSelection*
+}
+
+// CargoCredentialFile reports only whether a credentials file exists; its
+// contents are never read.
+type CargoCredentialFile struct {
+	Path     string `json:"path"`
+	Status   string `json:"status"`   // CargoConfig* status
+	Presence string `json:"presence"` // CargoPresence*
+}
+
+// ComposerInventorySchemaVersion versions the static Composer sections.
+const ComposerInventorySchemaVersion = 1
+
+// ComposerSource shares Cargo's source ownership and coverage contract.
+type ComposerSource = CargoSource
+
+// ComposerInventory keeps declarations, lock snapshots and receipts independent.
+// Directory presence belongs to a receipt, not to source completeness.
+type ComposerInventory struct {
+	SchemaVersion int               `json:"schema_version"`
+	Status        string            `json:"status"`
+	Reasons       []string          `json:"reasons"`
+	Sources       []ComposerSource  `json:"sources"`
+	Projects      []ComposerProject `json:"projects"`
+	Packages      []ComposerPackage `json:"packages"`
+}
+
+type ComposerProject struct {
+	ManifestSourceID string `json:"manifest_source_id"`
+	ManifestPath     string `json:"manifest_path"`
+	ProjectPath      string `json:"project_path"`
+	Scope            string `json:"scope"` // project | global
+	PackageName      string `json:"package_name,omitempty"`
+	PackageVersion   string `json:"package_version,omitempty"`
+	VendorPath       string `json:"vendor_path,omitempty"`
+	SelectionStatus  string `json:"selection_status"` // observed | partial
+	LockfilePath     string `json:"lockfile_path"`
+}
+
+// ComposerPackage is one fact owned by a manifest, lockfile or installed receipt.
+// Exact metadata versions are not normalized or inferred from constraints.
+type ComposerPackage struct {
+	SourceID           string                     `json:"source_id"`
+	Evidence           string                     `json:"evidence"` // declared_requirement | locked_package | installed_package
+	PackageName        string                     `json:"package_name"`
+	SourcePath         string                     `json:"source_path"`
+	ProjectPath        string                     `json:"project_path,omitempty"`
+	Scope              string                     `json:"scope"` // project | global | unknown
+	Reasons            []string                   `json:"reasons"`
+	VersionStatus      string                     `json:"version_status"` // known | unknown
+	Version            string                     `json:"version,omitempty"`
+	VersionNormalized  string                     `json:"version_normalized,omitempty"`
+	RequestedVersion   string                     `json:"requested_version,omitempty"`
+	DependencyKind     string                     `json:"dependency_kind"`     // require | require_dev | unknown
+	DependencyRelation string                     `json:"dependency_relation"` // direct | unknown
+	PackageType        string                     `json:"package_type,omitempty"`
+	Origin             ComposerOrigin             `json:"origin"`
+	Source             *ComposerDescriptor        `json:"source,omitempty"`
+	Dist               *ComposerDescriptor        `json:"dist,omitempty"`
+	Installation       *ComposerInstallation      `json:"installation,omitempty"`
+	ChecksumStatus     string                     `json:"checksum_status"` // absent | recorded | partial | unreadable
+	RecordedChecksums  []ComposerRecordedChecksum `json:"recorded_checksums"`
+}
+
+type ComposerOrigin struct {
+	Kind string `json:"kind"` // source | dist | local | unknown; never inferred registry provenance
+	Type string `json:"type,omitempty"`
+	URL  string `json:"url,omitempty"`
+	Path string `json:"path,omitempty"`
+}
+
+type ComposerDescriptor struct {
+	Type      string `json:"type"`
+	URL       string `json:"url"`
+	Reference string `json:"reference,omitempty"`
+}
+
+type ComposerInstallation struct {
+	Path       string `json:"path,omitempty"`
+	PathStatus string `json:"path_status"` // resolved | inferred | unresolved | not_applicable
+	Presence   string `json:"presence"`    // present | absent | unknown | not_applicable
+}
+
+// ComposerRecordedChecksum records dist.shasum without claiming file verification.
+type ComposerRecordedChecksum struct {
+	Algorithm    string `json:"algorithm"` // sha1
+	Value        string `json:"value"`
+	SourceID     string `json:"source_id"`
+	SourceKind   string `json:"source_kind"` // lockfile | installed_metadata
+	SourcePath   string `json:"source_path"`
+	Verification string `json:"verification"` // not_verified
+}
+
+type ComposerConfigAudit struct {
+	SchemaVersion   int                     `json:"schema_version"`
+	Status          string                  `json:"status"`
+	Reasons         []string                `json:"reasons"`
+	Files           []ComposerConfigFile    `json:"files"`
+	Contexts        []ComposerConfigContext `json:"contexts"`
+	CredentialFiles []CargoCredentialFile   `json:"credential_files"`
+	Findings        []CargoConfigFinding    `json:"findings"`
+}
+
+type ComposerConfigFile struct {
+	SourceID string               `json:"source_id"`
+	Scope    string               `json:"scope"` // user | project | process
+	Path     string               `json:"path,omitempty"`
+	Status   string               `json:"status"`
+	Reasons  []string             `json:"reasons"`
+	Settings []CargoConfigSetting `json:"settings"`
+}
+
+type ComposerConfigContext struct {
+	ProjectPath     string   `json:"project_path"`
+	ConfigSourceIDs []string `json:"config_source_ids"` // highest precedence first
+	SelectionStatus string   `json:"selection_status"`  // observed | partial
+}
+
+// NuGetInventorySchemaVersion versions the static .NET/NuGet sections.
+const NuGetInventorySchemaVersion = 1
+
+// NuGetSource shares Cargo's source ownership and coverage contract. Kinds:
+// project_search_root, project_manifest, central_versions, project_assets,
+// lockfile, legacy_manifest, script_manifest, package_cache, package_archive,
+// tool_manifest, tool_store, tool_resolver_cache, template_receipt,
+// binary_metadata.
+type NuGetSource = CargoSource
+
+// NuGetInventory keeps declarations, locks, restored graphs, caches, tools,
+// templates and build manifests as independent evidence.
+type NuGetInventory struct {
+	SchemaVersion int            `json:"schema_version"`
+	Status        string         `json:"status"`
+	Reasons       []string       `json:"reasons"`
+	Sources       []NuGetSource  `json:"sources"`
+	Projects      []NuGetProject `json:"projects"`
+	Packages      []NuGetPackage `json:"packages"`
+}
+
+// NuGetProject is one declaration context. Target frameworks are the literal
+// project values; an unresolvable value leaves the selection partial.
+type NuGetProject struct {
+	ManifestSourceID string   `json:"manifest_source_id"`
+	ManifestPath     string   `json:"manifest_path"`
+	ProjectPath      string   `json:"project_path"`
+	ProjectKind      string   `json:"project_kind"` // msbuild | legacy | file_based | fsharp_script | tool_manifest
+	TargetFrameworks []string `json:"target_frameworks"`
+	SelectionStatus  string   `json:"selection_status"` // resolved | partial | unresolved
+	AssetsPath       string   `json:"assets_path,omitempty"`
+	LockfilePath     string   `json:"lockfile_path,omitempty"`
+	PackagesPath     string   `json:"packages_path,omitempty"` // legacy packages directory
+}
+
+// NuGetPackage is one fact owned by a single source. A declaration keeps its
+// requested range; exact versions come only from resolved or receipt metadata.
+type NuGetPackage struct {
+	SourceID              string                  `json:"source_id"`
+	Evidence              string                  `json:"evidence"`               // declared_requirement | locked_package | restored_package | cached_package | installed_tool | installed_template | binary_dependency
+	PackageName           string                  `json:"package_name"`           // lowercase canonical ID
+	DisplayName           string                  `json:"display_name,omitempty"` // ID as written
+	SourcePath            string                  `json:"source_path"`
+	ProjectPath           string                  `json:"project_path,omitempty"`
+	Scope                 string                  `json:"scope"` // project | user | custom | unknown
+	Reasons               []string                `json:"reasons"`
+	VersionStatus         string                  `json:"version_status"` // known | unknown
+	Version               string                  `json:"version,omitempty"`
+	VersionNormalized     string                  `json:"version_normalized,omitempty"` // lowercase prerelease identity
+	RequestedVersion      string                  `json:"requested_version,omitempty"`
+	DependencyRelation    string                  `json:"dependency_relation"` // direct | transitive | unknown
+	DevelopmentDependency *bool                   `json:"development_dependency,omitempty"`
+	PrivateAssets         string                  `json:"private_assets,omitempty"`
+	IncludeAssets         string                  `json:"include_assets,omitempty"`
+	ExcludeAssets         string                  `json:"exclude_assets,omitempty"`
+	FrameworkAlias        string                  `json:"framework_alias,omitempty"`
+	TargetFramework       string                  `json:"target_framework,omitempty"`
+	RuntimeIdentifier     string                  `json:"runtime_identifier,omitempty"`
+	Conditional           bool                    `json:"conditional,omitempty"` // declared under an MSBuild Condition
+	AllowedVersions       string                  `json:"allowed_versions,omitempty"`
+	DeclarationKind       string                  `json:"declaration_kind,omitempty"`     // package_reference | global_package_reference | package_download | msbuild_sdk
+	LockDependencyType    string                  `json:"lock_dependency_type,omitempty"` // Direct | Transitive | CentralTransitive
+	ToolCommands          []string                `json:"tool_commands,omitempty"`
+	Origin                NuGetOrigin             `json:"origin"`
+	Installation          *NuGetInstallation      `json:"installation,omitempty"`
+	ChecksumStatus        string                  `json:"checksum_status"` // recorded | not_recorded | partial
+	RecordedChecksums     []NuGetRecordedChecksum `json:"recorded_checksums"`
+}
+
+// NuGetOrigin is an observed download source, never a configured candidate.
+type NuGetOrigin struct {
+	Kind string `json:"kind"` // feed | local | unknown
+	URL  string `json:"url,omitempty"`
+	Path string `json:"path,omitempty"`
+}
+
+type NuGetInstallation struct {
+	Path       string `json:"path,omitempty"`
+	PathStatus string `json:"path_status"` // resolved | unresolved
+	Presence   string `json:"presence"`    // present | absent | unreadable | unknown | not_applicable
+}
+
+// NuGetRecordedChecksum distinguishes NuGet's package-content hash from the
+// archive byte hash; the two differ for signed packages.
+type NuGetRecordedChecksum struct {
+	Kind         string `json:"kind"`      // content | archive
+	Algorithm    string `json:"algorithm"` // sha512
+	Value        string `json:"value"`     // base64
+	SourceID     string `json:"source_id"`
+	SourceKind   string `json:"source_kind"`
+	SourcePath   string `json:"source_path"`
+	Verification string `json:"verification"` // recorded
+}
+
+// NuGetConfigAudit follows Composer's observed-source model. Credentials are
+// inline in NuGet.Config, so presence flags replace a credential-file list.
+// The endpoint lists and counts are derived from the read files; the backend
+// recomputes them and treats the producer's values as informational.
+type NuGetConfigAudit struct {
+	SchemaVersion         int                  `json:"schema_version"`
+	Status                string               `json:"status"` // complete | partial
+	Reasons               []string             `json:"reasons"`
+	Files                 []NuGetConfigFile    `json:"files"`
+	Contexts              []NuGetConfigContext `json:"contexts"`
+	Findings              []CargoConfigFinding `json:"findings"`
+	ObservedRegistries    []string             `json:"observed_registries"`
+	ObservedProxies       []string             `json:"observed_proxies"`
+	SourceCount           int                  `json:"source_count"`
+	ObservedRegistryCount int                  `json:"observed_registry_count"`
+	ObservedProxyCount    int                  `json:"observed_proxy_count"`
+	FindingCount          int                  `json:"finding_count"`
+	FindingCodeCounts     map[string]int       `json:"finding_code_counts"`
+	FindingCounts         map[string]int       `json:"finding_counts"` // by uppercase severity
+}
+
+// NuGetConfigFile is one configuration source. The process source has no
+// path; a source that was not read carries no current settings.
+type NuGetConfigFile struct {
+	SourceID string               `json:"source_id"`
+	Scope    string               `json:"scope"` // user | machine | project | process
+	Path     string               `json:"path,omitempty"`
+	Status   string               `json:"status"` // read | not_found | unreadable | unsupported
+	Reasons  []string             `json:"reasons"`
+	Settings []CargoConfigSetting `json:"settings"`
+}
+
+// NuGetConfigContext is an ambient config chain for a project directory, or
+// the config input an assets file recorded for one restore.
+type NuGetConfigContext struct {
+	ProjectPath         string   `json:"project_path"`
+	ContextKind         string   `json:"context_kind"` // ambient | restore
+	Status              string   `json:"status"`       // complete | partial
+	Reasons             []string `json:"reasons"`
+	ConfigSourceIDs     []string `json:"config_source_ids"` // highest precedence first
+	RestoreMetadataPath string   `json:"restore_metadata_path,omitempty"`
+}

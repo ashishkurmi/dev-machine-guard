@@ -131,10 +131,45 @@ func TestWriteTelemetryFileAgentPlugins(t *testing.T) {
 	}
 }
 
-// TestPayloadGoSections: the Go golden decodes strictly into Payload, and a
-// payload whose Go phase never ran carries neither key.
-func TestPayloadGoSections(t *testing.T) {
-	raw, err := os.ReadFile("../model/testdata/go_inventory_v1_golden.json")
+// The shared goldens must fit Payload; phases that never ran emit no keys.
+func TestPayloadPackageInventorySections(t *testing.T) {
+	for _, ecosystem := range []string{"go", "cargo"} {
+		t.Run(ecosystem, func(t *testing.T) {
+			raw, err := os.ReadFile("../model/testdata/" + ecosystem + "_inventory_v1_golden.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload Payload
+			dec := json.NewDecoder(bytes.NewReader(raw))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if ecosystem == "go" && (payload.GoInventory == nil || payload.GoConfigAudit == nil) ||
+				ecosystem == "cargo" && (payload.CargoInventory == nil || payload.CargoConfigAudit == nil) {
+				t.Fatal("inventory and audit sections not decoded into Payload")
+			}
+			data, err := json.Marshal(&Payload{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var empty map[string]json.RawMessage
+			if err := json.Unmarshal(data, &empty); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{ecosystem + "_inventory", ecosystem + "_config_audit"} {
+				if _, exists := empty[key]; exists {
+					t.Errorf("unrun section %s was emitted", key)
+				}
+			}
+		})
+	}
+}
+
+// TestPayloadComposerSections: the Composer golden decodes strictly into Payload, and a
+// payload whose Composer phase never ran carries neither key.
+func TestPayloadComposerSections(t *testing.T) {
+	raw, err := os.ReadFile("../model/testdata/composer_inventory_v1_golden.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,10 +177,10 @@ func TestPayloadGoSections(t *testing.T) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&payload); err != nil {
-		t.Fatalf("Go golden does not fit Payload: %v", err)
+		t.Fatalf("Composer golden does not fit Payload: %v", err)
 	}
-	if payload.GoInventory == nil || payload.GoConfigAudit == nil {
-		t.Fatal("Go sections not decoded into Payload")
+	if payload.ComposerInventory == nil || payload.ComposerConfigAudit == nil {
+		t.Fatal("Composer sections not decoded into Payload")
 	}
 	data, err := json.Marshal(&Payload{})
 	if err != nil {
@@ -155,7 +190,38 @@ func TestPayloadGoSections(t *testing.T) {
 	if err := json.Unmarshal(data, &empty); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"go_inventory", "go_config_audit"} {
+	for _, key := range []string{"composer_inventory", "composer_config_audit"} {
+		if _, exists := empty[key]; exists {
+			t.Errorf("unrun section %s was emitted", key)
+		}
+	}
+}
+
+// TestPayloadNuGetSections: the NuGet golden decodes strictly into Payload, and a
+// payload whose NuGet phase never ran carries neither key.
+func TestPayloadNuGetSections(t *testing.T) {
+	raw, err := os.ReadFile("../model/testdata/nuget_inventory_v1_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload Payload
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&payload); err != nil {
+		t.Fatalf("NuGet golden does not fit Payload: %v", err)
+	}
+	if payload.NuGetInventory == nil || payload.NuGetConfigAudit == nil {
+		t.Fatal("NuGet sections not decoded into Payload")
+	}
+	data, err := json.Marshal(&Payload{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var empty map[string]json.RawMessage
+	if err := json.Unmarshal(data, &empty); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"nuget_inventory", "nuget_config_audit"} {
 		if _, exists := empty[key]; exists {
 			t.Errorf("unrun section %s was emitted", key)
 		}

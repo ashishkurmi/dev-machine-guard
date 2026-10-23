@@ -217,6 +217,7 @@ This interactively prompts for all configurable settings:
 
 | Setting            | Description                                 | Default         |
 | ------------------ | ------------------------------------------- | --------------- |
+| Device ID          | Optional custom identifier for this device  | Machine serial  |
 | Customer ID        | Your StepSecurity customer identifier       | _(not set)_     |
 | API Endpoint       | StepSecurity backend URL                    | _(not set)_     |
 | API Key            | Authentication key for telemetry uploads    | _(not set)_     |
@@ -254,6 +255,16 @@ Configuration (~/.stepsecurity/config.json):
 
 Configuration is saved to `~/.stepsecurity/config.json` with `0600` permissions (owner read/write only).
 
+To use a custom device ID, add `"device_id": "my-device-123"` to the existing
+config JSON, or set **Device ID** through `configure`. The override is also
+supported in JSON supplied to `configure --from-file`. An omitted, empty, or
+whitespace-only value uses the machine serial as before. The agent continues
+reporting the actual machine serial in `serial_number`. WSL guest scans derive
+separate IDs from the host ID and distro ID.
+
+Choose an ID unique within your customer and keep it stable: changing the ID
+registers a separate device in the backend; it does not migrate existing history.
+
 **CLI flags always override config file values** — this matches the shell script behavior. For example, if your config has `output_format: json`, running `./stepsecurity-dev-machine-guard --pretty` uses pretty output. To clear a value during configuration, enter a single dash (`-`).
 
 ### Logging and Verbose Mode
@@ -286,8 +297,8 @@ See [SCAN_COVERAGE.md](SCAN_COVERAGE.md) for the full catalog of supported detec
 | AI CLI Tools         | Claude Code, Codex, Gemini CLI, Kiro CLI, GitHub Copilot CLI, Aider, OpenCode, Cursor Agent, Pi, Factory Droid, Amp, Grok Build, Kimi Code, Muse Code, Hermes Agent, Oh My Pi |
 | AI Agents            | Claude Cowork, OpenClaw, ClawdBot, GPT-Engineer                                          |
 | AI Frameworks        | Ollama, LM Studio, LocalAI, Text Generation WebUI                                        |
-| MCP Server Configs   | Claude Desktop, Claude Code, Cursor, Windsurf, Antigravity, Zed, Open Interpreter, Codex, OpenCode |
-| Agent Plugins & Skills | Claude Code and Codex plugin installations, declared components, standalone Claude commands, and recorded skill-use counters |
+| MCP Server Configs   | Claude Desktop, Claude Code, Cursor, Windsurf, Antigravity, Zed, Open Interpreter, Codex, OpenCode, GitHub Copilot |
+| Agent Plugins & Skills | Claude Code, Codex and GitHub Copilot (CLI, standalone app and VS Code) plugin installations, declared components, standalone Claude commands, and recorded skill-use counters |
 | IDE Extensions       | VS Code, Cursor, Windsurf, Antigravity, JetBrains, Eclipse, Xcode, Android Studio        |
 | Browser Extensions   | Google Chrome, Microsoft Edge, Mozilla Firefox                                           |
 | Node.js Packages     | npm, yarn, pnpm, bun (opt-in)                                                            |
@@ -295,6 +306,9 @@ See [SCAN_COVERAGE.md](SCAN_COVERAGE.md) for the full catalog of supported detec
 | Python Packages      | pip, poetry, pipenv, uv, conda, rye (opt-in)                                             |
 | System Packages      | rpm, dpkg, pacman, apk, snap, flatpak (Linux)                                            |
 | Go Modules           | `go.mod`/`go.work` declarations, vendored modules, module cache, `GOBIN` tools, recorded checksums (enterprise) |
+| Rust Packages        | `Cargo.toml` declarations, `Cargo.lock`, registry cache, Git checkouts, vendored sources, `cargo install` receipts (enterprise) |
+| PHP Packages         | `composer.json` requirements, `composer.lock` snapshots and Composer 1/2 installed receipts, with separate directory presence (enterprise) |
+| .NET Packages        | MSBuild project and `packages.config` references, `packages.lock.json`, `project.assets.json` restores, global package cache, .NET tools, templates and `.deps.json` (enterprise) |
 | Package Configs      | npm (`.npmrc`), pnpm, bun (`bunfig.toml`), yarn classic & berry (`.yarnrc`/`.yarnrc.yml`), pip (`pip.conf`) — effective registry, cooldown policy, and auth surface across every scope |
 | Suspicious Files     | Malicious-file IOCs from StepSecurity-maintained rules — e.g. `binding.gyp` that runs during `npm install`, and editor/AI-tool config files that auto-execute on project open |
 
@@ -310,7 +324,11 @@ Compromised packages most often reach a machine because that machine resolves di
 - **Cooldown policy** — whether a cooldown window against newly published packages is in effect.
 - **Authentication surface** — what credentials are configured against the registry.
 
-Configuration is read from `.npmrc` (npm), pnpm config, `bunfig.toml` (bun), `.yarnrc` / `.yarnrc.yml` (yarn classic and berry), `pip.conf` (pip), and Go's `go/env` and process environment (proxy, checksum database, private-module and auth settings, redacted on the device). In enterprise mode this rolls up into the **Package Configs** view in the dashboard, where you can spot machines that are unprotected or pointed at the wrong registry.
+Configuration is read from `.npmrc` (npm), pnpm config, `bunfig.toml` (bun), `.yarnrc` / `.yarnrc.yml` (yarn classic and berry), `pip.conf` (pip), Go's `go/env` and process environment (proxy, checksum database, private-module and auth settings, redacted on the device), and Cargo's `.cargo/config.toml` files and process environment (registries, source replacement, proxy and TLS settings, redacted on the device). In enterprise mode this rolls up into the **Package Configs** view in the dashboard, where you can spot machines that are unprotected or pointed at the wrong registry.
+
+Composer auditing reads selected global `config.json`, root manifests and verified process overrides. It reports observed repository, proxy, TLS and plugin settings with credentials redacted. It does not infer the repository that supplied a package or execute Composer to reconstruct runtime configuration. See [PHP Packages](SCAN_COVERAGE.md#php-packages) for scope and limits.
+
+NuGet auditing reads project, ancestor, user and machine `NuGet.Config` files plus verified process overrides. It reports package sources, source mapping, fallback folders, proxy, TLS and audit settings with credentials redacted, and records which configuration applied to each project and restore. It never executes `dotnet` or `nuget` or reads credential-provider output. See [.NET Packages](SCAN_COVERAGE.md#net-packages) for scope and limits.
 
 Enterprise Device Policy can also set StepSecurity Secure Registry as the sole user-level Python index for pip and uv. It manages only the resolved developer's user configuration and shared StepSecurity `.netrc` entry, keeps pip and uv results independent, and restores owned settings on an explicit policy clear. Project files, virtual environments, system configuration, environment variables, direct URLs, and Poetry are not modified.
 
