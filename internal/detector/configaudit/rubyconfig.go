@@ -95,6 +95,7 @@ type RubyConfigSnapshot struct {
 	literal               map[string]bool
 	homes                 map[string]bool
 	credentials           map[string]bool
+	credentialPaths       map[string]bool
 	gemProcess, bundle    *model.RubyConfigFile
 	userGemrc, systemrc   []*model.RubyConfigFile
 	global                *model.RubyConfigFile
@@ -135,6 +136,17 @@ func (d *RubyConfigDetector) Detect(ctx context.Context, scope RubyConfigScope) 
 		a.fileReason(a.gemProcess, "unsupported", "user_unresolved")
 		a.fileReason(a.bundle, "unsupported", "user_unresolved")
 		a.partial = true
+	}
+	a.credentialPaths = map[string]bool{}
+	for _, p := range []string{
+		filepath.Join(home, ".gem", "credentials"),
+		filepath.Join(home, ".local", "share", "gem", "credentials"),
+		filepath.Join(cmpOr(a.env["XDG_DATA_HOME"], filepath.Join(home, ".local", "share")), "gem", "credentials"),
+	} {
+		a.credentialPaths[a.key(p)] = true
+		if resolved, err := a.exec.GuardedFiles([]string{p}, scope.Protected, 0).EvalSymlinks(p); err == nil {
+			a.credentialPaths[a.key(resolved)] = true
+		}
 	}
 	// GEMRC files merge in list order, so the last one has highest precedence.
 	for _, p := range slices.Backward(gemrc) {
@@ -184,6 +196,19 @@ func cmpOr(v, fallback string) string {
 // Env returns a verified developer-process root selector as a safe absolute
 // path, or "" when unset, unverified or unsafe.
 func (a *RubyConfigSnapshot) Env(key string) string { return a.env[key] }
+
+// ContentGuard keeps credential files existence-only, including redirected reads.
+func (a *RubyConfigSnapshot) ContentGuard(path string) string {
+	if a.scope.Protected != nil {
+		if reason := a.scope.Protected(path); reason != "" {
+			return reason
+		}
+	}
+	if a.credentialPaths[a.key(path)] {
+		return "skipped_protected"
+	}
+	return ""
+}
 
 func (a *RubyConfigSnapshot) key(p string) string { return GoPathKey(a.exec.GOOS(), p) }
 func (a *RubyConfigSnapshot) degrade(reason string) {
@@ -410,7 +435,7 @@ func (a *RubyConfigSnapshot) readFile(manager, scope, p string, parse func(*mode
 		return f
 	}
 	// A missing file cannot establish its own root through a parent symlink.
-	files := a.exec.GuardedFiles([]string{filepath.Dir(p), p}, a.scope.Protected, rubyConfigBytes)
+	files := a.exec.GuardedFiles([]string{filepath.Dir(p), p}, a.ContentGuard, rubyConfigBytes)
 	info, err := files.Stat(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return f

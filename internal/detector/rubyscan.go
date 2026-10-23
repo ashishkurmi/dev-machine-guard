@@ -130,10 +130,11 @@ func (s *RubyScanner) Scan(ctx context.Context, target *user.User, searchDirs []
 		dirs = append(dirs, dir)
 		c.roots = append(c.roots, dir)
 	}
-	c.files = s.exec.GuardedFiles(c.roots, guard, maxRubyMetadataBytes)
 	current, err := s.exec.CurrentUser()
 	verified := err == nil && current != nil && target.Uid != "" && current.Uid == target.Uid
 	c.config = configDetector.Detect(ctx, configaudit.RubyConfigScope{Username: target.Username, Home: c.home, Protected: guard, Volume: volume, ProcessVerified: verified})
+	c.guard = c.config.ContentGuard
+	c.files = s.exec.GuardedFiles(c.roots, c.guard, maxRubyMetadataBytes)
 	c.config.Prefixes(c.knownRoots())
 	// Configured leads follow standard roots, so a shared root keeps its scope.
 	for _, home := range c.config.GemHomes {
@@ -337,7 +338,7 @@ func (c *rubyScan) expand(base string, parts ...string) ([]string, []string) {
 			if c.stopped(nil) {
 				return nil, append(reasons, c.stopReason())
 			}
-			entries, _, err := c.fs(p, 0).ReadDirLimit(p, maxRubyListEntries)
+			entries, more, err := c.fs(p, 0).ReadDirLimit(p, maxRubyListEntries)
 			if err != nil {
 				if !errors.Is(err, fs.ErrNotExist) {
 					reason := c.reason(err, p)
@@ -345,6 +346,10 @@ func (c *rubyScan) expand(base string, parts ...string) ([]string, []string) {
 					reasons = append(reasons, reason)
 				}
 				continue
+			}
+			if more {
+				c.degrade(nil, "entry_limit")
+				reasons = append(reasons, "entry_limit")
 			}
 			pattern := part
 			if c.goos == model.PlatformWindows {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,6 +75,67 @@ func rubyTestScanner(t *testing.T, home string) (*RubyScanner, *rubyTrap) {
 		return func(string) string { return "" }, func(string) bool { return false }
 	}
 	return s, x
+}
+
+func TestRubyScanCredentialReferences(t *testing.T) {
+	for _, kind := range []string{"direct", "alias", "credential-alias", "xdg", "default-xdg", "config"} {
+		t.Run(kind, func(t *testing.T) {
+			home := goTestHome(t)
+			root := filepath.Join(home, "projects")
+			scanner, x := rubyTestScanner(t, home)
+			credential := filepath.Join(home, ".gem", "credentials")
+			switch kind {
+			case "xdg":
+				x.env["XDG_DATA_HOME"] = filepath.Join(home, "data")
+				credential = filepath.Join(home, "data", "gem", "credentials")
+			case "default-xdg":
+				credential = filepath.Join(home, ".local", "share", "gem", "credentials")
+			}
+			goWrite(t, credential, "---\n:rubygems_api_key: CANARY_RUBY_CREDENTIAL\n", 0o600)
+			reference := credential
+			if kind == "alias" || kind == "credential-alias" {
+				alias := filepath.Join(home, "Gemfile.shared")
+				from, to := credential, alias
+				if kind == "credential-alias" {
+					if err := os.Rename(credential, alias); err != nil {
+						t.Fatal(err)
+					}
+					from, to = alias, credential
+				}
+				if err := os.Symlink(from, to); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				reference = alias
+			}
+			manifest := filepath.Join(root, "Gemfile")
+			if kind == "config" {
+				x.env["BUNDLE_USER_CONFIG"] = credential
+				goWrite(t, manifest, "source \"https://rubygems.org\"\n", 0o600)
+			} else {
+				goWrite(t, manifest, "eval_gemfile \""+filepath.ToSlash(reference)+"\"\n", 0o600)
+			}
+			inv, audit := scanner.Scan(t.Context(), goTestTarget(home), []string{root}, nil)
+			if x.reads[reference] != 0 || x.reads[credential] != 0 {
+				t.Fatal("credential contents were read")
+			}
+			if kind == "config" {
+				if !slices.Contains(audit.Reasons, "skipped_protected") {
+					t.Fatalf("audit reasons: %v", audit.Reasons)
+				}
+			} else if !slices.Contains(inv.Reasons, "skipped_protected") {
+				t.Fatalf("inventory reasons: %v", inv.Reasons)
+			}
+			found := false
+			for _, f := range audit.CredentialFiles {
+				if f.Path == credential && f.Presence == "present" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("credential existence was lost")
+			}
+		})
+	}
 }
 
 func rubyStub(name, version, platform string) string {
@@ -593,6 +655,20 @@ func TestRubyScanLimitsDeadlineAndGuards(t *testing.T) {
 	}
 	scanner, x = rubyTestScanner(t, home)
 	rubyFixtureEnv(x)
+
+	t.Run("truncated interpreter listing", func(t *testing.T) {
+		home := goTestHome(t)
+		root := filepath.Join(home, "projects")
+		versions := filepath.Join(home, ".rbenv", "versions")
+		for i := range maxRubyListEntries + 1 {
+			goWrite(t, filepath.Join(versions, strconv.Itoa(i)), "", 0o600)
+		}
+		scanner, _ := rubyTestScanner(t, home)
+		inv, audit := scanner.Scan(t.Context(), goTestTarget(home), []string{root}, nil)
+		if !slices.Contains(inv.Reasons, "entry_limit") || !slices.Contains(audit.Reasons, "entry_limit") {
+			t.Fatalf("truncated listing: inventory %v, audit %v", inv.Reasons, audit.Reasons)
+		}
+	})
 
 	// Every output budget keeps admitted records and leaves only fully
 	// collected sources complete.
