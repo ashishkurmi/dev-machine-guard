@@ -3,6 +3,8 @@ package selfupdate
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,5 +65,37 @@ func TestCheckSelfCheck(t *testing.T) {
 func TestSmokeBudgetExceedsSelfCheckWaits(t *testing.T) {
 	if knobDefaults[knobSmokeTimeout] < SelfCheckProbeTimeout+smokeMargin {
 		t.Fatalf("smoke %s < self-check probe %s + margin %s", knobDefaults[knobSmokeTimeout], SelfCheckProbeTimeout, smokeMargin)
+	}
+}
+
+func init() {
+	// "flood": writes 2 MiB to stdout and stderr.
+	helperRoles["flood"] = func() int {
+		chunk := []byte(strings.Repeat("x", 1<<20))
+		for i := 0; i < 2; i++ {
+			_, _ = os.Stdout.Write(chunk)
+			_, _ = os.Stderr.Write(chunk)
+		}
+		return 0
+	}
+}
+
+// Copilot 4356483290: os/exec copies a child's pipe with io.Copy, which
+// must not bypass the cap through an io.ReaderFrom.
+func TestLimitedBufferCapsExecPipe(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), envRole+"=flood")
+	stdout := &limitedBuffer{max: 64 << 10}
+	stderr := &limitedBuffer{max: 4 << 10}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 64<<10 || stderr.Len() != 4<<10 {
+		t.Fatalf("captured stdout %d, stderr %d bytes; want 65536, 4096", stdout.Len(), stderr.Len())
 	}
 }

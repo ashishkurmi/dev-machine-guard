@@ -31,22 +31,28 @@ type SelfCheck struct {
 	ConfigOK bool   `json:"config_ok"`
 }
 
-// limitedBuffer keeps at most max bytes.
+// limitedBuffer keeps at most max bytes. The buffer is a named field so no
+// io.ReaderFrom leaks out: io.Copy (os/exec's pipe copier) must go through
+// Write.
 type limitedBuffer struct {
-	bytes.Buffer
+	buf bytes.Buffer
 	max int
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if room := b.max - b.Len(); room > 0 {
+	if room := b.max - b.buf.Len(); room > 0 {
 		if len(p) > room {
-			b.Buffer.Write(p[:room])
+			b.buf.Write(p[:room])
 		} else {
-			b.Buffer.Write(p)
+			b.buf.Write(p)
 		}
 	}
 	return len(p), nil
 }
+
+func (b *limitedBuffer) Len() int       { return b.buf.Len() }
+func (b *limitedBuffer) Bytes() []byte  { return b.buf.Bytes() }
+func (b *limitedBuffer) String() string { return b.buf.String() }
 
 // RunSmoke runs `<exe> self-check` with the smoke time limit and checks
 // that it exits 0 reporting version want, a loaded config and a device id.
