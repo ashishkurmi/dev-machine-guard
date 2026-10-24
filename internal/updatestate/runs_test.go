@@ -3,11 +3,12 @@ package updatestate
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 func TestRunRecordsLifecycle(t *testing.T) {
@@ -284,7 +285,7 @@ func TestStaleOpenRecordsDoNotEvictTheFinalizedOne(t *testing.T) {
 // deadPID is the pid of a process that has already exited.
 func deadPID(t *testing.T) int {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd := proctest.Command(t, os.Args[0], "-test.run=^$")
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}

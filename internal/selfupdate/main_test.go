@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 // envHelper makes the test binary act as a staged agent: `<bin> self-check`
@@ -26,12 +28,18 @@ var helperRoles = map[string]func() int{}
 
 func TestMain(m *testing.M) {
 	if os.Getenv(envHelper) == "1" && len(os.Args) > 1 && os.Args[1] == "self-check" {
+		proctest.Guard()
 		os.Exit(helperSelfCheck())
 	}
-	if f, ok := helperRoles[os.Getenv(envRole)]; ok {
-		os.Exit(f())
+	if role := os.Getenv(envRole); helperRoles[role] != nil {
+		if role == "sleep" {
+			proctest.GuardDeadline() // TestSmokeKillsGrandchildren: the job must kill it
+		} else {
+			proctest.Guard()
+		}
+		os.Exit(helperRoles[role]())
 	}
-	os.Exit(m.Run())
+	os.Exit(proctest.Main(m))
 }
 
 func init() {

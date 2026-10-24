@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -33,6 +32,7 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/config"
 	"github.com/step-security/dev-machine-guard/internal/faultinject"
 	"github.com/step-security/dev-machine-guard/internal/lock"
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 	"github.com/step-security/dev-machine-guard/internal/telemetry"
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
 )
@@ -178,8 +178,8 @@ func (e *h1Env) tick(fault, trace string) (exit int) {
 	if trace == "" {
 		trace = filepath.Join(e.t.TempDir(), "trace")
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	cmd.Env = e.childEnv(fault, trace)
+	cmd := proctest.Command(e.t, os.Args[0], "-test.run=^$")
+	cmd.Env = append(cmd.Env, e.childEnv(fault, trace)...)
 	var out strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &out
 	tickStart := time.Now()
@@ -220,10 +220,10 @@ func (e *h1Env) tick(fault, trace string) (exit int) {
 	}
 }
 
-// childEnv is the updater subprocess environment (the smoke self-check it
-// starts inherits it).
+// childEnv is what the updater subprocess adds to its environment (the
+// smoke self-check it starts inherits it).
 func (e *h1Env) childEnv(fault, trace string) []string {
-	return append(os.Environ(),
+	return append([]string{},
 		envRole+"=updater", envHelper+"=1",
 		"DMG_SU_API="+e.api.URL(), "DMG_SU_SELF="+h1Base,
 		"DMG_SU_INSTALL="+e.L.InstallRoot, "DMG_SU_DATA="+e.L.DataRoot,

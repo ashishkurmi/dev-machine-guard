@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 func stubExit(t *testing.T) *int {
@@ -91,8 +93,8 @@ func TestPointMalformedSpecExits64(t *testing.T) {
 
 // A real process with a malformed spec exits 64 with the marker (not 2).
 func TestMalformedSpecProcessExit(t *testing.T) {
-	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
-	cmd.Env = append(os.Environ(), "FAULTINJECT_HELPER=1", "FAULTINJECT_MARKER="+filepath.Join(t.TempDir(), "m"), "DMG_FAULT=S6.state-temp@sytem:kill")
+	cmd := proctest.Command(t, os.Args[0], "-test.run=^TestHelperProcess$")
+	cmd.Env = append(cmd.Env, "FAULTINJECT_HELPER=1", "FAULTINJECT_MARKER="+filepath.Join(t.TempDir(), "m"), "DMG_FAULT=S6.state-temp@sytem:kill")
 	out, _ := cmd.CombinedOutput()
 	if code := cmd.ProcessState.ExitCode(); code != MalformedExitCode || !strings.Contains(string(out), MalformedMarker) {
 		t.Fatalf("exit %d, output %q", code, out)
@@ -161,6 +163,7 @@ func TestHelperProcess(t *testing.T) {
 	if os.Getenv("FAULTINJECT_HELPER") != "1" {
 		t.Skip("helper")
 	}
+	proctest.Guard()
 	os.Stdout.WriteString("ready\n")
 	_ = Point("S6.state-temp")
 	// Reached only if Point returned: stands in for caller cleanup.
@@ -174,8 +177,8 @@ func helper(t *testing.T, fault string) (*exec.Cmd, *bufio.Reader, string) {
 		t.Fatalf("bad fault spec %q: %v", fault, err)
 	}
 	marker := filepath.Join(t.TempDir(), "marker")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
-	cmd.Env = append(os.Environ(), "FAULTINJECT_HELPER=1", "FAULTINJECT_MARKER="+marker, "DMG_FAULT="+fault)
+	cmd := proctest.Command(t, os.Args[0], "-test.run=^TestHelperProcess$")
+	cmd.Env = append(cmd.Env, "FAULTINJECT_HELPER=1", "FAULTINJECT_MARKER="+marker, "DMG_FAULT="+fault)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)

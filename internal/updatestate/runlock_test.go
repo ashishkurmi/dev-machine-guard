@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 const raceFiles = 40
@@ -20,6 +22,7 @@ func TestRunRaceHelper(t *testing.T) {
 	if dir == "" {
 		t.Skip("helper")
 	}
+	proctest.Guard()
 	for time.Now().Before(mustUnix(os.Getenv("RUNRACE_START"))) {
 		time.Sleep(time.Millisecond)
 	}
@@ -80,8 +83,8 @@ func race(t *testing.T, agentRole string) int {
 	start := strconv.FormatInt(time.Now().Add(300*time.Millisecond).UnixNano(), 10)
 	var cmds []*exec.Cmd
 	for _, role := range []string{agentRole, "bootstrap"} {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestRunRaceHelper$")
-		cmd.Env = append(os.Environ(), "RUNRACE_DIR="+dir, "RUNRACE_ROLE="+role, "RUNRACE_START="+start)
+		cmd := proctest.Command(t, os.Args[0], "-test.run=^TestRunRaceHelper$")
+		cmd.Env = append(cmd.Env, "RUNRACE_DIR="+dir, "RUNRACE_ROLE="+role, "RUNRACE_START="+start)
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -21,6 +20,8 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/paths"
 	"github.com/step-security/dev-machine-guard/internal/progress"
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 // FR1-2: a real panic in the scan, before or after run-status "started",
@@ -77,6 +78,7 @@ func TestHelperHangScan(t *testing.T) {
 	if endpoint == "" {
 		t.Skip("subprocess helper")
 	}
+	proctest.Guard()
 	defer withEnterpriseConfig(t, endpoint)()
 	defer lock.SetTargetForTest(os.Getenv(envHangScan + "_LOCK"))()
 	mock := executor.NewMock()
@@ -101,8 +103,8 @@ func TestScanHangAfterStartedIsABadRun(t *testing.T) {
 	if err := updatestate.AppendRun(runs, updatestate.RunRecord{RunID: "h1", Version: "1.20.0"}); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperHangScan$")
-	cmd.Env = append(os.Environ(),
+	cmd := proctest.Command(t, os.Args[0], "-test.run=^TestHelperHangScan$")
+	cmd.Env = append(cmd.Env,
 		envHangScan+"="+srv.URL, envHangScan+"_LOCK="+target,
 		paths.HomeEnvVar+"="+t.TempDir(),
 		EnvRunRecord+"="+runs, EnvRunID+"=h1",

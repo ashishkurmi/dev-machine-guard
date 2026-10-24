@@ -4,9 +4,10 @@ import (
 	"bufio"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 func TestLockExclusiveNonBlocking(t *testing.T) {
@@ -38,6 +39,7 @@ func TestLockHelper(t *testing.T) {
 	if path == "" {
 		t.Skip("helper")
 	}
+	proctest.Guard()
 	if _, err := AcquireLock(path); err != nil {
 		os.Exit(90)
 	}
@@ -48,8 +50,8 @@ func TestLockHelper(t *testing.T) {
 
 func TestLockReleasedOnProcessDeath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "update.lock")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestLockHelper$")
-	cmd.Env = append(os.Environ(), "UPDATESTATE_LOCK_PATH="+path)
+	cmd := proctest.Command(t, os.Args[0], "-test.run=^TestLockHelper$")
+	cmd.Env = append(cmd.Env, "UPDATESTATE_LOCK_PATH="+path)
 	in, _ := cmd.StdinPipe()
 	out, _ := cmd.StdoutPipe()
 	if err := cmd.Start(); err != nil {

@@ -2,10 +2,11 @@ package updatestate
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 // TestCrashHelper is the subprocess body: it saves the "new" state and is
@@ -16,6 +17,7 @@ func TestCrashHelper(t *testing.T) {
 	if path == "" {
 		t.Skip("helper")
 	}
+	proctest.Guard()
 	if phase := os.Getenv("UPDATESTATE_HOOK_PHASE"); phase != "" {
 		checkpoint = func(name string) error {
 			if name == phase {
@@ -48,8 +50,8 @@ func runCrash(t *testing.T, prefix string, env ...string) (int, *State) {
 	if err := Save(path, oldCrashState()); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashHelper$")
-	cmd.Env = append(os.Environ(), append(env, "UPDATESTATE_CRASH_PATH="+path, "UPDATESTATE_PREFIX="+prefix)...)
+	cmd := proctest.Command(t, os.Args[0], "-test.run=^TestCrashHelper$")
+	cmd.Env = append(cmd.Env, append(env, "UPDATESTATE_CRASH_PATH="+path, "UPDATESTATE_PREFIX="+prefix)...)
 	_ = cmd.Run()
 	st, corrupt, err := Load(path)
 	if err != nil || corrupt || st == nil {

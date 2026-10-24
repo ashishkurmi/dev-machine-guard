@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 const envSleep = "DMG_TEST_SLEEP"
@@ -22,13 +24,14 @@ func TestHelperSleep(t *testing.T) {
 	if os.Getenv(envSleep) == "" {
 		t.Skip("subprocess helper")
 	}
+	proctest.Guard()
 	time.Sleep(time.Minute)
 }
 
 func startSleeper(t *testing.T, exe string) *exec.Cmd {
 	t.Helper()
-	cmd := exec.Command(exe, "-test.run=^TestHelperSleep$")
-	cmd.Env = append(os.Environ(), envSleep+"=1")
+	cmd := proctest.Command(t, exe, "-test.run=^TestHelperSleep$")
+	cmd.Env = append(cmd.Env, envSleep+"=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

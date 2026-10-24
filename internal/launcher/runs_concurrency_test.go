@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/updatestate"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 const envRunLoopRoot = "DMG_TEST_RUNLOOP_ROOT"
@@ -22,6 +24,7 @@ func TestHelperRunLoop(t *testing.T) {
 	if root == "" {
 		t.Skip("subprocess helper")
 	}
+	proctest.Guard()
 	l := updatestate.Layout{InstallRoot: filepath.Join(root, "install"), DataRoot: filepath.Join(root, "data")}
 	seq, last := 0, ""
 	logBuf := &bytes.Buffer{}
@@ -87,8 +90,8 @@ func TestRun_ConcurrentProcessesKeepEveryRecord(t *testing.T) {
 	var cmds []*exec.Cmd
 	var outs []*bytes.Buffer
 	for i := 0; i < 2; i++ {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperRunLoop$", "-test.count=1")
-		cmd.Env = append(os.Environ(), envRunLoopRoot+"="+root)
+		cmd := proctest.Command(t, os.Args[0], "-test.run=^TestHelperRunLoop$", "-test.count=1")
+		cmd.Env = append(cmd.Env, envRunLoopRoot+"="+root)
 		out := &bytes.Buffer{}
 		cmd.Stdout, cmd.Stderr = out, out
 		if err := cmd.Start(); err != nil {

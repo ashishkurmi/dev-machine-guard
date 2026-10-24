@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 const envTree = "DMG_TEST_TREE"
@@ -20,6 +22,10 @@ const envTree = "DMG_TEST_TREE"
 // this binary (inheriting the job), writes the child's pid and sleeps; the
 // child just sleeps. It does nothing in a normal test run.
 func TestHelperTree(t *testing.T) {
+	switch os.Getenv(envTree) {
+	case "parent", "child":
+		proctest.GuardDeadline() // the job must kill the tree
+	}
 	switch os.Getenv(envTree) {
 	case "parent":
 		child := exec.Command(os.Args[0], "-test.run=^TestHelperTree$")

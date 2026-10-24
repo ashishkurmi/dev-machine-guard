@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 func TestRunSmoke(t *testing.T) {
@@ -87,8 +88,8 @@ func TestLimitedBufferCapsExecPipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(exe)
-	cmd.Env = append(os.Environ(), envRole+"=flood")
+	cmd := proctest.Command(t, exe)
+	cmd.Env = append(cmd.Env, envRole+"=flood")
 	stdout := &limitedBuffer{max: 64 << 10}
 	stderr := &limitedBuffer{max: 4 << 10}
 	cmd.Stdout, cmd.Stderr = stdout, stderr

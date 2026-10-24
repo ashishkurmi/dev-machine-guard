@@ -5,12 +5,13 @@ package winproc
 import (
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/step-security/dev-machine-guard/internal/proctest"
 )
 
 // D29: a file is "released" only once nothing holds it: an open handle or
@@ -29,8 +30,8 @@ func TestStopUnderThenWaitReleased(t *testing.T) {
 	_ = out.Close()
 
 	// A running image holds its file.
-	cmd := exec.Command(exe, "-test.run=^TestHelperSleep$")
-	cmd.Env = append(os.Environ(), "WINPROC_HELPER_SLEEP=1")
+	cmd := proctest.Command(t, exe, "-test.run=^TestHelperSleep$")
+	cmd.Env = append(cmd.Env, "WINPROC_HELPER_SLEEP=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -70,5 +71,6 @@ func TestHelperSleep(t *testing.T) {
 	if os.Getenv("WINPROC_HELPER_SLEEP") != "1" {
 		t.Skip("helper")
 	}
+	proctest.Guard()
 	time.Sleep(time.Minute)
 }
