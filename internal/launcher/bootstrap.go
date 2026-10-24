@@ -609,10 +609,39 @@ func (b *Bootstrap) refreshMSIHelper() {
 		_ = os.Remove(tmp)
 		return
 	}
+	// Keep the previous install's helper until the MSI commits, so a
+	// failed upgrade's rollback can put it back.
+	prev := dst + msiHelperPrevSuffix
+	if _, err := os.Lstat(dst); err == nil {
+		_ = os.Remove(prev)
+		if err := os.Rename(dst, prev); err != nil {
+			b.logf("adopt-seed: MSI helper: keeping the previous copy: %v", err)
+		}
+	}
 	if err := os.Rename(tmp, dst); err != nil {
 		b.logf("adopt-seed: MSI helper: %v", err)
 		_ = os.Remove(tmp)
+		_ = os.Rename(prev, dst) // keep a helper in place
 	}
+}
+
+// msiHelperPrevSuffix names the previous install's MSI helper, kept from
+// adopt-seed until the MSI commits or rolls back.
+const msiHelperPrevSuffix = ".prev"
+
+// restoreMSIHelper is the rollback of refreshMSIHelper: the previous
+// install's helper replaces the failed build's.
+func (b *Bootstrap) restoreMSIHelper() {
+	dst := b.Layout.MSIHelperFile()
+	prev := dst + msiHelperPrevSuffix
+	if _, err := os.Lstat(prev); err != nil {
+		return
+	}
+	if err := os.Rename(prev, dst); err != nil {
+		b.logf("adopt-seed --rollback: restoring the MSI helper: %v", err)
+		return
+	}
+	b.logf("adopt-seed --rollback: restored the previous MSI helper")
 }
 
 func copyExecutable(src, dst string) error {
@@ -738,6 +767,7 @@ func (b *Bootstrap) adoptRollback() int {
 		return 0
 	}
 	defer l.Release()
+	b.restoreMSIHelper()
 	snapPath := b.Layout.AdoptSnapshotFile()
 	snap, age, err := updatestate.ReadAdoptSnapshot(snapPath)
 	switch {
@@ -822,6 +852,7 @@ func (b *Bootstrap) adoptCommit() int {
 	}
 	defer l.Release()
 	_ = os.Remove(b.Layout.AdoptSnapshotFile())
+	_ = os.Remove(b.Layout.MSIHelperFile() + msiHelperPrevSuffix)
 	return 0
 }
 
