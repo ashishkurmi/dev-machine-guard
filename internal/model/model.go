@@ -340,7 +340,7 @@ type SystemPackage struct {
 type RuntimeInstall struct {
 	Runtime         string `json:"runtime"`                     // node, python, php, java, go, ruby, deno, bun, dotnet
 	Version         string `json:"version"`                     // "unknown" when no strategy yielded one
-	VersionSource   string `json:"version_source"`              // file, pe, path, unknown
+	VersionSource   string `json:"version_source"`              // file, pe, pkg, binary, path, unknown
 	ExecutablePath  string `json:"executable_path"`             // symlink-resolved path of the binary
 	InstallRoot     string `json:"install_root,omitempty"`      // runtime home (parent of bin/, or the exe dir)
 	Source          string `json:"source"`                      // nvm, fnm, volta, brew, scoop, pyenv, sdkman, system, installer, manual, …

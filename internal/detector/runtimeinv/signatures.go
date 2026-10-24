@@ -42,14 +42,14 @@ func exact(names ...string) func(string) bool {
 // signatures is the runtime table. Adding a runtime means adding a row here
 // (plus a version reader if it ships a version file).
 var signatures = []signature{
-	{runtime: "node", matches: nodeExeRe.MatchString, versions: []versionStrategy{nodeHeaderVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
+	{runtime: "node", matches: nodeExeRe.MatchString, versions: []versionStrategy{nodeHeaderVersion, peVersionStrategy, pkgOwnerVersion, embeddedVersion(nodeEmbeddedRe), pathVersionStrategy}},
 	{runtime: "python", matches: pythonExeRe.MatchString, versions: []versionStrategy{pythonPatchlevelVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
 	{runtime: "php", matches: phpExeRe.MatchString, versions: []versionStrategy{phpHeaderVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
 	{runtime: "java", matches: exact("java"), versions: []versionStrategy{javaReleaseVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
 	{runtime: "go", matches: exact("go"), versions: []versionStrategy{goVersionFile, pkgOwnerVersion, pathVersionStrategy}},
 	{runtime: "ruby", matches: rubyExeRe.MatchString, versions: []versionStrategy{rubyConfigVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
-	{runtime: "deno", matches: exact("deno"), versions: []versionStrategy{peVersionStrategy, pathVersionStrategy}},
-	{runtime: "bun", matches: exact("bun"), versions: []versionStrategy{peVersionStrategy, pathVersionStrategy}},
+	{runtime: "deno", matches: exact("deno"), versions: []versionStrategy{peVersionStrategy, embeddedVersion(denoEmbeddedRe), pathVersionStrategy}},
+	{runtime: "bun", matches: exact("bun"), versions: []versionStrategy{peVersionStrategy, embeddedVersion(bunEmbeddedRe), pathVersionStrategy}},
 	// dotnet is one host binary serving several side-by-side runtimes; the
 	// scanner expands it to one record per shared/Microsoft.NETCore.App/<v>.
 	{runtime: "dotnet", matches: exact("dotnet")},
