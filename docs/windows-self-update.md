@@ -8,7 +8,10 @@ crashes.
 
 Packaging details (custom actions, the `AUTOUPDATE` property, upgrades and
 the Intune detection rule) are in
-[`packaging/windows/README.md`](../packaging/windows/README.md).
+[`packaging/windows/README.md`](../packaging/windows/README.md). For IT
+admins (SCCM/Intune setup, network and proxy requirements, verifying a
+device, and what each update event means), see the
+[admin guide](windows-self-update-admin.md).
 
 ## Layout
 

@@ -210,7 +210,10 @@ match the previous app entry. The MSI writes a stable
 every install. Intune detection rules read that value with
 `String Equals <msi version>`; the rule survives ProductCode regen and
 distinguishes versions across supersedence. See the Intune deployment
-guide for the detection-rule walkthrough.
+guide for the detection-rule walkthrough, and the
+[Windows self-update admin guide](../../docs/windows-self-update-admin.md#intune)
+for detection, supersedence, the opt-out and troubleshooting with
+self-update.
 
 Detection rule:
 
