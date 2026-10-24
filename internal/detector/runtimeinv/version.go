@@ -1,9 +1,11 @@
 package runtimeinv
 
 import (
+	"context"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
 )
@@ -13,6 +15,7 @@ const (
 	versionFromFile    = "file"
 	versionFromPE      = "pe"
 	versionFromPath    = "path"
+	versionFromPkg     = "pkg" // OS package database (rpm/dpkg)
 	versionFromUnknown = "unknown"
 )
 
@@ -43,6 +46,7 @@ var (
 	cDefineRe   = regexp.MustCompile(`(?m)^#define[ \t]+(\w+)[ \t]+"?([^"\s]+)"?`)
 	keyValueRe  = regexp.MustCompile(`(?m)^(\w+)="?([^"\r\n]*)"?`)
 	rbConfigRe  = regexp.MustCompile(`CONFIG\["RUBY_PROGRAM_VERSION"\]\s*=\s*"([^"]+)"`)
+	rbPartRe    = regexp.MustCompile(`CONFIG\["(MAJOR|MINOR|TEENY)"\]\s*=\s*"(\d+)"`)
 	numericRe   = regexp.MustCompile(`^\d+(\.\d+)*`)
 	pathVerRe   = regexp.MustCompile(`(?i)^(?:[a-z]+[-_]?)?v?(\d+\.\d+(?:\.\d+){0,2})`)
 	dotnetVerRe = regexp.MustCompile(`^\d+\.\d+\.\d+`)
@@ -152,18 +156,74 @@ func rubyConfigVersion(exec executor.Executor, _, root string) (versionResult, b
 			if err != nil {
 				continue
 			}
-			if m := rbConfigRe.FindSubmatch(data); m != nil {
-				return versionResult{version: string(m[1]), source: versionFromFile}, true
+			if v := rubyVersionFromConfig(data); v != "" {
+				return versionResult{version: v, source: versionFromFile}, true
 			}
 		}
 	}
 	return versionResult{}, false
 }
 
+// rubyVersionFromConfig reads RUBY_PROGRAM_VERSION, which some builds (rbenv,
+// ruby-build) leave as "$(MAJOR).$(MINOR).$(TEENY)"; then the parts are used.
+func rubyVersionFromConfig(data []byte) string {
+	if m := rbConfigRe.FindSubmatch(data); m != nil && !strings.Contains(string(m[1]), "$(") {
+		return string(m[1])
+	}
+	parts := map[string]string{}
+	for _, m := range rbPartRe.FindAllSubmatch(data, -1) {
+		parts[string(m[1])] = string(m[2])
+	}
+	if parts["MAJOR"] == "" || parts["MINOR"] == "" || parts["TEENY"] == "" {
+		return ""
+	}
+	return parts["MAJOR"] + "." + parts["MINOR"] + "." + parts["TEENY"]
+}
+
+// pkgOwnerVersion asks the Linux package database which package owns a
+// distro-installed runtime: distro builds ship no version headers unless the
+// -devel package is installed. It runs rpm / dpkg-query, never the runtime.
+func pkgOwnerVersion(exec executor.Executor, exe, _ string) (versionResult, bool) {
+	if exec.GOOS() != "linux" || attributeSource(exe, "") != "system" {
+		return versionResult{}, false
+	}
+	ctx := context.Background()
+	const timeout = 5 * time.Second
+	if out, _, code, err := exec.RunWithTimeout(ctx, timeout, "rpm", "-qf", "--queryformat", "%{VERSION}", exe); err == nil && code == 0 {
+		if v := cleanVersion(out); v != "" {
+			return versionResult{version: v, source: versionFromPkg}, true
+		}
+	}
+	out, _, code, err := exec.RunWithTimeout(ctx, timeout, "dpkg-query", "-S", exe)
+	if err != nil || code != 0 {
+		return versionResult{}, false
+	}
+	pkg, _, ok := strings.Cut(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), ": ")
+	if !ok || pkg == "" || strings.Contains(pkg, ",") { // "diversion by" / multiple owners
+		return versionResult{}, false
+	}
+	out, _, code, err = exec.RunWithTimeout(ctx, timeout, "dpkg-query", "-W", "-f=${Version}", pkg)
+	if err != nil || code != 0 {
+		return versionResult{}, false
+	}
+	v := strings.TrimSpace(out)
+	if _, after, found := strings.Cut(v, ":"); found { // drop the epoch
+		v = after
+	}
+	if v = cleanVersion(v); v == "" {
+		return versionResult{}, false
+	}
+	return versionResult{version: v, source: versionFromPkg}, true
+}
+
 // pathVersionStrategy takes the nearest version-looking path component between
 // the executable and two levels above the install root: nvm's v18.20.0,
 // Cellar/node/22.1.0, php-8.3.1-Win32-vs16-x64, jdk-21.0.2+13.
 func pathVersionStrategy(_ executor.Executor, exe, root string) (versionResult, bool) {
+	// A versioned executable name (python3.13, php8.2) is the most specific.
+	if m := pathVerRe.FindStringSubmatch(strings.TrimSuffix(filepath.Base(exe), ".exe")); m != nil {
+		return versionResult{version: m[1], source: versionFromPath}, true
+	}
 	stop := filepath.Dir(filepath.Dir(root))
 	for d := filepath.Dir(exe); ; d = filepath.Dir(d) {
 		if m := pathVerRe.FindStringSubmatch(filepath.Base(d)); m != nil {

@@ -18,6 +18,7 @@ var sourceRules = []struct{ fragment, source string }{
 	{"/appdata/roaming/nvm/", "nvm"}, // nvm-windows default root
 	{"/fnm/node-versions/", "fnm"},
 	{"/volta/tools/image/", "volta"},
+	{"/.volta/tools/image/", "volta"}, // ~/.volta on Linux/macOS
 	{"/n/versions/", "n"},
 	{"/nodist/", "nodist"},
 	{"/pnpm/nodejs/", "pnpm"},
@@ -36,6 +37,8 @@ var sourceRules = []struct{ fragment, source string }{
 	{"/.rvm/rubies/", "rvm"},
 	{"/.goenv/versions/", "goenv"},
 	{"/golang.org/toolchain@", "go-toolchain"},
+	{"/sdk/go1.", "go-dl"}, // golang.org/dl downloads (~/sdk/go1.x)
+	{"/.dotnet/", "dotnet-install"},
 	{"/cellar/", "brew"},
 	{"/caskroom/", "brew"},
 	{"/opt/homebrew/", "brew"},

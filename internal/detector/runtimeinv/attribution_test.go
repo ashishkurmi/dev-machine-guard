@@ -81,6 +81,11 @@ func TestMatchSignature(t *testing.T) {
 		{"java", "darwin", "java"},
 		{"javac", "darwin", ""},
 		{"Python", "darwin", ""}, // framework library, not the interpreter
+		{"node-22", "linux", "node"},
+		{"ruby-mri", "linux", "ruby"},
+		{"ruby3.3", "linux", "ruby"},
+		{"node-gyp", "linux", ""},
+		{"rubocop", "linux", ""},
 	}
 	for _, c := range cases {
 		got := ""

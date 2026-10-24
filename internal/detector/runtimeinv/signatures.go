@@ -22,6 +22,10 @@ type signature struct {
 var (
 	pythonExeRe = regexp.MustCompile(`^python([23](\.\d+)?)?$`)
 	phpExeRe    = regexp.MustCompile(`^php(\d+(\.\d+)?)?$`)
+	// Distros install versioned binaries behind the plain name: Fedora's
+	// node -> node-22, ruby (a wrapper script) -> ruby-mri.
+	nodeExeRe = regexp.MustCompile(`^node(js)?(-?\d+(\.\d+)*)?$`)
+	rubyExeRe = regexp.MustCompile(`^ruby(-mri|-?\d+(\.\d+)*)?$`)
 )
 
 func exact(names ...string) func(string) bool {
@@ -38,12 +42,12 @@ func exact(names ...string) func(string) bool {
 // signatures is the runtime table. Adding a runtime means adding a row here
 // (plus a version reader if it ships a version file).
 var signatures = []signature{
-	{runtime: "node", matches: exact("node", "nodejs"), versions: []versionStrategy{nodeHeaderVersion, peVersionStrategy, pathVersionStrategy}},
-	{runtime: "python", matches: pythonExeRe.MatchString, versions: []versionStrategy{pythonPatchlevelVersion, peVersionStrategy, pathVersionStrategy}},
-	{runtime: "php", matches: phpExeRe.MatchString, versions: []versionStrategy{phpHeaderVersion, peVersionStrategy, pathVersionStrategy}},
-	{runtime: "java", matches: exact("java"), versions: []versionStrategy{javaReleaseVersion, peVersionStrategy, pathVersionStrategy}},
-	{runtime: "go", matches: exact("go"), versions: []versionStrategy{goVersionFile, pathVersionStrategy}},
-	{runtime: "ruby", matches: exact("ruby"), versions: []versionStrategy{rubyConfigVersion, peVersionStrategy, pathVersionStrategy}},
+	{runtime: "node", matches: nodeExeRe.MatchString, versions: []versionStrategy{nodeHeaderVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
+	{runtime: "python", matches: pythonExeRe.MatchString, versions: []versionStrategy{pythonPatchlevelVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
+	{runtime: "php", matches: phpExeRe.MatchString, versions: []versionStrategy{phpHeaderVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
+	{runtime: "java", matches: exact("java"), versions: []versionStrategy{javaReleaseVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
+	{runtime: "go", matches: exact("go"), versions: []versionStrategy{goVersionFile, pkgOwnerVersion, pathVersionStrategy}},
+	{runtime: "ruby", matches: rubyExeRe.MatchString, versions: []versionStrategy{rubyConfigVersion, peVersionStrategy, pkgOwnerVersion, pathVersionStrategy}},
 	{runtime: "deno", matches: exact("deno"), versions: []versionStrategy{peVersionStrategy, pathVersionStrategy}},
 	{runtime: "bun", matches: exact("bun"), versions: []versionStrategy{peVersionStrategy, pathVersionStrategy}},
 	// dotnet is one host binary serving several side-by-side runtimes; the

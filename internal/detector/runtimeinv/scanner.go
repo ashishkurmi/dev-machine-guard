@@ -171,7 +171,7 @@ func (s *Scanner) walk(ctx context.Context, root string, depth int, skipTop []st
 			// resolve to directories the walk reaches directly.
 			if e.IsDir() {
 				lower := strings.ToLower(name)
-				if skipDirs[lower] || (it.top && contains(skipTop, lower)) || isGoModCache(it.dir, lower) {
+				if skipDirs[lower] || (it.top && contains(skipTop, lower)) || isGoModCache(it.dir, lower) || s.isCondaPkgCache(it.dir, lower) {
 					continue
 				}
 				if it.depth > 0 {
@@ -211,7 +211,7 @@ func (s *Scanner) consider(sig *signature, path string) {
 	if s.goos != "windows" && info.Mode().Perm()&0o111 == 0 {
 		return
 	}
-	if s.isShim(real) {
+	if s.isShim(real) || s.isLauncher(sig, real) {
 		return
 	}
 	exeKey := sig.runtime + "|" + s.pathKey(real)
@@ -236,6 +236,9 @@ func (s *Scanner) consider(sig *signature, path string) {
 		Scope:          s.scope(real),
 		BundledBy:      bundledBy(real),
 		Arch:           binaryArch(real),
+	}
+	if base.BundledBy == "" {
+		base.BundledBy = snapBundler(sig.runtime, real)
 	}
 	if base.BundledBy != "" {
 		base.Source = "bundled"
@@ -271,6 +274,23 @@ func (s *Scanner) add(r model.RuntimeInstall) {
 	}
 	s.seenRoot[k] = true
 	s.out = append(s.out, r)
+}
+
+// isLauncher reports version-manager shims and wrappers, which select a
+// runtime rather than being one:
+//   - a link whose target is not itself a runtime binary (volta's
+//     node -> volta-shim);
+//   - a script (pyenv/rbenv/asdf shims are shell scripts; runtimes are
+//     compiled binaries);
+//   - a Scoop shim, marked by a sibling <name>.shim file.
+func (s *Scanner) isLauncher(sig *signature, real string) bool {
+	if t := matchSignature(filepath.Base(real), s.goos); t == nil || t.runtime != sig.runtime {
+		return true
+	}
+	if s.goos == "windows" {
+		return s.exec.FileExists(strings.TrimSuffix(real, filepath.Ext(real)) + ".shim")
+	}
+	return isScript(real)
 }
 
 // isShim reports binaries that are launchers rather than runtimes: the macOS
@@ -309,6 +329,12 @@ func installRoot(exe string) string {
 		return filepath.Dir(d)
 	}
 	return d
+}
+
+// isCondaPkgCache reports a conda install's pkgs/ dir: extracted package
+// tarballs (a dependency store), not environments.
+func (s *Scanner) isCondaPkgCache(parent, lowerName string) bool {
+	return lowerName == "pkgs" && s.exec.DirExists(filepath.Join(parent, "conda-meta"))
 }
 
 // isGoModCache reports $GOPATH/pkg/mod: a dependency store of hundreds of
