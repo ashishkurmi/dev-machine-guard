@@ -56,11 +56,16 @@ type Scanner struct {
 	entries     int
 	rootEntries int
 	rootBudget  int
-	truncated   bool
-	walked      map[string]int // dir -> remaining depth it was walked with
-	seenExe     map[string]bool
-	seenRoot    map[string]bool
-	out         []model.RuntimeInstall
+	curRoot     string
+	// whole is set when the scan stopped for a reason that affects every
+	// root (deadline, global cap); truncRoots lists roots that only ran out
+	// of their own budget.
+	whole      bool
+	truncRoots []string
+	walked     map[string]int // dir -> remaining depth it was walked with
+	seenExe    map[string]bool
+	seenRoot   map[string]bool
+	out        []model.RuntimeInstall
 }
 
 // NewScanner returns a scanner for the given user home ("" = resolve from the
@@ -75,9 +80,11 @@ func NewScanner(exec executor.Executor, home string) *Scanner {
 }
 
 // Scan walks all roots and returns the inventory, sorted by runtime then path.
-// It stops early (truncated=true) on ctx cancellation or the entry cap.
-func (s *Scanner) Scan(ctx context.Context) (runtimes []model.RuntimeInstall, truncated bool) {
-	s.entries, s.truncated = 0, false
+// truncated reports an incomplete walk. truncatedRoots is non-empty only when
+// every truncation was a per-root budget hit, so installs outside those roots
+// are known to be complete; on a deadline or the global cap it is nil.
+func (s *Scanner) Scan(ctx context.Context) (runtimes []model.RuntimeInstall, truncated bool, truncatedRoots []string) {
+	s.entries, s.whole, s.truncRoots = 0, false, nil
 	s.walked = map[string]int{}
 	s.seenExe = map[string]bool{}
 	s.seenRoot = map[string]bool{}
@@ -89,10 +96,10 @@ func (s *Scanner) Scan(ctx context.Context) (runtimes []model.RuntimeInstall, tr
 	}
 	for _, r := range roots {
 		if ctx.Err() != nil || s.entries >= maxEntries {
-			s.truncated = true
+			s.whole = true
 			break
 		}
-		s.rootEntries, s.rootBudget = 0, r.budget
+		s.rootEntries, s.rootBudget, s.curRoot = 0, r.budget, r.path
 		if s.rootBudget <= 0 {
 			s.rootBudget = defaultRootBudget
 		}
@@ -107,7 +114,10 @@ func (s *Scanner) Scan(ctx context.Context) (runtimes []model.RuntimeInstall, tr
 		}
 		return s.out[i].Version < s.out[j].Version
 	})
-	return s.out, s.truncated
+	if s.whole {
+		return s.out, true, nil
+	}
+	return s.out, len(s.truncRoots) > 0, s.truncRoots
 }
 
 // walk visits a root breadth-first, so when the entry budget runs out it is
@@ -142,14 +152,16 @@ func (s *Scanner) walk(ctx context.Context, root string, depth int, skipTop []st
 			continue
 		}
 		for _, e := range ents {
-			if ctx.Err() != nil {
-				s.truncated = true
+			if ctx.Err() != nil || s.entries >= maxEntries {
+				s.whole = true
 				return
 			}
 			s.entries++
 			s.rootEntries++
-			if s.entries >= maxEntries || s.rootEntries >= s.rootBudget {
-				s.truncated = true
+			if s.rootEntries >= s.rootBudget {
+				if !contains(s.truncRoots, s.curRoot) {
+					s.truncRoots = append(s.truncRoots, s.curRoot)
+				}
 				return
 			}
 			name := e.Name()
@@ -318,7 +330,7 @@ func contains(list []string, s string) bool {
 // ScanResult runs a scan for the logged-in user and packages it for telemetry.
 func ScanResult(ctx context.Context, exec executor.Executor) *model.RuntimeScanResult {
 	start := time.Now()
-	runtimes, truncated := NewScanner(exec, "").Scan(ctx)
+	runtimes, truncated, truncatedRoots := NewScanner(exec, "").Scan(ctx)
 	if runtimes == nil {
 		runtimes = []model.RuntimeInstall{}
 	}
@@ -326,6 +338,7 @@ func ScanResult(ctx context.Context, exec executor.Executor) *model.RuntimeScanR
 		Runtimes:       runtimes,
 		RuntimesCount:  len(runtimes),
 		Truncated:      truncated,
+		TruncatedRoots: truncatedRoots,
 		ScanDurationMs: time.Since(start).Milliseconds(),
 	}
 }

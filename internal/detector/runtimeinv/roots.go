@@ -8,6 +8,10 @@ import (
 // homeBudget is the entry budget of the generic home walk.
 const homeBudget = 1_000_000
 
+// appsBudget covers app install trees (/Applications, Program Files), which
+// on developer machines routinely exceed the default per-root budget.
+const appsBudget = 400_000
+
 // roots lists what to walk on this OS: a depth-capped walk of the user's
 // home and the machine install locations, plus deeper walks of known
 // version-manager / installer roots whose runtimes sit below the generic cap.
@@ -42,7 +46,7 @@ func (s *Scanner) unixRoots(darwin bool) []walkRoot {
 		{h(".local", "share", "fnm"), 6, nil, 0},
 		{h(".fnm"), 6, nil, 0},
 		{h(".local", "share", "mise", "installs"), 5, nil, 0},
-		{h(".local", "share", "pnpm"), 6, nil, 0},
+		{h(".local", "share", "pnpm", "nodejs"), 3, nil, 0}, // `pnpm env` installs; the store beside it is a dependency store
 		{h(".local", "share", "uv", "python"), 4, nil, 0},
 		{h(".asdf", "installs"), 5, nil, 0},
 		{h(".pyenv", "versions"), 3, nil, 0},
@@ -71,13 +75,13 @@ func (s *Scanner) unixRoots(darwin bool) []walkRoot {
 	if darwin {
 		roots = append(roots,
 			walkRoot{h("Library", "Application Support", "fnm"), 6, nil, 0},
-			walkRoot{h("Library", "pnpm"), 6, nil, 0},
+			walkRoot{h("Library", "pnpm", "nodejs"), 3, nil, 0},
 			walkRoot{h("Library", "Java", "JavaVirtualMachines"), 5, nil, 0},
 			walkRoot{h("Library", "Application Support", "JetBrains", "Toolbox", "apps"), 8, nil, 0},
 			walkRoot{"/Library/Java/JavaVirtualMachines", 5, nil, 0},
 			walkRoot{"/Library/Frameworks/Python.framework/Versions", 3, nil, 0},
 			walkRoot{"/Library/Developer/CommandLineTools/usr/bin", 0, nil, 0},
-			walkRoot{"/Applications", 7, nil, 0},
+			walkRoot{"/Applications", 7, nil, appsBudget},
 		)
 	}
 	for _, kv := range []struct {
@@ -123,15 +127,15 @@ func (s *Scanner) windowsRoots() []walkRoot {
 		{join(appData, "fnm"), 5, nil, 0},
 		{join(localAppData, "fnm"), 5, nil, 0},
 		{join(localAppData, "Volta"), 7, nil, 0},
-		{join(localAppData, "pnpm"), 5, nil, 0},
+		{join(localAppData, "pnpm", "nodejs"), 3, nil, 0},
 		{join(localAppData, "Programs"), 5, nil, 0},
 		{join(localAppData, "Microsoft", "WinGet", "Packages"), 5, nil, 0},
 		{join(localAppData, "JetBrains", "Toolbox", "apps"), 6, nil, 0},
 		{h("go", "pkg", "mod", "golang.org"), 3, nil, 0}, // GOTOOLCHAIN downloads
 
 		// Machine locations.
-		{programFiles, 5, []string{"windowsapps"}, 0},
-		{programFilesX86, 5, nil, 0},
+		{programFiles, 5, []string{"windowsapps"}, appsBudget},
+		{programFilesX86, 5, nil, appsBudget},
 		{join(programFiles, "Microsoft Visual Studio"), 9, nil, 0},
 		{join(programFilesX86, "Microsoft Visual Studio"), 9, nil, 0},
 		{programData, 5, nil, 0},

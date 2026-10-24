@@ -355,7 +355,8 @@ type RuntimeInstall struct {
 type RuntimeScanResult struct {
 	Runtimes       []RuntimeInstall `json:"runtimes"`
 	RuntimesCount  int              `json:"runtimes_count"`
-	Truncated      bool             `json:"truncated,omitempty"` // walk stopped early (entry cap or deadline)
+	Truncated      bool             `json:"truncated,omitempty"`       // walk stopped early (entry cap or deadline)
+	TruncatedRoots []string         `json:"truncated_roots,omitempty"` // set only when every truncation was a per-root budget hit: installs outside these roots are complete
 	Error          string           `json:"error,omitempty"`
 	ScanDurationMs int64            `json:"scan_duration_ms"`
 }

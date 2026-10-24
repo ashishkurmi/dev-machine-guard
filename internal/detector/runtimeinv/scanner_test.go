@@ -58,7 +58,7 @@ func (f *fixture) symlink(rel, target string) {
 func (f *fixture) scan(goos, home string, roots ...walkRoot) []model.RuntimeInstall {
 	f.t.Helper()
 	s := &Scanner{exec: executor.NewReal(), goos: goos, home: home, rootsOverride: roots}
-	out, truncated := s.Scan(context.Background())
+	out, truncated, _ := s.Scan(context.Background())
 	if truncated {
 		f.t.Fatal("unexpected truncation")
 	}
@@ -276,8 +276,9 @@ func TestScanCancelledIsTruncated(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	s := &Scanner{exec: executor.NewReal(), goos: "linux", rootsOverride: []walkRoot{{f.root, 3, nil, 0}}}
-	if _, truncated := s.Scan(ctx); !truncated {
-		t.Fatal("cancelled scan should report truncated")
+	_, truncated, roots := s.Scan(ctx)
+	if !truncated || roots != nil {
+		t.Fatalf("cancelled scan: truncated=%v roots=%v, want true and nil (whole scan partial)", truncated, roots)
 	}
 }
 
@@ -290,11 +291,32 @@ func TestScanBudgetPrefersShallow(t *testing.T) {
 	}
 	f.file("z/node", "", true)
 	s := &Scanner{exec: executor.NewReal(), goos: "linux", rootsOverride: []walkRoot{{f.root, 5, nil, 20}}}
-	out, truncated := s.Scan(context.Background())
-	if !truncated {
-		t.Fatal("expected budget truncation")
+	out, truncated, roots := s.Scan(context.Background())
+	if !truncated || len(roots) != 1 || roots[0] != f.root {
+		t.Fatalf("budget truncation: truncated=%v roots=%v, want [%s]", truncated, roots, f.root)
 	}
 	if len(out) != 1 || out[0].ExecutablePath != f.path("z/node") {
 		t.Fatalf("shallow node missed: %+v", out)
+	}
+}
+
+// Only the root that exhausted its own budget is reported; a later root that
+// completes is not, so the backend can replace installs outside it.
+func TestScanTruncatedRootsListsOnlyExhaustedRoot(t *testing.T) {
+	f := newFixture(t)
+	for i := 0; i < 30; i++ {
+		f.file(fmt.Sprintf("big/d/f%02d", i), "", false)
+	}
+	f.file("small/bin/node", "", true)
+	s := &Scanner{exec: executor.NewReal(), goos: "linux", rootsOverride: []walkRoot{
+		{f.path("big"), 3, nil, 10},
+		{f.path("small"), 3, nil, 0},
+	}}
+	out, truncated, roots := s.Scan(context.Background())
+	if !truncated || len(roots) != 1 || roots[0] != f.path("big") {
+		t.Fatalf("truncated=%v roots=%v, want only %s", truncated, roots, f.path("big"))
+	}
+	if len(out) != 1 {
+		t.Fatalf("node under the complete root missed: %+v", out)
 	}
 }
