@@ -171,7 +171,7 @@ func (s *Scanner) walk(ctx context.Context, root string, depth int, skipTop []st
 			// resolve to directories the walk reaches directly.
 			if e.IsDir() {
 				lower := strings.ToLower(name)
-				if skipDirs[lower] || (it.top && contains(skipTop, lower)) || isGoModCache(it.dir, lower) || s.isCondaPkgCache(it.dir, lower) {
+				if skipDirs[lower] || (it.top && contains(skipTop, lower)) || isGoModCache(it.dir, lower) || s.isCondaPkgCache(it.dir, lower) || isVenvTemplates(it.dir, lower) {
 					continue
 				}
 				if it.depth > 0 {
@@ -211,7 +211,7 @@ func (s *Scanner) consider(sig *signature, path string) {
 	if s.goos != "windows" && info.Mode().Perm()&0o111 == 0 {
 		return
 	}
-	if s.isShim(real) || s.isLauncher(sig, real) {
+	if s.isShim(real) || inLauncherDir(real) || s.isLauncher(sig, real) {
 		return
 	}
 	exeKey := sig.runtime + "|" + s.pathKey(real)
@@ -329,6 +329,14 @@ func installRoot(exe string) string {
 		return filepath.Dir(d)
 	}
 	return d
+}
+
+// isVenvTemplates reports the stdlib venv package's scripts dir
+// (Lib\venv\scripts\nt\python.exe on Windows): launcher templates copied
+// into new virtualenvs, not an install.
+func isVenvTemplates(parent, lowerName string) bool {
+	return lowerName == "scripts" && strings.EqualFold(filepath.Base(parent), "venv") &&
+		strings.EqualFold(filepath.Base(filepath.Dir(parent)), "lib")
 }
 
 // isCondaPkgCache reports a conda install's pkgs/ dir: extracted package

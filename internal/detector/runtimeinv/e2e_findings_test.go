@@ -127,3 +127,43 @@ func TestE2EFedoraVersionedSystemBinaries(t *testing.T) {
 		t.Fatalf("got %+v", out)
 	}
 }
+
+// Regressions from the Windows E2E run (ledger-e2e-windows.md F2–F4, F6).
+func TestE2EWindowsLaunchersTemplatesBundled(t *testing.T) {
+	f := newFixture(t)
+	orig := peVersion
+	t.Cleanup(func() { peVersion = orig })
+	peVersion = func(string) string { return "" }
+
+	f.file("Program Files/Volta/node.exe", "MZ", false) // volta shim copy
+	f.file("Program Files/Volta/volta-shim.exe", "MZ", false)
+	f.file("Users/dev/scoop/shims/php.exe", "MZ", false) // scoop shim
+	f.file("Users/dev/scoop/shims/php.shim", "path = x", false)
+	f.file("Python312/python.exe", "MZ", false)                     // real install
+	f.file("Python312/Lib/venv/scripts/nt/python.exe", "MZ", false) // stdlib template
+	f.file("Users/dev/AppData/Local/Programs/cursor/resources/app/resources/helpers/node.exe", "MZ", false)
+	f.file("Users/dev/AppData/Local/Microsoft/WinGet/Packages/Eclipse/eclipse/plugins/org.eclipse.justj.openjdk.hotspot.jre.full.win32.x86_64_21.0.5/jre/bin/java.exe", "MZ", false)
+
+	out := f.scan("windows", f.path("Users/dev"),
+		walkRoot{f.path("Program Files"), 5, nil, 0},
+		walkRoot{f.path("Users/dev"), 12, nil, 0},
+		walkRoot{f.path("Python312"), 6, nil, 0},
+	)
+	got := map[string]string{}
+	for _, r := range out {
+		got[r.ExecutablePath] = r.BundledBy
+	}
+	want := map[string]string{
+		f.path("Python312/python.exe"): "",
+		f.path("Users/dev/AppData/Local/Programs/cursor/resources/app/resources/helpers/node.exe"):                                                                          "cursor",
+		f.path("Users/dev/AppData/Local/Microsoft/WinGet/Packages/Eclipse/eclipse/plugins/org.eclipse.justj.openjdk.hotspot.jre.full.win32.x86_64_21.0.5/jre/bin/java.exe"): "Eclipse",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for p, b := range want {
+		if gb, ok := got[p]; !ok || gb != b {
+			t.Errorf("%s: bundled_by=%q present=%v, want %q", p, gb, ok, b)
+		}
+	}
+}

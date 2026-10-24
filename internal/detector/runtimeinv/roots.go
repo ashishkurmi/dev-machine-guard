@@ -129,7 +129,7 @@ func (s *Scanner) windowsRoots() []walkRoot {
 		{join(localAppData, "Volta"), 7, nil, 0},
 		{join(localAppData, "pnpm", "nodejs"), 3, nil, 0},
 		{join(localAppData, "Programs"), 5, nil, 0},
-		{join(localAppData, "Microsoft", "WinGet", "Packages"), 5, nil, 0},
+		{join(localAppData, "Microsoft", "WinGet", "Packages"), 9, nil, 0}, // portable apps nest bundled runtimes deep (Eclipse justj JRE)
 		{join(localAppData, "JetBrains", "Toolbox", "apps"), 6, nil, 0},
 		{h("go", "pkg", "mod", "golang.org"), 3, nil, 0}, // GOTOOLCHAIN downloads
 

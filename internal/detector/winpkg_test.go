@@ -129,6 +129,7 @@ func TestWindowsPkgChocoScoopWinget(t *testing.T) {
     <id>nodejs.install</id>
     <version>20.11.1</version>
     <authors>Node.js Foundation</authors>
+    <owners>chocolatey-community</owners>
     <projectUrl>https://nodejs.org/</projectUrl>
   </metadata>
 </package>`))
@@ -141,7 +142,9 @@ func TestWindowsPkgChocoScoopWinget(t *testing.T) {
 	m.SetFile("/C/Users/dev/scoop/apps/php/current/manifest.json", []byte(`{"version":"8.3.1","homepage":"https://php.net","license":"PHP-3.01"}`))
 	m.SetFile("/C/Users/dev/scoop/apps/php/current/install.json", []byte(`{"bucket":"main","architecture":"64bit"}`))
 	m.SetSymlink("/C/Users/dev/scoop/apps/php/current", "/C/Users/dev/scoop/apps/php/8.3.1")
-	m.SetFile("/C/Users/dev/scoop/apps/nodejs-lts/current/manifest.json", []byte(`{"version":"20.11.1","license":{"identifier":"MIT"}}`))
+	// Scoop 0.6 names its files scoop-manifest.json / scoop-install.json.
+	m.SetFile("/C/Users/dev/scoop/apps/nodejs-lts/current/scoop-manifest.json", []byte(`{"version":"20.11.1","license":{"identifier":"MIT"}}`))
+	m.SetFile("/C/Users/dev/scoop/apps/nodejs-lts/current/scoop-install.json", []byte(`{"bucket":"main"}`))
 	// winget portable.
 	m.SetDirEntries("/C/Users/dev/AppData/Local/Microsoft/WinGet/Packages", []os.DirEntry{
 		executor.MockDirEntry("Schniz.fnm_Microsoft.Winget.Source_8wekyb3d8bbwe", true),
@@ -151,7 +154,7 @@ func TestWindowsPkgChocoScoopWinget(t *testing.T) {
 
 	choco := res["choco"]
 	if len(choco.Packages) != 1 || choco.Packages[0].Name != "nodejs.install" || choco.Packages[0].Version != "20.11.1" ||
-		choco.Packages[0].Maintainer != "Node.js Foundation" {
+		choco.Packages[0].Vendor != "Node.js Foundation" || choco.Packages[0].Maintainer != "chocolatey-community" {
 		t.Errorf("choco = %+v", choco.Packages)
 	}
 	scoop := res["scoop"]
@@ -166,7 +169,7 @@ func TestWindowsPkgChocoScoopWinget(t *testing.T) {
 				t.Errorf("scoop php = %+v", p)
 			}
 		case "nodejs-lts":
-			if p.Version != "20.11.1" || p.License != "MIT" {
+			if p.Version != "20.11.1" || p.License != "MIT" || p.Source != "main" {
 				t.Errorf("scoop node = %+v", p)
 			}
 		}

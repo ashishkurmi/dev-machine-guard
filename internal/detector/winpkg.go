@@ -181,7 +181,8 @@ type nuspec struct {
 	Metadata struct {
 		ID         string `xml:"id"`
 		Version    string `xml:"version"`
-		Authors    string `xml:"authors"`
+		Authors    string `xml:"authors"` // the software's vendor
+		Owners     string `xml:"owners"`  // the Chocolatey package maintainers
 		ProjectURL string `xml:"projectUrl"`
 		License    string `xml:"licenseUrl"`
 	} `xml:"metadata"`
@@ -213,14 +214,17 @@ func (d *WindowsPkgDetector) chocoPackages(root string) []model.SystemPackage {
 		p := model.SystemPackage{
 			Name:        n.Metadata.ID,
 			Version:     n.Metadata.Version,
-			Maintainer:  n.Metadata.Authors,
+			Vendor:      n.Metadata.Authors,
+			Maintainer:  n.Metadata.Owners,
 			URL:         n.Metadata.ProjectURL,
 			License:     n.Metadata.License,
 			InstallPath: dir,
 			Source:      "chocolatey",
 			Scope:       "machine",
 		}
-		if info, err := d.exec.Stat(path); err == nil && !info.ModTime().IsZero() {
+		// The package dir is created at install; the nuspec keeps the
+		// timestamp it had inside the .nupkg.
+		if info, err := d.exec.Stat(dir); err == nil && !info.ModTime().IsZero() {
 			p.InstallTimeUnix = info.ModTime().Unix()
 		}
 		out = append(out, p)
@@ -250,7 +254,7 @@ func (d *WindowsPkgDetector) scoopPackages(root, scope string) []model.SystemPac
 	var out []model.SystemPackage
 	for _, e := range ents {
 		current := filepath.Join(apps, e.Name(), "current")
-		data, err := d.exec.ReadFile(filepath.Join(current, "manifest.json"))
+		data, err := readFirst(d.exec, current, "scoop-manifest.json", "manifest.json")
 		if err != nil {
 			continue
 		}
@@ -269,7 +273,7 @@ func (d *WindowsPkgDetector) scoopPackages(root, scope string) []model.SystemPac
 		if real, err := d.exec.EvalSymlinks(current); err == nil {
 			p.InstallPath = real
 		}
-		if data, err := d.exec.ReadFile(filepath.Join(current, "install.json")); err == nil {
+		if data, err := readFirst(d.exec, current, "scoop-install.json", "install.json"); err == nil {
 			var inst scoopInstall
 			if json.Unmarshal(data, &inst) == nil {
 				p.Source = inst.Bucket
@@ -279,6 +283,19 @@ func (d *WindowsPkgDetector) scoopPackages(root, scope string) []model.SystemPac
 		out = append(out, p)
 	}
 	return out
+}
+
+// readFirst reads the first of names present in dir. Scoop 0.6 renamed
+// manifest.json / install.json to scoop-manifest.json / scoop-install.json.
+func readFirst(exec executor.Executor, dir string, names ...string) ([]byte, error) {
+	var err error
+	for _, n := range names {
+		var data []byte
+		if data, err = exec.ReadFile(filepath.Join(dir, n)); err == nil {
+			return data, nil
+		}
+	}
+	return nil, err
 }
 
 func scoopLicense(raw json.RawMessage) string {

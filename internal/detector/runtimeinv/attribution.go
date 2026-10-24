@@ -99,8 +99,28 @@ var (
 	jbrRe        = regexp.MustCompile(`(?i)[/\\]([^/\\]+)[/\\]jbr[/\\]`)
 	vsNodeRe     = regexp.MustCompile(`(?i)[/\\]microsoft visual studio[/\\]`)
 	adobeRe      = regexp.MustCompile(`(?i)[/\\]adobe[/\\]`)
-	asarUnpackRe = regexp.MustCompile(`(?i)[/\\]([^/\\]+)[/\\]resources[/\\]app\.asar\.unpacked[/\\]`)
+	electronRe   = regexp.MustCompile(`(?i)[/\\]([^/\\]+)[/\\]resources[/\\]app(?:\.asar\.unpacked)?[/\\]`)
+	eclipseJreRe = regexp.MustCompile(`(?i)[/\\]plugins[/\\]org\.eclipse\.justj\.`)
 )
+
+// launcherDirs are version-manager shim directories: everything in them
+// selects a runtime rather than being one. On Windows shims are copies of a
+// launcher exe, so they cannot be told apart from runtimes by content.
+var launcherDirs = []string{
+	"/scoop/shims/", "/chocolatey/bin/", "/program files/volta/", "/volta/bin/", "/.volta/bin/",
+	"/.pyenv/shims/", "/pyenv-win/shims/", "/.rbenv/shims/", "/.asdf/shims/", "/mise/shims/", "/nodist/bin/",
+}
+
+// inLauncherDir reports a path directly inside a launcher directory.
+func inLauncherDir(realPath string) bool {
+	dir := normPath(realPath[:max(0, strings.LastIndexAny(realPath, `/\`))])
+	for _, d := range launcherDirs {
+		if strings.HasSuffix(dir, d) {
+			return true
+		}
+	}
+	return false
+}
 
 // bundledBy names the application that privately ships this runtime, or ""
 // for a standalone install. Bundled runtimes are inventoried but are not
@@ -124,8 +144,11 @@ func bundledBy(realPath string) string {
 	if adobeRe.MatchString(realPath) {
 		return "Adobe"
 	}
-	if m := asarUnpackRe.FindStringSubmatch(realPath); m != nil {
+	if m := electronRe.FindStringSubmatch(realPath); m != nil {
 		return m[1]
+	}
+	if eclipseJreRe.MatchString(realPath) {
+		return "Eclipse"
 	}
 	return ""
 }
