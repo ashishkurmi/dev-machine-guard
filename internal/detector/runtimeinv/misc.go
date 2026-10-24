@@ -12,6 +12,7 @@ var snapRe = regexp.MustCompile(`^(?:/var/lib/snapd)?/snap/([^/]+)/`)
 
 // isScript reports a file starting with a shebang.
 func isScript(path string) bool {
+	// #nosec G304 -- path is a binary found by the runtime walk; only its first two bytes are read.
 	f, err := os.Open(path)
 	if err != nil {
 		return false
