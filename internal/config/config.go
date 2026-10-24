@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -110,6 +111,68 @@ type ConfigFile struct {
 	UpdateMirrorURL       string   `json:"update_mirror_url,omitempty"`
 	UpdateLagBehind       int      `json:"update_lag_behind,omitempty"`
 	UpdateCooldownHours   int      `json:"update_cooldown_hours,omitempty"`
+
+	// extra keeps keys this build doesn't know, so a save never drops what
+	// a newer agent or the admin wrote.
+	extra map[string]json.RawMessage
+}
+
+// knownConfigKeys are ConfigFile's JSON keys.
+var knownConfigKeys = func() map[string]bool {
+	keys := map[string]bool{}
+	t := reflect.TypeOf(ConfigFile{})
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			keys[name] = true
+		}
+	}
+	return keys
+}()
+
+// retiredConfigKeys are keys earlier builds wrote that are dropped on load.
+var retiredConfigKeys = map[string]bool{"use_legacy_package_scan": true}
+
+// UnmarshalJSON decodes into c field by field: keys absent from data leave
+// c's values as they are (configure --from-file relies on this to merge),
+// and unknown keys are kept for MarshalJSON.
+func (c *ConfigFile) UnmarshalJSON(data []byte) error {
+	type plain ConfigFile
+	if err := json.Unmarshal(data, (*plain)(c)); err != nil {
+		return err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	for k, v := range all {
+		if knownConfigKeys[k] || retiredConfigKeys[k] {
+			continue
+		}
+		if c.extra == nil {
+			c.extra = map[string]json.RawMessage{}
+		}
+		c.extra[k] = v
+	}
+	return nil
+}
+
+// MarshalJSON writes the known fields plus any unknown keys read earlier.
+func (c ConfigFile) MarshalJSON() ([]byte, error) {
+	type plain ConfigFile
+	b, err := json.Marshal(plain(c))
+	if err != nil || len(c.extra) == 0 {
+		return b, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	for k, v := range c.extra {
+		if _, ok := m[k]; !ok {
+			m[k] = v
+		}
+	}
+	return json.Marshal(m)
 }
 
 // userConfigDir returns ~/.stepsecurity — the per-user config location.
@@ -847,9 +910,11 @@ func (o NonInteractiveOptions) HasAny() bool {
 func RunConfigureNonInteractive(opts NonInteractiveOptions) error {
 	existing := loadForConfigure()
 
-	// --from-file: replace base. Inline flags still override individual
-	// fields below, so customers can ship a base config via the file and
-	// inject the per-tenant API key via an env var on the command line.
+	// --from-file merges: keys the file carries override the existing
+	// config (credential rotation), keys it omits are kept (an AUTOUPDATE=0
+	// opt-out, unknown keys). Inline flags still override individual fields
+	// below, so customers can ship a base config via the file and inject
+	// the per-tenant API key via an env var on the command line.
 	if opts.FromFile != "" {
 		data, err := os.ReadFile(opts.FromFile)
 		if err != nil {
@@ -859,7 +924,9 @@ func RunConfigureNonInteractive(opts NonInteractiveOptions) error {
 		if err := json.Unmarshal(data, &fromFile); err != nil {
 			return fmt.Errorf("parsing --from-file %q: %w", opts.FromFile, err)
 		}
-		existing = &fromFile
+		if err := json.Unmarshal(data, existing); err != nil {
+			return fmt.Errorf("parsing --from-file %q: %w", opts.FromFile, err)
+		}
 	}
 
 	if opts.CustomerID != "" {
