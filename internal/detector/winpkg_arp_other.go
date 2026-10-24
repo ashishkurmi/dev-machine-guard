@@ -4,6 +4,7 @@ package detector
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -81,8 +82,8 @@ func parseRegQueryARP(stdout, hive, view string) []arpEntry {
 		case "WindowsInstaller":
 			cur.WindowsInstaller = typ == "REG_DWORD" && dword() == 1
 		case "EstimatedSize":
-			if typ == "REG_DWORD" {
-				cur.EstimatedSizeKB = dword()
+			if v := dword(); typ == "REG_DWORD" && v <= math.MaxUint32 {
+				cur.EstimatedSizeKB = uint32(v)
 			}
 		}
 	}

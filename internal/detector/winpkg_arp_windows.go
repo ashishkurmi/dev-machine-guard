@@ -4,6 +4,7 @@ package detector
 
 import (
 	"context"
+	"math"
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"golang.org/x/sys/windows/registry"
@@ -65,8 +66,8 @@ func readUninstallKey(root registry.Key, hive, view string, access uint32) []arp
 		if v, _, err := sk.GetIntegerValue("WindowsInstaller"); err == nil {
 			e.WindowsInstaller = v == 1
 		}
-		if v, _, err := sk.GetIntegerValue("EstimatedSize"); err == nil {
-			e.EstimatedSizeKB = v
+		if v, _, err := sk.GetIntegerValue("EstimatedSize"); err == nil && v <= math.MaxUint32 {
+			e.EstimatedSizeKB = uint32(v)
 		}
 		_ = sk.Close()
 		out = append(out, e)

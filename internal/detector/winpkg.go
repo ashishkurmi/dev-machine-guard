@@ -24,7 +24,7 @@ type arpEntry struct {
 	InstallLocation  string
 	InstallDate      string // YYYYMMDD
 	URLInfoAbout     string
-	EstimatedSizeKB  uint64
+	EstimatedSizeKB  uint32 // REG_DWORD
 	SystemComponent  bool
 	WindowsInstaller bool
 	ParentKeyName    string
