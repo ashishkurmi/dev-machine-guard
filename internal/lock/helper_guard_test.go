@@ -64,8 +64,8 @@ func TestHolderExitsAtDeadline(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
 	select {
 	case <-done:
 		if code := cmd.ProcessState.ExitCode(); code != proctest.ExitGuard {
