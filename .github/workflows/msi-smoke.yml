@@ -345,8 +345,16 @@ jobs:
           Check (-not (Test-Path "$root\versions\$next")) "baseline: no versions\$next"
           $props = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
           $pfr0 = @((Get-ItemProperty -Path $props -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations | Where-Object { $_ })
-          $code = Msi @("/i", "dist\dmg-smoke-next-fail.msi", "/qn", "WIXFAILWHENDEFERRED=1") "dist\dmg-upgrade-fail.log"
+          # SCCM e2e B1: the upgrade ships a BOOTSTRAPFILE without auto_update.
+          $bf = "$env:RUNNER_TEMP\dmg-bootstrap.json"
+          '{"customer_id":"ci-smoke","api_endpoint":"https://api.invalid.example","api_key":"ci-test-rotated-key"}' | Set-Content -Path $bf -Encoding ascii
+          $code = Msi @("/i", "dist\dmg-smoke-next-fail.msi", "/qn", "WIXFAILWHENDEFERRED=1", "BOOTSTRAPFILE=$bf") "dist\dmg-upgrade-fail.log"
           Check ($code -eq 1603) "forced-failure upgrade exits 1603 ($code)"
+          Check ((AutoUpdate) -eq 'false') "failed upgrade with BOOTSTRAPFILE left auto_update false (got $(AutoUpdate))"
+          # SCCM e2e B2: the rollback put back the previous install's MSI helper.
+          $helper = "$root\state\msi\stepsecurity-dev-machine-guard-bootstrap.exe"
+          Check ((Get-FileHash $helper).Hash -eq (Get-FileHash $boot).Hash) "state\msi helper restored to the installed bootstrap"
+          Check (-not (Test-Path "$helper.prev")) "no previous-helper copy left after the rollback"
           $ranRollback = Select-String -Path "dist\dmg-upgrade-fail.log" -Pattern 'adopt-seed --rollback' -SimpleMatch -Quiet
           Check $ranRollback "adopt-seed rollback action ran"
           $s = State
@@ -440,8 +448,14 @@ jobs:
         run: |
           . "$env:RUNNER_TEMP\dmg-assert.ps1"
           $next = $env:MSI_NEXT_VERSION
-          $code = Msi @("/i", "dist\dmg-smoke-next.msi", "/qn") "dist\dmg-upgrade.log"
+          # SCCM e2e B1: an upgrade with a BOOTSTRAPFILE (no auto_update in it)
+          # merges into the machine config: the key rotates, the opt-out stays.
+          $bf = "$env:RUNNER_TEMP\dmg-bootstrap.json"
+          '{"customer_id":"ci-smoke","api_endpoint":"https://api.invalid.example","api_key":"ci-test-rotated-key"}' | Set-Content -Path $bf -Encoding ascii
+          $code = Msi @("/i", "dist\dmg-smoke-next.msi", "/qn", "BOOTSTRAPFILE=$bf") "dist\dmg-upgrade.log"
           Check ($code -eq 0) "upgrade msiexec exit 0 ($code)"
+          $cfg = Get-Content "$data\config.json" -Raw | ConvertFrom-Json
+          Check ($cfg.api_key -eq 'ci-test-rotated-key') "BOOTSTRAPFILE rotated api_key"
           if ($code -eq 0) {
             "INSTALLED_MSI=dist\dmg-smoke-next.msi" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
