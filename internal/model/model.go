@@ -26,11 +26,18 @@ type ScanResult struct {
 	SnapPackages      []SystemPackage `json:"snap_packages"`
 	FlatpakPkgManager *PkgManager     `json:"flatpak_package_manager,omitempty"`
 	FlatpakPackages   []SystemPackage `json:"flatpak_packages"`
-	NPMRCAudit        *NPMRCAudit     `json:"npmrc_audit,omitempty"`
-	PipAudit          *PipAudit       `json:"pip_audit,omitempty"`
-	PnpmAudit         *PnpmAudit      `json:"pnpm_audit,omitempty"`
-	BunAudit          *BunAudit       `json:"bun_audit,omitempty"`
-	YarnAudit         *YarnAudit      `json:"yarn_audit,omitempty"`
+
+	// WindowsPackageScans holds the Windows system package sources (arp,
+	// choco, scoop, winget); Windows only.
+	WindowsPackageScans []SystemPackageScanResult `json:"windows_package_scans,omitempty"`
+	// RuntimeScan is the language runtime inventory; nil when disabled.
+	RuntimeScan *RuntimeScanResult `json:"runtime_scan,omitempty"`
+
+	NPMRCAudit *NPMRCAudit `json:"npmrc_audit,omitempty"`
+	PipAudit   *PipAudit   `json:"pip_audit,omitempty"`
+	PnpmAudit  *PnpmAudit  `json:"pnpm_audit,omitempty"`
+	BunAudit   *BunAudit   `json:"bun_audit,omitempty"`
+	YarnAudit  *YarnAudit  `json:"yarn_audit,omitempty"`
 
 	// AgentSkills is the flat list of discovered AI agent skills. AgentSkillScan
 	// is the phase summary; its non-nil presence is the "scan ran" sentinel (a
@@ -208,6 +215,7 @@ type Summary struct {
 	SystemPackagesCount   int `json:"system_packages_count"`
 	SnapPackagesCount     int `json:"snap_packages_count"`
 	FlatpakPackagesCount  int `json:"flatpak_packages_count"`
+	RuntimesCount         int `json:"runtimes_count"`
 	AgentSkillsCount      int `json:"agent_skills_count"`
 	AgentPluginsCount     int `json:"agent_plugins_count"`
 }
@@ -296,7 +304,7 @@ type ProjectInfo struct {
 }
 
 // SystemPackage represents a package installed via the system package manager
-// (rpm, dpkg, pacman, apk, snap, flatpak).
+// (rpm, dpkg, pacman, apk, snap, flatpak; on Windows: ARP, choco, scoop, winget).
 type SystemPackage struct {
 	Name            string `json:"name"`
 	Version         string `json:"version"`
@@ -304,6 +312,7 @@ type SystemPackage struct {
 	Source          string `json:"source,omitempty"`            // Origin: source RPM, dpkg source, snap publisher, flatpak remote
 	InstallPath     string `json:"install_path,omitempty"`      // On-disk install root. Populated for snap (/snap/<name>/current) and flatpak (~/.local/share/flatpak/app/<id> or /var/lib/flatpak/app/<id>). Not applicable for rpm/dpkg/pacman/apk (file collections).
 	InstallTimeUnix int64  `json:"install_time_unix,omitempty"` // Unix epoch seconds when installed (rpm, dpkg, pacman)
+	Scope           string `json:"scope,omitempty"`             // Windows: "machine" (HKLM, ProgramData) or "user" (HKCU, user profile)
 
 	// Provenance & trust signals
 	Vendor        string `json:"vendor,omitempty"`          // Distributor: rpm VENDOR, dpkg Origin
@@ -324,6 +333,32 @@ type SystemPackage struct {
 
 	// Source control
 	CommitHash string `json:"commit_hash,omitempty"` // apk commit, flatpak active commit
+}
+
+// RuntimeInstall is one language runtime install found on disk (node, python,
+// java, …), independent of how it was installed.
+type RuntimeInstall struct {
+	Runtime         string `json:"runtime"`                     // node, python, php, java, go, ruby, deno, bun, dotnet
+	Version         string `json:"version"`                     // "unknown" when no strategy yielded one
+	VersionSource   string `json:"version_source"`              // file, pe, pkg, binary, path, unknown
+	ExecutablePath  string `json:"executable_path"`             // symlink-resolved path of the binary
+	InstallRoot     string `json:"install_root,omitempty"`      // runtime home (parent of bin/, or the exe dir)
+	Source          string `json:"source"`                      // nvm, fnm, volta, brew, scoop, pyenv, sdkman, system, installer, manual, …
+	Scope           string `json:"scope"`                       // user (under the user's home) or machine
+	Vendor          string `json:"vendor,omitempty"`            // distribution vendor where known (java IMPLEMENTOR)
+	BundledBy       string `json:"bundled_by,omitempty"`        // app that ships this runtime privately; empty for standalone installs
+	Arch            string `json:"arch,omitempty"`              // from the binary header: amd64, arm64, 386, universal
+	InstallTimeUnix int64  `json:"install_time_unix,omitempty"` // executable mtime
+}
+
+// RuntimeScanResult holds the runtime inventory for enterprise telemetry.
+type RuntimeScanResult struct {
+	Runtimes       []RuntimeInstall `json:"runtimes"`
+	RuntimesCount  int              `json:"runtimes_count"`
+	Truncated      bool             `json:"truncated,omitempty"`       // walk stopped early (entry cap or deadline)
+	TruncatedRoots []string         `json:"truncated_roots,omitempty"` // set only when every truncation was a per-root budget hit: installs outside these roots are complete
+	Error          string           `json:"error,omitempty"`
+	ScanDurationMs int64            `json:"scan_duration_ms"`
 }
 
 // BrewPackage represents a single installed Homebrew formula or cask.
@@ -354,7 +389,7 @@ type PythonPackage struct {
 // Unlike BrewScanResult (which sends raw base64), this sends pre-parsed packages
 // since syspkg.go already handles the format-specific parsing edge cases.
 type SystemPackageScanResult struct {
-	ScanType       string          `json:"scan_type"` // "rpm", "dpkg", "pacman", "apk", "snap", "flatpak"
+	ScanType       string          `json:"scan_type"` // "rpm", "dpkg", "pacman", "apk", "snap", "flatpak"; Windows: "arp", "choco", "scoop", "winget"
 	PackageManager *PkgManager     `json:"package_manager,omitempty"`
 	Packages       []SystemPackage `json:"packages"`
 	PackagesCount  int             `json:"packages_count"`
@@ -1785,4 +1820,118 @@ type NuGetConfigContext struct {
 	Reasons             []string `json:"reasons"`
 	ConfigSourceIDs     []string `json:"config_source_ids"` // highest precedence first
 	RestoreMetadataPath string   `json:"restore_metadata_path,omitempty"`
+}
+
+// RubyInventorySchemaVersion versions ruby_inventory and ruby_config_audit.
+const RubyInventorySchemaVersion = 1
+
+// RubySource reuses the Cargo source shape. Kinds: project_search_root |
+// gem_home | manifest | gemspec | lockfile | installed_metadata |
+// bundler_checkout | cache_root | cache_archive | cached_metadata.
+type RubySource = CargoSource
+
+// RubyRecordedChecksum is a lock-recorded SHA-256, never a verification.
+type RubyRecordedChecksum = ComposerRecordedChecksum
+
+// RubyCredentialFile reports existence only; contents are never read.
+type RubyCredentialFile = CargoCredentialFile
+
+// RubyInventory covers RubyGems and Bundler from passive metadata reads; no
+// Ruby, gem, bundle or Git command runs. Declarations, locks, installed
+// receipts and caches stay separate evidence.
+type RubyInventory struct {
+	SchemaVersion int           `json:"schema_version"`
+	Status        string        `json:"status"` // complete | partial
+	Reasons       []string      `json:"reasons"`
+	Sources       []RubySource  `json:"sources"`
+	Projects      []RubyProject `json:"projects"`
+	Packages      []RubyPackage `json:"packages"`
+}
+
+// RubyProject is a Gemfile, gems.rb or standalone gemspec project. Partial
+// selection means its active lock or declarations are not established.
+type RubyProject struct {
+	ManifestSourceID string   `json:"manifest_source_id"`
+	ManifestPath     string   `json:"manifest_path"`
+	ProjectPath      string   `json:"project_path"`
+	SelectionStatus  string   `json:"selection_status"` // observed | partial
+	LockfilePaths    []string `json:"lockfile_paths"`
+	PackageName      string   `json:"package_name,omitempty"`
+	PackageVersion   string   `json:"package_version,omitempty"`
+}
+
+// RubyPackage is one observation. Names and versions keep their exact
+// spelling; platform is the exact artifact platform, never a Gemfile selector.
+type RubyPackage struct {
+	SourceID      string   `json:"source_id"`
+	SourcePath    string   `json:"source_path"`
+	PackageName   string   `json:"package_name"`
+	Evidence      string   `json:"evidence"` // declared_requirement | locked_package | installed_package | cached_package
+	ProjectPath   string   `json:"project_path,omitempty"`
+	Scope         string   `json:"scope"` // project | user | system | unknown
+	Reasons       []string `json:"reasons"`
+	VersionStatus string   `json:"version_status"` // known | unknown (declarations)
+	Version       string   `json:"version,omitempty"`
+	Platform      string   `json:"platform,omitempty"`
+	// RequestedVersions is present, possibly [], on declarations only.
+	RequestedVersions  *[]string              `json:"requested_versions,omitempty"`
+	Groups             []string               `json:"groups,omitempty"`
+	DeclaredPlatforms  []string               `json:"declared_platforms,omitempty"`
+	DependencyRelation string                 `json:"dependency_relation"` // direct | transitive | unknown
+	DependencyKind     string                 `json:"dependency_kind"`     // runtime | development | unknown
+	Origin             RubyOrigin             `json:"origin"`
+	Revision           string                 `json:"revision,omitempty"`     // recorded Git revision, lock evidence only
+	Installation       *RubyInstallation      `json:"installation,omitempty"` // installed evidence only
+	ChecksumStatus     string                 `json:"checksum_status"`        // absent | recorded | partial
+	RecordedChecksums  []RubyRecordedChecksum `json:"recorded_checksums"`
+}
+
+// RubyOrigin is observed provenance. Receipts and caches are always unknown;
+// a configured default registry is never assumed.
+type RubyOrigin struct {
+	Kind string `json:"kind"` // registry | git | path | unknown
+	URL  string `json:"url,omitempty"`
+	Path string `json:"path,omitempty"`
+}
+
+// RubyInstallation is directory presence, separate from receipt lifecycle.
+// Default gems can live in Ruby's own library and have no package directory.
+type RubyInstallation struct {
+	Path       string `json:"path,omitempty"`
+	PathStatus string `json:"path_status"` // resolved | unresolved | not_applicable
+	Presence   string `json:"presence"`    // present | absent | unknown | not_applicable
+	DefaultGem bool   `json:"default_gem"`
+}
+
+// RubyConfigAudit follows Composer's observed-source model with a manager on
+// each file and context. The backend derives endpoint summaries and counts.
+type RubyConfigAudit struct {
+	SchemaVersion   int                  `json:"schema_version"`
+	Status          string               `json:"status"` // complete | partial
+	Reasons         []string             `json:"reasons"`
+	Files           []RubyConfigFile     `json:"files"`
+	Contexts        []RubyConfigContext  `json:"contexts"`
+	CredentialFiles []RubyCredentialFile `json:"credential_files"`
+	Findings        []CargoConfigFinding `json:"findings"`
+}
+
+// RubyConfigFile is one configuration source. Process sources have no path; a
+// source that is not present carries no current settings.
+type RubyConfigFile struct {
+	SourceID string               `json:"source_id"`
+	Manager  string               `json:"manager"` // rubygems | bundler
+	Scope    string               `json:"scope"`   // system | user | project | process
+	Path     string               `json:"path,omitempty"`
+	Status   string               `json:"status"` // present | absent | skipped_protected | unreadable | invalid | unsupported
+	Reasons  []string             `json:"reasons"`
+	Settings []CargoConfigSetting `json:"settings"`
+}
+
+// RubyConfigContext is one manager's observed precedence chain, not a claim
+// of a single effective configuration. Ambient contexts have no project.
+type RubyConfigContext struct {
+	Manager         string   `json:"manager"`
+	ProjectPath     string   `json:"project_path,omitempty"`
+	ConfigSourceIDs []string `json:"config_source_ids"` // highest precedence first
+	SelectionStatus string   `json:"selection_status"`  // observed | partial
 }
