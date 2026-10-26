@@ -232,7 +232,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) error {
 	if cfg.EnableRuntimeScan == nil || *cfg.EnableRuntimeScan {
 		log.StepStart("Inventorying language runtimes")
 		start = time.Now()
-		runtimeScan = runtimeinv.ScanResult(ctx, exec)
+		runtimeScan = runtimeinv.ScanResult(ctx, exec, tccSkipper)
 		log.StepDone(time.Since(start))
 	} else {
 		log.StepStart("Language runtime inventory")

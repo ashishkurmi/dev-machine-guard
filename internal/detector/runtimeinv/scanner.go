@@ -10,6 +10,7 @@ import (
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
+	"github.com/step-security/dev-machine-guard/internal/tcc"
 )
 
 const (
@@ -52,6 +53,7 @@ type Scanner struct {
 	home string
 
 	rootsOverride []walkRoot // tests
+	skipper       *tcc.Skipper
 
 	entries     int
 	rootEntries int
@@ -77,6 +79,14 @@ func NewScanner(exec executor.Executor, home string) *Scanner {
 		}
 	}
 	return &Scanner{exec: exec, goos: exec.GOOS(), home: home}
+}
+
+// WithSkipper applies the run's TCC-protected / network-volume exclusions,
+// so the walk never reads a directory (or resolves into one) the scan
+// settings exclude. A nil skipper skips nothing.
+func (s *Scanner) WithSkipper(sk *tcc.Skipper) *Scanner {
+	s.skipper = sk
+	return s
 }
 
 // Scan walks all roots and returns the inventory, sorted by runtime then path.
@@ -142,9 +152,19 @@ func (s *Scanner) walk(ctx context.Context, root string, depth int, skipTop []st
 		}
 		s.walked[key] = it.depth
 
-		ents, _, err := s.exec.ReadDirLimit(it.dir, maxDirEntries)
+		// Consult the skipper before ReadDir: reading the protected dir or
+		// mountpoint is what fires the TCC / network-volume prompt.
+		if s.skipper.ShouldSkip(it.dir, root) || (it.top && s.skipper.WithinProtected(it.dir)) {
+			continue
+		}
+		ents, more, err := s.exec.ReadDirLimit(it.dir, maxDirEntries)
 		if err != nil {
 			continue
+		}
+		// A capped listing may hide runtimes: report this root as truncated so
+		// the backend merges under it instead of deleting what it can't see.
+		if more && !contains(s.truncRoots, s.curRoot) {
+			s.truncRoots = append(s.truncRoots, s.curRoot)
 		}
 		// A directory holding pyvenv.cfg is a virtualenv; its interpreter is
 		// a copy/link of a base install the python package scan covers.
@@ -183,7 +203,7 @@ func (s *Scanner) walk(ctx context.Context, root string, depth int, skipTop []st
 				continue
 			}
 			if sig := matchSignature(name, s.goos); sig != nil {
-				s.consider(sig, path)
+				s.consider(ctx, sig, path)
 			}
 		}
 	}
@@ -199,13 +219,25 @@ func hasEntry(ents []fs.DirEntry, name string) bool {
 }
 
 // consider resolves a candidate executable and records it.
-func (s *Scanner) consider(sig *signature, path string) {
+func (s *Scanner) consider(ctx context.Context, sig *signature, path string) {
+	// Don't resolve into excluded trees: following a link into ~/Documents
+	// or a network mount would touch it.
+	if target, err := s.exec.Readlink(path); err == nil && target != "" {
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		if s.skipper.WithinProtected(target) {
+			return
+		}
+	}
 	real, err := s.exec.EvalSymlinks(path)
-	if err != nil || real == "" {
+	if err != nil || real == "" || s.skipper.WithinProtected(real) {
 		return
 	}
 	info, err := s.exec.Stat(real)
-	if err != nil || info.IsDir() {
+	// Only regular files go on to the content probes: opening a FIFO or
+	// device (isScript, the embedded-version scan) would block.
+	if err != nil || !info.Mode().IsRegular() {
 		return
 	}
 	if s.goos != "windows" && info.Mode().Perm()&0o111 == 0 {
@@ -257,7 +289,7 @@ func (s *Scanner) consider(sig *signature, path string) {
 		return
 	}
 
-	vr := detectVersion(s.exec, sig, real, root)
+	vr := detectVersion(ctx, s.exec, sig, real, root)
 	base.Version, base.VersionSource = vr.version, vr.source
 	if vr.vendor != "" {
 		base.Vendor = vr.vendor
@@ -362,9 +394,9 @@ func contains(list []string, s string) bool {
 }
 
 // ScanResult runs a scan for the logged-in user and packages it for telemetry.
-func ScanResult(ctx context.Context, exec executor.Executor) *model.RuntimeScanResult {
+func ScanResult(ctx context.Context, exec executor.Executor, skipper *tcc.Skipper) *model.RuntimeScanResult {
 	start := time.Now()
-	runtimes, truncated, truncatedRoots := NewScanner(exec, "").Scan(ctx)
+	runtimes, truncated, truncatedRoots := NewScanner(exec, "").WithSkipper(skipper).Scan(ctx)
 	if runtimes == nil {
 		runtimes = []model.RuntimeInstall{}
 	}

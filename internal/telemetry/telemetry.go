@@ -981,7 +981,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	if cfg.EnableRuntimeScan == nil || *cfg.EnableRuntimeScan {
 		phaseCtx, phaseCancel = startPhase(ctx, tracker, "runtime_scan")
 		log.Progress("Inventorying language runtimes...")
-		runtimeScan = runtimeinv.ScanResult(phaseCtx, exec)
+		runtimeScan = runtimeinv.ScanResult(phaseCtx, exec, tccSkipper)
 		log.Progress("  Found %d runtime installs in %dms", runtimeScan.RuntimesCount, runtimeScan.ScanDurationMs)
 		if runtimeScan.Truncated {
 			log.Progress("  Runtime walk stopped early (entry budget or deadline); results are partial")

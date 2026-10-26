@@ -65,7 +65,7 @@ func TestPkgOwnerVersion(t *testing.T) { // F2
 	rpm := executor.NewMock()
 	rpm.SetGOOS("linux")
 	rpm.SetCommand("22.11.0", "", 0, "rpm", "-qf", "--queryformat", "%{VERSION}", "/usr/bin/node")
-	if r, ok := pkgOwnerVersion(rpm, "/usr/bin/node", "/usr"); !ok || r.version != "22.11.0" || r.source != "pkg" {
+	if r, ok := pkgOwnerVersion(context.Background(), rpm, "/usr/bin/node", "/usr"); !ok || r.version != "22.11.0" || r.source != "pkg" {
 		t.Errorf("rpm: %+v %v", r, ok)
 	}
 
@@ -74,17 +74,17 @@ func TestPkgOwnerVersion(t *testing.T) { // F2
 	deb.SetCommandError(context.DeadlineExceeded, "rpm", "-qf", "--queryformat", "%{VERSION}", "/usr/bin/python3.12")
 	deb.SetCommand("python3.12-minimal: /usr/bin/python3.12\n", "", 0, "dpkg-query", "-S", "/usr/bin/python3.12")
 	deb.SetCommand("1:3.12.3-1ubuntu0.1", "", 0, "dpkg-query", "-W", "-f=${Version}", "python3.12-minimal")
-	if r, ok := pkgOwnerVersion(deb, "/usr/bin/python3.12", "/usr"); !ok || r.version != "3.12.3" {
+	if r, ok := pkgOwnerVersion(context.Background(), deb, "/usr/bin/python3.12", "/usr"); !ok || r.version != "3.12.3" {
 		t.Errorf("dpkg: %+v %v", r, ok)
 	}
 
 	// Not consulted outside system locations or off Linux.
-	if _, ok := pkgOwnerVersion(rpm, "/home/a/.nvm/versions/node/v18.0.0/bin/node", ""); ok {
+	if _, ok := pkgOwnerVersion(context.Background(), rpm, "/home/a/.nvm/versions/node/v18.0.0/bin/node", ""); ok {
 		t.Error("non-system path consulted the package db")
 	}
 	mac := executor.NewMock()
 	mac.SetGOOS("darwin")
-	if _, ok := pkgOwnerVersion(mac, "/usr/bin/ruby", "/usr"); ok {
+	if _, ok := pkgOwnerVersion(context.Background(), mac, "/usr/bin/ruby", "/usr"); ok {
 		t.Error("darwin consulted the package db")
 	}
 }

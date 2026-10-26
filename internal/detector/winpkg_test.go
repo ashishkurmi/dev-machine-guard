@@ -191,3 +191,61 @@ func TestWindowsPkgNonWindowsIsNil(t *testing.T) {
 		t.Fatalf("got %+v on linux", got)
 	}
 }
+
+// A winget portable package installed for both machine and user keeps each
+// scope's own ARP version/publisher; same-label ARP entries in different
+// install dirs stay separate.
+func TestWindowsPkgScopeAndIdentity(t *testing.T) {
+	m := executor.NewMock()
+	m.SetGOOS(model.PlatformWindows)
+	m.SetHomeDir("/C/Users/dev")
+	m.SetEnv("ProgramData", "/C/ProgramData")
+	m.SetEnv("LOCALAPPDATA", "/C/Users/dev/AppData/Local")
+	m.SetEnv("ProgramFiles", "/C/Program Files")
+	m.SetCommand(`
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Tool.X_Microsoft.Winget.Source_8wekyb3d8bbwe
+    DisplayName    REG_SZ    Tool X
+    DisplayVersion    REG_SZ    1.0.0
+    Publisher    REG_SZ    Machine Pub
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\AppA
+    DisplayName    REG_SZ    App
+    DisplayVersion    REG_SZ    5.0
+    Publisher    REG_SZ    Vendor
+    InstallLocation    REG_SZ    C:\Program Files\App
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\AppB
+    DisplayName    REG_SZ    App
+    DisplayVersion    REG_SZ    5.0
+    Publisher    REG_SZ    Vendor
+    InstallLocation    REG_SZ    D:\Tools\App
+`, "", 0, "reg", "query", `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`, "/s")
+	m.SetCommand(`
+HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Tool.X_Microsoft.Winget.Source_8wekyb3d8bbwe
+    DisplayName    REG_SZ    Tool X
+    DisplayVersion    REG_SZ    2.0.0
+    Publisher    REG_SZ    User Pub
+`, "", 0, "reg", "query", `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`, "/s")
+	m.SetDirEntries("/C/Users/dev/AppData/Local/Microsoft/WinGet/Packages", []os.DirEntry{executor.MockDirEntry("Tool.X_Microsoft.Winget.Source_8wekyb3d8bbwe", true)})
+	m.SetDirEntries("/C/Program Files/WinGet/Packages", []os.DirEntry{executor.MockDirEntry("Tool.X_Microsoft.Winget.Source_8wekyb3d8bbwe", true)})
+
+	res := scanByType(NewWindowsPkgDetector(m).Scan(context.Background()))
+	for _, p := range res["winget"].Packages {
+		want := map[string][2]string{"user": {"2.0.0", "User Pub"}, "machine": {"1.0.0", "Machine Pub"}}[p.Scope]
+		if p.Version != want[0] || p.Vendor != want[1] {
+			t.Errorf("winget %s scope got %s/%s, want %v", p.Scope, p.Version, p.Vendor, want)
+		}
+	}
+	if n := len(res["winget"].Packages); n != 2 {
+		t.Fatalf("winget packages = %d, want 2", n)
+	}
+	apps := 0
+	for _, p := range res["arp"].Packages {
+		if p.Name == "App" {
+			apps++
+		}
+	}
+	if apps != 2 {
+		t.Errorf("same-label installs in different dirs collapsed: %d App entries, want 2", apps)
+	}
+}

@@ -124,6 +124,7 @@ func (s *Scanner) windowsRoots() []walkRoot {
 	roots := []walkRoot{
 		// Known user roots.
 		{join(appData, "nvm"), 2, nil, 0},
+		{join(appData, "uv", "python"), 4, nil, 0}, // `uv python install` (AppData is skipped by the profile walk)
 		{join(appData, "fnm"), 5, nil, 0},
 		{join(localAppData, "fnm"), 5, nil, 0},
 		{join(localAppData, "Volta"), 7, nil, 0},
@@ -150,7 +151,7 @@ func (s *Scanner) windowsRoots() []walkRoot {
 		env   string
 		depth int
 	}{
-		{"NVM_HOME", 2}, {"VOLTA_HOME", 6}, {"FNM_DIR", 5}, {"SCOOP", 5}, {"SCOOP_GLOBAL", 5},
+		{"NVM_HOME", 2}, {"UV_PYTHON_INSTALL_DIR", 4}, {"VOLTA_HOME", 6}, {"FNM_DIR", 5}, {"SCOOP", 5}, {"SCOOP_GLOBAL", 5},
 		{"ChocolateyInstall", 5}, {"JAVA_HOME", 2}, {"GOROOT", 2}, {"DOTNET_ROOT", 1}, {"PYENV", 4},
 	} {
 		if v := s.env(kv.env); v != "" {

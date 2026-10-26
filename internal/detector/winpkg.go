@@ -89,9 +89,15 @@ func (d *WindowsPkgDetector) Scan(ctx context.Context) []model.SystemPackageScan
 	var wingetPkgs []model.SystemPackage
 	var wingetPaths []string
 	start = time.Now()
-	arpByKey := map[string]arpEntry{}
+	// winget registers a portable package's ARP entry in the hive of its
+	// scope; keep them apart so a user install can't shadow a machine one.
+	arpByScope := map[string]map[string]arpEntry{"user": {}, "machine": {}}
 	for _, e := range entries {
-		arpByKey[strings.ToLower(e.KeyName)] = e
+		scope := "machine"
+		if e.Hive == "HKCU" {
+			scope = "user"
+		}
+		arpByScope[scope][strings.ToLower(e.KeyName)] = e
 	}
 	for _, r := range []struct{ root, scope string }{
 		{joinIf(d.exec.Getenv("LOCALAPPDATA"), "Microsoft", "WinGet", "Packages"), "user"},
@@ -101,7 +107,7 @@ func (d *WindowsPkgDetector) Scan(ctx context.Context) []model.SystemPackageScan
 			continue
 		}
 		wingetPaths = append(wingetPaths, r.root)
-		wingetPkgs = append(wingetPkgs, d.wingetPortablePackages(r.root, r.scope, arpByKey)...)
+		wingetPkgs = append(wingetPkgs, d.wingetPortablePackages(r.root, r.scope, arpByScope[r.scope])...)
 	}
 	if len(wingetPaths) > 0 {
 		results = append(results, scanResult("winget", &model.PkgManager{Name: "winget", Path: strings.Join(wingetPaths, ";")}, wingetPkgs, start))
@@ -143,7 +149,11 @@ func arpPackages(entries []arpEntry) []model.SystemPackage {
 		case "update", "hotfix", "security update", "update rollup", "service pack":
 			continue
 		}
-		k := strings.ToLower(e.DisplayName + "|" + e.DisplayVersion + "|" + e.Publisher + "|" + e.Hive)
+		// Same labels can be separate installs (x86 and x64 copies in
+		// different dirs): keep the registry view and install location in
+		// the identity, so only true duplicate registrations collapse.
+		k := strings.ToLower(e.DisplayName + "|" + e.DisplayVersion + "|" + e.Publisher + "|" + e.Hive + "|" + e.View + "|" +
+			strings.TrimRight(strings.TrimSpace(e.InstallLocation), `\/`))
 		if seen[k] {
 			continue
 		}

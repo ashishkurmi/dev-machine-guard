@@ -2,6 +2,7 @@ package runtimeinv
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"os"
 	"regexp"
@@ -29,15 +30,15 @@ var (
 // it) for re. The highest match wins: Deno also carries an old Deno/0.x
 // string from a dependency.
 func embeddedVersion(re *regexp.Regexp) versionStrategy {
-	return func(_ executor.Executor, exe, _ string) (versionResult, bool) {
-		if v := scanEmbedded(exe, re); v != "" {
+	return func(ctx context.Context, _ executor.Executor, exe, _ string) (versionResult, bool) {
+		if v := scanEmbedded(ctx, exe, re); v != "" {
 			return versionResult{version: v, source: versionFromBinary}, true
 		}
 		return versionResult{}, false
 	}
 }
 
-func scanEmbedded(path string, re *regexp.Regexp) string {
+func scanEmbedded(ctx context.Context, path string, re *regexp.Regexp) string {
 	// #nosec G304 -- path is a runtime binary found by the walk; it is read, never executed.
 	f, err := os.Open(path)
 	if err != nil {
@@ -48,7 +49,7 @@ func scanEmbedded(path string, re *regexp.Regexp) string {
 	buf := make([]byte, 0, embeddedChunk+embeddedOverlap)
 	best := ""
 	chunk := make([]byte, embeddedChunk)
-	for {
+	for ctx.Err() == nil {
 		n, err := io.ReadFull(r, chunk)
 		buf = append(buf, chunk[:n]...)
 		for _, m := range re.FindAllSubmatch(buf, -1) {
@@ -62,6 +63,7 @@ func scanEmbedded(path string, re *regexp.Regexp) string {
 		keep := buf[max(0, len(buf)-embeddedOverlap):]
 		buf = append(buf[:0], keep...)
 	}
+	return best
 }
 
 // versionLess compares dotted numeric versions.
